@@ -5,6 +5,7 @@ import com.novelanalyzer.modules.auth.dto.LoginRequest;
 import com.novelanalyzer.modules.auth.dto.RefreshTokenRequest;
 import com.novelanalyzer.modules.auth.service.AuthService;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,8 +25,8 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public Result<TokenResponse> login(@Valid @RequestBody LoginRequest request) {
-        return Result.success(authService.login(request));
+    public Result<TokenResponse> login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpServletRequest) {
+        return Result.success(authService.login(request, resolveRequestIp(httpServletRequest)));
     }
 
     @PostMapping("/refresh")
@@ -38,5 +39,12 @@ public class AuthController {
         authService.logout(request.getToken());
         return Result.success();
     }
-}
 
+    private String resolveRequestIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
+    }
+}

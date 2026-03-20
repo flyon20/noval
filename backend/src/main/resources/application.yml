@@ -35,3 +35,15 @@ app:
     demo-password: ${APP_DEMO_PASSWORD:admin123}
     jwt-secret: ${JWT_SECRET:dev-jwt-secret-change-me-please-32-characters}
     access-token-expire-seconds: ${JWT_ACCESS_TOKEN_EXPIRE_SECONDS:7200}
+  security:
+    rate-limit-per-minute: ${SECURITY_RATE_LIMIT_PER_MINUTE:100}
+    auto-blacklist-threshold: ${SECURITY_AUTO_BLACKLIST_THRESHOLD:20}
+    blacklist-seconds: ${SECURITY_BLACKLIST_SECONDS:86400}
+    protected-path-prefixes:
+      - /api/secure
+      - /api/analysis
+      - /api/config
+    whitelist-paths:
+      - /api/system/health
+      - /api/auth/login
+      - /api/auth/refresh
