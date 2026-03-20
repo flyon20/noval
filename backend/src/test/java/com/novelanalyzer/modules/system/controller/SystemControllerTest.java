@@ -38,5 +38,13 @@ class SystemControllerTest {
             .andExpect(jsonPath("$.data.status").value("UP"))
             .andExpect(jsonPath("$.traceId").isNotEmpty());
     }
-}
 
+    @Test
+    void shouldReuseIncomingTraceId() throws Exception {
+        String traceId = "trace-test-001";
+        mockMvc.perform(get("/api/system/health").header("X-Trace-Id", traceId))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Trace-Id", traceId))
+            .andExpect(jsonPath("$.traceId").value(traceId));
+    }
+}

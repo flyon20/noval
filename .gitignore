@@ -8,8 +8,8 @@ Thumbs.db
 
 # Build
 backend/target/
+/.cache/
 
 # Logs
 *.log
 logs/
-
