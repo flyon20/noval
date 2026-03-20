@@ -16,8 +16,8 @@ ON DUPLICATE KEY UPDATE
 
 INSERT INTO sys_role (id, role_name, role_code, status, deleted)
 VALUES
-    (1, '管理员', 'ADMIN', 1, 0),
-    (2, '普通用户', 'USER', 1, 0)
+    (1, 'Admin', 'ADMIN', 1, 0),
+    (2, 'User', 'USER', 1, 0)
 ON DUPLICATE KEY UPDATE
     role_name = VALUES(role_name),
     status = VALUES(status),
@@ -27,4 +27,3 @@ INSERT IGNORE INTO sys_user_role (user_id, role_id)
 VALUES
     (1, 1),
     (2, 2);
-

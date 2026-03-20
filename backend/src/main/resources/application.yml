@@ -41,9 +41,14 @@ app:
     blacklist-seconds: ${SECURITY_BLACKLIST_SECONDS:86400}
     protected-path-prefixes:
       - /api/secure
+      - /api/crawler
       - /api/analysis
       - /api/config
     whitelist-paths:
       - /api/system/health
       - /api/auth/login
       - /api/auth/refresh
+  crawler:
+    base-url: ${CRAWLER_BASE_URL:http://127.0.0.1:5000}
+    connect-timeout-millis: ${CRAWLER_CONNECT_TIMEOUT_MILLIS:5000}
+    read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:15000}
