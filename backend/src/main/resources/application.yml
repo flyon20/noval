@@ -28,3 +28,10 @@ mybatis-plus:
 logging:
   level:
     root: INFO
+
+app:
+  auth:
+    demo-username: ${APP_DEMO_USERNAME:admin}
+    demo-password: ${APP_DEMO_PASSWORD:admin123}
+    jwt-secret: ${JWT_SECRET:dev-jwt-secret-change-me-please-32-characters}
+    access-token-expire-seconds: ${JWT_ACCESS_TOKEN_EXPIRE_SECONDS:7200}
