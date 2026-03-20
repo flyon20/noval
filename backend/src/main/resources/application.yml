@@ -52,3 +52,8 @@ app:
     base-url: ${CRAWLER_BASE_URL:http://127.0.0.1:5000}
     connect-timeout-millis: ${CRAWLER_CONNECT_TIMEOUT_MILLIS:5000}
     read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:15000}
+  ai:
+    dify-base-url: ${DIFY_BASE_URL:https://api.dify.ai/v1}
+    dify-api-key-ref: ${DIFY_API_KEY_REF:}
+    fallback-model: ${AI_FALLBACK_MODEL:local-fallback}
+    timeout-millis: ${AI_TIMEOUT_MILLIS:15000}
