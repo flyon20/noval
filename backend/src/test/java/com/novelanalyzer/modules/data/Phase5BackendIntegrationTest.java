@@ -187,7 +187,13 @@ class Phase5BackendIntegrationTest {
         assertTrue(rankRowWithSnapshotCount != null && rankRowWithSnapshotCount > 0);
 
         Integer promptConfigContractCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(1) FROM prompt_config WHERE prompt_type = ? AND output_json_schema IS NOT NULL AND parse_config_json IS NOT NULL AND deleted = 0",
+            "SELECT COUNT(1) FROM prompt_config " +
+                "WHERE prompt_type = ? " +
+                "AND output_json_schema IS NOT NULL AND output_json_schema <> '' " +
+                "AND output_example_json IS NOT NULL AND output_example_json <> '' " +
+                "AND post_process_type IS NOT NULL AND post_process_type <> '' " +
+                "AND parse_config_json IS NOT NULL AND parse_config_json <> '' " +
+                "AND deleted = 0",
             Integer.class,
             "theme"
         );
