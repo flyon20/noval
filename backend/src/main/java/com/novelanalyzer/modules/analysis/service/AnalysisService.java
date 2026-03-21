@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
+import com.novelanalyzer.common.context.TraceIdHolder;
 import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.analysis.dto.AnalysisRequest;
+import com.novelanalyzer.modules.analysis.dto.TrendAnalysisRequest;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
 import com.novelanalyzer.modules.analysis.repository.AnalysisRepository;
 import com.novelanalyzer.modules.analysis.vo.AnalysisResultVO;
@@ -18,8 +20,13 @@ import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
 import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -32,6 +39,8 @@ import java.util.Objects;
 public class AnalysisService {
 
     private static final long ANALYSIS_TTL_SECONDS = 30L * 24 * 3600;
+    private static final long STREAM_TIMEOUT_MILLIS = 0L;
+    private static final int STREAM_CHUNK_SIZE = 120;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final PromptConfigRepository promptConfigRepository;
@@ -40,6 +49,7 @@ public class AnalysisService {
     private final AnalysisRepository analysisRepository;
     private final CrawlerCacheService crawlerCacheService;
     private final ObjectMapper objectMapper;
+    private final AsyncTaskExecutor streamTaskExecutor = new SimpleAsyncTaskExecutor("analysis-stream-");
 
     public AnalysisService(PromptConfigRepository promptConfigRepository,
                            CrawlerRepository crawlerRepository,
@@ -94,6 +104,27 @@ public class AnalysisService {
         return vo;
     }
 
+    public SseEmitter streamAnalyze(String analysisType, AnalysisRequest request) {
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
+        AuthUser authUser = copyAuthUser(AuthUserHolder.get());
+        String traceId = TraceIdHolder.get();
+        streamTaskExecutor.execute(() -> {
+            try {
+                restoreContext(authUser, traceId);
+                sendStartEvent(emitter, traceId, analysisType);
+                AnalysisResultVO result = analyze(analysisType, request);
+                sendDeltaEvents(emitter, result.getResultContent());
+                sendDoneEvent(emitter, result);
+                emitter.complete();
+            } catch (Exception ex) {
+                completeWithErrorEvent(emitter, traceId, ex);
+            } finally {
+                clearContext();
+            }
+        });
+        return emitter;
+    }
+
     public TrendAnalysisVO analyzeTrend(String platform, String category) {
         String normalizedCategory = category == null ? "" : category;
         PromptConfigEntity promptConfig = promptConfigRepository.findDefaultByType("theme")
@@ -127,6 +158,30 @@ public class AnalysisService {
         return vo;
     }
 
+    public SseEmitter streamTrend(TrendAnalysisRequest request) {
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
+        AuthUser authUser = copyAuthUser(AuthUserHolder.get());
+        String traceId = TraceIdHolder.get();
+        String normalizedCategory = request.getCategory() == null || request.getCategory().isBlank()
+            ? null
+            : request.getCategory();
+        streamTaskExecutor.execute(() -> {
+            try {
+                restoreContext(authUser, traceId);
+                sendStartEvent(emitter, traceId, "theme");
+                TrendAnalysisVO result = analyzeTrend(request.getPlatform(), normalizedCategory);
+                sendDeltaEvents(emitter, result.getResultContent());
+                sendDoneEvent(emitter, result);
+                emitter.complete();
+            } catch (Exception ex) {
+                completeWithErrorEvent(emitter, traceId, ex);
+            } finally {
+                clearContext();
+            }
+        });
+        return emitter;
+    }
+
     private String buildAnalysisCacheKey(PromptConfigEntity promptConfig,
                                          Long bookId,
                                          String analysisType,
@@ -136,6 +191,95 @@ public class AnalysisService {
 
     private String buildTrendCacheKey(PromptConfigEntity promptConfig, String platform, String category) {
         return "analysis:trend:" + platform + ":" + category + ":" + buildPromptSignature(promptConfig);
+    }
+
+    private AuthUser copyAuthUser(AuthUser authUser) {
+        if (authUser == null) {
+            return null;
+        }
+        return AuthUser.of(authUser.getUserId(), authUser.getUsername(), authUser.getRoles());
+    }
+
+    private void restoreContext(AuthUser authUser, String traceId) {
+        if (authUser != null) {
+            AuthUserHolder.set(authUser);
+        }
+        if (traceId != null && !traceId.isBlank()) {
+            TraceIdHolder.set(traceId);
+        }
+    }
+
+    private void clearContext() {
+        AuthUserHolder.clear();
+        TraceIdHolder.clear();
+    }
+
+    private void sendStartEvent(SseEmitter emitter, String traceId, String analysisType) throws IOException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("event", "start");
+        payload.put("traceId", traceId);
+        payload.put("analysisType", analysisType);
+        sendEvent(emitter, "start", payload);
+    }
+
+    private void sendDeltaEvents(SseEmitter emitter, String content) throws IOException {
+        List<String> chunks = splitContent(content);
+        for (int i = 0; i < chunks.size(); i++) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("event", "delta");
+            payload.put("delta", chunks.get(i));
+            payload.put("chunkIndex", i);
+            sendEvent(emitter, "delta", payload);
+        }
+    }
+
+    private void sendDoneEvent(SseEmitter emitter, Object data) throws IOException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("event", "done");
+        payload.put("data", data);
+        sendEvent(emitter, "done", payload);
+    }
+
+    private void completeWithErrorEvent(SseEmitter emitter, String traceId, Exception ex) {
+        ResultCode resultCode = ResultCode.INTERNAL_ERROR;
+        String message = ResultCode.INTERNAL_ERROR.getMessage();
+        if (ex instanceof BusinessException businessException) {
+            resultCode = businessException.getResultCode();
+            message = businessException.getMessage();
+        }
+
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("event", "error");
+            payload.put("code", resultCode.getCode());
+            payload.put("message", message);
+            if (traceId != null && !traceId.isBlank()) {
+                payload.put("traceId", traceId);
+            }
+            sendEvent(emitter, "error", payload);
+            emitter.complete();
+        } catch (Exception sendException) {
+            emitter.completeWithError(sendException);
+        }
+    }
+
+    private void sendEvent(SseEmitter emitter, String eventName, Object payload) throws IOException {
+        emitter.send(SseEmitter.event()
+            .name(eventName)
+            .data(payload, MediaType.APPLICATION_JSON));
+    }
+
+    private List<String> splitContent(String content) {
+        String safeContent = content == null ? "" : content;
+        if (safeContent.isEmpty()) {
+            return List.of("");
+        }
+        List<String> chunks = new ArrayList<>();
+        for (int start = 0; start < safeContent.length(); start += STREAM_CHUNK_SIZE) {
+            int end = Math.min(safeContent.length(), start + STREAM_CHUNK_SIZE);
+            chunks.add(safeContent.substring(start, end));
+        }
+        return chunks;
     }
 
     private String buildPromptSignature(PromptConfigEntity promptConfig) {

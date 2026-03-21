@@ -11,12 +11,17 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(
@@ -168,6 +173,60 @@ class Phase4AnalysisIntegrationTest {
         assertThat(secondId.longValue()).isNotEqualTo(firstId.longValue());
     }
 
+    @Test
+    void shouldStreamDeconstructAnalysisWithSseProtocol() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+        assertThat(body).containsPattern("(?s)event:\\s*start.*event:\\s*delta.*event:\\s*done");
+        assertThat(body).contains("\"event\":\"start\"");
+        assertThat(body).contains("\"analysisType\":\"deconstruct\"");
+        assertThat(body).contains("\"event\":\"done\"");
+        assertThat(body).contains("\"resultContent\"");
+    }
+
+    @Test
+    void shouldStreamTrendAnalysisWithSseProtocol() throws Exception {
+        insertThemePromptConfig();
+        insertRankSnapshot("fanqie", "male-hot-a", 1, 1001L, "Book One", "Author One", "Intro One",
+            LocalDateTime.of(2026, 3, 18, 10, 0));
+        insertRankSnapshot("fanqie", "male-hot-a", 1, 1001L, "Book One", "Author One", "Intro One",
+            LocalDateTime.of(2026, 3, 19, 10, 0));
+        insertRankSnapshot("fanqie", "male-hot-a", 1, 1001L, "Book One", "Author One", "Intro One",
+            LocalDateTime.of(2026, 3, 20, 10, 0));
+
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/trend/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","category":"male-hot-a"}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+        assertThat(body).containsPattern("(?s)event:\\s*start.*event:\\s*delta.*event:\\s*done");
+        assertThat(body).contains("\"event\":\"start\"");
+        assertThat(body).contains("\"analysisType\":\"theme\"");
+        assertThat(body).contains("\"event\":\"done\"");
+        assertThat(body).contains("\"sourceSnapshotCount\"");
+    }
+
     private String loginAndGetToken(String username, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -197,5 +256,56 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(header().exists("X-Trace-Id"))
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
+    }
+
+    private void insertThemePromptConfig() {
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM prompt_config WHERE prompt_type = 'theme' AND deleted = 0",
+            Integer.class
+        );
+        if (count != null && count > 0) {
+            return;
+        }
+        jdbcTemplate.update(
+            """
+                INSERT INTO prompt_config(id, prompt_type, prompt_name, prompt_content, model_name, status, is_default, deleted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            4L,
+            "theme",
+            "default-theme",
+            "请对最近榜单快照进行题材趋势分析：{{content}}",
+            "dify",
+            1,
+            1,
+            0
+        );
+    }
+
+    private void insertRankSnapshot(String platform,
+                                    String category,
+                                    int rankNo,
+                                    Long bookId,
+                                    String bookName,
+                                    String author,
+                                    String intro,
+                                    LocalDateTime crawlTime) {
+        jdbcTemplate.update(
+            """
+                INSERT INTO crawl_rank(platform, category, rank_no, book_id, book_name, book_url, author, intro, crawl_time, create_time, deleted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            platform,
+            category,
+            rankNo,
+            bookId,
+            bookName,
+            "https://fanqienovel.com/page/" + bookId,
+            author,
+            intro,
+            Timestamp.valueOf(crawlTime),
+            Timestamp.valueOf(crawlTime),
+            0
+        );
     }
 }

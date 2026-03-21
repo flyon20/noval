@@ -2,18 +2,21 @@ package com.novelanalyzer.modules.analysis.controller;
 
 import com.novelanalyzer.common.result.Result;
 import com.novelanalyzer.modules.analysis.dto.AnalysisRequest;
+import com.novelanalyzer.modules.analysis.dto.TrendAnalysisRequest;
 import com.novelanalyzer.modules.analysis.service.AnalysisService;
 import com.novelanalyzer.modules.analysis.vo.AnalysisResultVO;
 import com.novelanalyzer.modules.analysis.vo.TrendAnalysisVO;
 import com.novelanalyzer.modules.security.annotation.RequireRole;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/analysis")
@@ -31,9 +34,19 @@ public class AnalysisController {
         return Result.success(analysisService.analyze("deconstruct", request));
     }
 
+    @PostMapping(value = "/deconstruct/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamDeconstruct(@Valid @RequestBody AnalysisRequest request) {
+        return analysisService.streamAnalyze("deconstruct", request);
+    }
+
     @PostMapping("/structure")
     public Result<AnalysisResultVO> structure(@Valid @RequestBody AnalysisRequest request) {
         return Result.success(analysisService.analyze("structure", request));
+    }
+
+    @PostMapping(value = "/structure/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamStructure(@Valid @RequestBody AnalysisRequest request) {
+        return analysisService.streamAnalyze("structure", request);
     }
 
     @PostMapping("/plot")
@@ -41,9 +54,19 @@ public class AnalysisController {
         return Result.success(analysisService.analyze("plot", request));
     }
 
+    @PostMapping(value = "/plot/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamPlot(@Valid @RequestBody AnalysisRequest request) {
+        return analysisService.streamAnalyze("plot", request);
+    }
+
     @GetMapping("/trend")
     public Result<TrendAnalysisVO> trend(@RequestParam("platform") @NotBlank String platform,
                                          @RequestParam(value = "category", required = false) String category) {
         return Result.success(analysisService.analyzeTrend(platform, category));
+    }
+
+    @PostMapping(value = "/trend/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamTrend(@Valid @RequestBody TrendAnalysisRequest request) {
+        return analysisService.streamTrend(request);
     }
 }
