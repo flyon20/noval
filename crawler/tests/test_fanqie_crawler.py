@@ -33,6 +33,17 @@ class FanqieCrawlerTest(unittest.TestCase):
         state = extract_initial_state(html)
         self.assertEqual("1", state["rank"]["book_list"][0]["bookId"])
 
+    def test_extract_initial_state_should_convert_undefined_to_null(self) -> None:
+        html = (
+            '<script>(function(){window.__INITIAL_STATE__='
+            '{"page":{"bookId":"101","bookName":"Book A","description":undefined}};})()</script>'
+        )
+
+        state = extract_initial_state(html)
+
+        self.assertEqual("101", state["page"]["bookId"])
+        self.assertIsNone(state["page"]["description"])
+
     def test_html_to_text(self) -> None:
         content = html_to_text("<p>Hello</p><p>World</p>")
         self.assertEqual("Hello\nWorld", content)
