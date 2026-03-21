@@ -3,7 +3,19 @@ from pydantic import BaseModel
 
 class RankRequest(BaseModel):
     platform: str
-    category: str
+    channelCode: str
+    boardCode: str
+
+
+class BoardCatalogBoard(BaseModel):
+    boardName: str
+    boardCode: str
+
+
+class BoardCatalogChannel(BaseModel):
+    channelName: str
+    channelCode: str
+    boards: list[BoardCatalogBoard]
 
 
 class RankItem(BaseModel):
@@ -13,4 +25,3 @@ class RankItem(BaseModel):
     intro: str
     bookUrl: str
     platformBookId: str
-

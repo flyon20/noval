@@ -51,12 +51,40 @@ class FanqieCrawlerTest(unittest.TestCase):
         content = html_to_text("<p>Hello</p><p>World</p>")
         self.assertEqual("Hello\nWorld", content)
 
-    def test_fetch_rank(self) -> None:
+    def test_fetch_board_catalog_returns_channels_and_boards(self) -> None:
+        crawler = FanqieCrawler(
+            StubHttpClient(
+                {
+                    "https://fanqienovel.com/rank?enter_from=menu": (
+                        '<script>(function(){window.__INITIAL_STATE__={"rank":{"channelList":['
+                        '{"channelName":"Male","channelCode":"2","boardList":['
+                        '{"boardName":"Hot","boardCode":"1141"},'
+                        '{"boardName":"New","boardCode":"1140"}'
+                        "]},"
+                        '{"channelName":"Female","channelCode":"1","boardList":['
+                        '{"boardName":"Rising","boardCode":"2141"}'
+                        "]}"
+                        ']}};})()</script>'
+                    )
+                }
+            )
+        )
+
+        result = crawler.fetch_board_catalog()
+
+        self.assertEqual(2, len(result))
+        self.assertEqual("2", result[0].channelCode)
+        self.assertEqual("Male", result[0].channelName)
+        self.assertEqual(2, len(result[0].boards))
+        self.assertEqual("1141", result[0].boards[0].boardCode)
+        self.assertEqual("Hot", result[0].boards[0].boardName)
+
+    def test_fetch_rank_uses_channel_code_and_board_code(self) -> None:
         crawler = FanqieCrawler(
             StubHttpClient(
                 {
                     "https://fanqienovel.com/rank/1_2_1141": (
-                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"book_list":['
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
                         '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"},'
                         '{"currentPos":2,"bookId":"102","bookName":"Book B","author":"Author B","abstract":"Intro B"}'
                         ']}};})()</script>'
@@ -65,27 +93,40 @@ class FanqieCrawlerTest(unittest.TestCase):
             )
         )
 
-        result = crawler.fetch_rank("1_2_1141")
+        result = crawler.fetch_rank("2", "1141")
 
         self.assertEqual(2, len(result))
+        self.assertEqual(1, result[0].rankNo)
         self.assertEqual("Book A", result[0].bookName)
+        self.assertEqual("Author A", result[0].author)
+        self.assertEqual("Intro A", result[0].intro)
         self.assertEqual("https://fanqienovel.com/page/101", result[0].bookUrl)
+        self.assertEqual("101", result[0].platformBookId)
+        self.assertEqual(2, result[1].rankNo)
 
     def test_fetch_rank_should_decode_obfuscated_fields(self) -> None:
         raw_name = "\ue4e9\ue3ea\ue4f3\ue4e7"
         raw_author = "\ue478\ue4f3\ue4a2"
         raw_intro = "\ue3e9\ue421\ue4de\ue436"
-        decoder = StubDecoder(mapping={
-            raw_name: "测试书",
-            raw_author: "作者甲",
-            raw_intro: "在这一了",
-        })
+        decoder = StubDecoder(
+            mapping={
+                raw_name: "Decoded Book",
+                raw_author: "Decoded Author",
+                raw_intro: "Decoded Intro",
+            }
+        )
         crawler = FanqieCrawler(
             StubHttpClient(
                 {
                     "https://fanqienovel.com/rank/1_2_1141": (
-                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"book_list":['
-                        '{"currentPos":1,"bookId":"101","bookName":"' + raw_name + '","author":"' + raw_author + '","abstract":"' + raw_intro + '"}'
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
+                        '{"currentPos":1,"bookId":"101","bookName":"'
+                        + raw_name
+                        + '","author":"'
+                        + raw_author
+                        + '","abstract":"'
+                        + raw_intro
+                        + '"}'
                         ']}};})()</script>'
                     )
                 }
@@ -93,12 +134,12 @@ class FanqieCrawlerTest(unittest.TestCase):
             decoder,
         )
 
-        result = crawler.fetch_rank("1_2_1141")
+        result = crawler.fetch_rank("2", "1141")
 
         self.assertTrue(decoder.called)
-        self.assertEqual("测试书", result[0].bookName)
-        self.assertEqual("作者甲", result[0].author)
-        self.assertEqual("在这一了", result[0].intro)
+        self.assertEqual("Decoded Book", result[0].bookName)
+        self.assertEqual("Decoded Author", result[0].author)
+        self.assertEqual("Decoded Intro", result[0].intro)
 
     def test_fetch_book_and_chapters(self) -> None:
         crawler = FanqieCrawler(
@@ -133,17 +174,24 @@ class FanqieCrawlerTest(unittest.TestCase):
         raw_name = "\ue4e9\ue3ea\ue4f3\ue4e7"
         raw_author = "\ue478\ue4f3\ue4a2"
         raw_intro = "\ue3e9\ue421\ue4de\ue436"
-        decoder = StubDecoder(mapping={
-            raw_name: "测试书",
-            raw_author: "作者甲",
-            raw_intro: "在这一了",
-        })
+        decoder = StubDecoder(
+            mapping={
+                raw_name: "Decoded Book",
+                raw_author: "Decoded Author",
+                raw_intro: "Decoded Intro",
+            }
+        )
         crawler = FanqieCrawler(
             StubHttpClient(
                 {
                     "https://fanqienovel.com/page/101": (
-                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"page":{"bookId":"101","bookName":"' + raw_name + '",'
-                        '"author":"' + raw_author + '","abstract":"' + raw_intro + '","itemIds":["c1"]}};})()</script>'
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"page":{"bookId":"101","bookName":"'
+                        + raw_name
+                        + '","author":"'
+                        + raw_author
+                        + '","abstract":"'
+                        + raw_intro
+                        + '","itemIds":["c1"]}};})()</script>'
                     ),
                 }
             ),
@@ -153,12 +201,12 @@ class FanqieCrawlerTest(unittest.TestCase):
         book = crawler.fetch_book("https://fanqienovel.com/page/101")
 
         self.assertTrue(decoder.called)
-        self.assertEqual("测试书", book.bookName)
-        self.assertEqual("作者甲", book.author)
-        self.assertEqual("在这一了", book.intro)
+        self.assertEqual("Decoded Book", book.bookName)
+        self.assertEqual("Decoded Author", book.author)
+        self.assertEqual("Decoded Intro", book.intro)
 
     def test_fetch_chapters_should_decode_obfuscated_text(self) -> None:
-        decoder = StubDecoder("第二章\n正常中文内容")
+        decoder = StubDecoder("Decoded chapter content")
         crawler = FanqieCrawler(
             StubHttpClient(
                 {
@@ -168,7 +216,7 @@ class FanqieCrawlerTest(unittest.TestCase):
                     ),
                     "https://fanqienovel.com/reader/c1": (
                         '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"reader":{"chapterData":{'
-                        '"title":"Chapter 1","content":"<p>二章</p><p>刚穿越</p>"}}};})()</script>'
+                        '"title":"Chapter 1","content":"<p>\ue4e9\ue3ea\ue4f3\ue4e7</p>"}}};})()</script>'
                     ),
                 }
             ),
@@ -178,7 +226,7 @@ class FanqieCrawlerTest(unittest.TestCase):
         chapters = crawler.fetch_chapters("https://fanqienovel.com/page/101", 1)
 
         self.assertTrue(decoder.called)
-        self.assertEqual("第二章\n正常中文内容", chapters[0].content)
+        self.assertEqual("Decoded chapter content", chapters[0].content)
         self.assertFalse(any(0xE000 <= ord(ch) <= 0xF8FF for ch in chapters[0].content))
 
 

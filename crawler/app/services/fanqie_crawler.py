@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 from app.config import settings
 from app.models.book import BookDetail
 from app.models.chapter import ChapterItem
-from app.models.rank import RankItem
+from app.models.rank import BoardCatalogBoard, BoardCatalogChannel, RankItem
 from app.services.base_crawler import BaseCrawler
 from app.utils.confuse_font_decoder import ConfuseFontDecoder
 from app.utils.http_client import HttpClient
@@ -14,26 +14,51 @@ from app.utils.parsers import extract_initial_state, html_to_text
 
 
 class FanqieCrawler(BaseCrawler):
-    CATEGORY_ALIAS = {
-        "male-hot-a": "1_2_1141",
-        "male-hot-b": "1_2_1140",
-        "male-new-a": "1_1_1141",
-    }
-
     def __init__(self,
                  http_client: HttpClient | None = None,
                  decoder: ConfuseFontDecoder | None = None) -> None:
         self._http_client = http_client or HttpClient()
         self._decoder = decoder or ConfuseFontDecoder()
 
-    def fetch_rank(self, category: str) -> List[RankItem]:
-        rank_url = self._resolve_rank_url(category)
+    def fetch_board_catalog(self) -> List[BoardCatalogChannel]:
+        state = self._fetch_state(settings.fanqie_rank_url)
+        rank_state = state.get("rank", {})
+        channel_list = rank_state.get("channelList") or rank_state.get("channel_list") or []
+        channels: List[BoardCatalogChannel] = []
+        for channel in channel_list:
+            channel_code = str(channel.get("channelCode") or channel.get("channel_code") or "")
+            channel_name = str(channel.get("channelName") or channel.get("channel_name") or "")
+            board_list = channel.get("boardList") or channel.get("boards") or []
+            boards: List[BoardCatalogBoard] = []
+            for board in board_list:
+                board_code = str(board.get("boardCode") or board.get("board_code") or "")
+                board_name = str(board.get("boardName") or board.get("board_name") or "")
+                if not board_code or not board_name:
+                    continue
+                boards.append(BoardCatalogBoard(boardName=board_name, boardCode=board_code))
+            if not channel_code or not channel_name or not boards:
+                continue
+            channels.append(
+                BoardCatalogChannel(
+                    channelName=channel_name,
+                    channelCode=channel_code,
+                    boards=boards,
+                )
+            )
+        if not channels:
+            raise ValueError("board catalog parse failed")
+        return channels
+
+    def fetch_rank(self, channel_code: str, board_code: str) -> List[RankItem]:
+        rank_url = self._resolve_rank_url(channel_code, board_code)
         state = self._fetch_state(rank_url)
         css = str(state.get("common", {}).get("css") or "")
         rank_state = state.get("rank", {})
-        book_list = rank_state.get("book_list") or rank_state.get("readRankList") or rank_state.get("newRankList") or []
+        book_list = self._extract_rank_books(rank_state)
         if not book_list:
-            raise ValueError(f"rank list is empty for category: {category}")
+            raise ValueError(
+                f"rank list is empty for channelCode: {channel_code}, boardCode: {board_code}"
+            )
 
         items: List[RankItem] = []
         for index, item in enumerate(book_list, start=1):
@@ -54,7 +79,9 @@ class FanqieCrawler(BaseCrawler):
                 )
             )
         if not items:
-            raise ValueError(f"rank list parse failed for category: {category}")
+            raise ValueError(
+                f"rank list parse failed for channelCode: {channel_code}, boardCode: {board_code}"
+            )
         return items
 
     def fetch_book(self, book_url: str) -> BookDetail:
@@ -103,18 +130,12 @@ class FanqieCrawler(BaseCrawler):
             )
         return chapters
 
-    def _resolve_rank_url(self, category: str) -> str:
-        normalized = (category or "").strip()
-        if not normalized:
-            return settings.fanqie_rank_url
-        mapped = self.CATEGORY_ALIAS.get(normalized, normalized.lstrip("/"))
-        if mapped.startswith("http://") or mapped.startswith("https://"):
-            return mapped
-        if mapped.startswith("rank/"):
-            return f"{settings.fanqie_base_url}/{mapped}"
-        if mapped.count("_") == 2:
-            return f"{settings.fanqie_base_url}/rank/{mapped}"
-        return settings.fanqie_rank_url
+    def _resolve_rank_url(self, channel_code: str, board_code: str) -> str:
+        normalized_channel = (channel_code or "").strip()
+        normalized_board = (board_code or "").strip()
+        if not normalized_channel or not normalized_board:
+            raise ValueError("channelCode and boardCode are required")
+        return f"{settings.fanqie_base_url}/rank/1_{normalized_channel}_{normalized_board}"
 
     def _normalize_book_url(self, book_url: str) -> str:
         normalized = (book_url or "").strip()
@@ -142,6 +163,21 @@ class FanqieCrawler(BaseCrawler):
     def _fetch_state(self, url: str) -> dict[str, Any]:
         html = self._http_client.get_text(url)
         return extract_initial_state(html)
+
+    def _extract_rank_books(self, rank_state: dict[str, Any]) -> list[dict[str, Any]]:
+        for key in ("bookList", "book_list", "readRankList", "newRankList"):
+            book_list = rank_state.get(key) or []
+            if book_list:
+                return book_list
+
+        for value in rank_state.values():
+            if not isinstance(value, dict):
+                continue
+            for key in ("bookList", "book_list", "readRankList", "newRankList"):
+                book_list = value.get(key) or []
+                if book_list:
+                    return book_list
+        return []
 
     def _extract_path_id(self, url: str) -> str:
         return url.rstrip("/").rsplit("/", maxsplit=1)[-1]
