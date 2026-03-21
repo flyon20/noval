@@ -13,8 +13,14 @@ public class CrawlRankEntity {
 
     @TableId(type = IdType.AUTO)
     private Long id;
+    @TableField("snapshot_id")
+    private Long snapshotId;
     private String platform;
     private String category;
+    @TableField("channel_code")
+    private String channelCode;
+    @TableField("board_code")
+    private String boardCode;
     @TableField("rank_no")
     private Integer rankNo;
     @TableField("book_id")
@@ -40,6 +46,14 @@ public class CrawlRankEntity {
         this.id = id;
     }
 
+    public Long getSnapshotId() {
+        return snapshotId;
+    }
+
+    public void setSnapshotId(Long snapshotId) {
+        this.snapshotId = snapshotId;
+    }
+
     public String getPlatform() {
         return platform;
     }
@@ -54,6 +68,22 @@ public class CrawlRankEntity {
 
     public void setCategory(String category) {
         this.category = category;
+    }
+
+    public String getChannelCode() {
+        return channelCode;
+    }
+
+    public void setChannelCode(String channelCode) {
+        this.channelCode = channelCode;
+    }
+
+    public String getBoardCode() {
+        return boardCode;
+    }
+
+    public void setBoardCode(String boardCode) {
+        this.boardCode = boardCode;
     }
 
     public Integer getRankNo() {

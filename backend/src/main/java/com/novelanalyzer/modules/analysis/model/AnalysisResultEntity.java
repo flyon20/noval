@@ -18,6 +18,12 @@ public class AnalysisResultEntity {
     private String platform;
     @TableField("book_id")
     private Long bookId;
+    @TableField("channel_code")
+    private String channelCode;
+    @TableField("board_code")
+    private String boardCode;
+    @TableField("snapshot_id")
+    private Long snapshotId;
     @TableField("analysis_type")
     private String analysisType;
     @TableField("chapter_count")
@@ -71,6 +77,30 @@ public class AnalysisResultEntity {
 
     public void setBookId(Long bookId) {
         this.bookId = bookId;
+    }
+
+    public String getChannelCode() {
+        return channelCode;
+    }
+
+    public void setChannelCode(String channelCode) {
+        this.channelCode = channelCode;
+    }
+
+    public String getBoardCode() {
+        return boardCode;
+    }
+
+    public void setBoardCode(String boardCode) {
+        this.boardCode = boardCode;
+    }
+
+    public Long getSnapshotId() {
+        return snapshotId;
+    }
+
+    public void setSnapshotId(Long snapshotId) {
+        this.snapshotId = snapshotId;
     }
 
     public String getAnalysisType() {

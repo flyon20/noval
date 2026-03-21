@@ -6,10 +6,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -43,6 +46,8 @@ class Phase5BackendIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Test
     void shouldManageSystemConfig() throws Exception {
@@ -144,6 +149,49 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"))
             .andExpect(jsonPath("$.data.resultContent").isNotEmpty());
+    }
+
+    @Test
+    void shouldContainSharedRankFoundationSeedData() {
+        Integer boardCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ? AND deleted = 0",
+            Integer.class,
+            "fanqie",
+            "male-new",
+            "urban-brain"
+        );
+        assertEquals(1, boardCount);
+
+        Long boardId = jdbcTemplate.queryForObject(
+            "SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ? AND deleted = 0",
+            Long.class,
+            "fanqie",
+            "male-new",
+            "urban-brain"
+        );
+
+        Integer snapshotCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM rank_snapshot WHERE rank_board_id = ? AND deleted = 0",
+            Integer.class,
+            boardId
+        );
+        assertTrue(snapshotCount != null && snapshotCount > 0);
+
+        Integer rankRowWithSnapshotCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM crawl_rank WHERE platform = ? AND channel_code = ? AND board_code = ? AND snapshot_id IS NOT NULL AND deleted = 0",
+            Integer.class,
+            "fanqie",
+            "male-new",
+            "urban-brain"
+        );
+        assertTrue(rankRowWithSnapshotCount != null && rankRowWithSnapshotCount > 0);
+
+        Integer promptConfigContractCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM prompt_config WHERE prompt_type = ? AND output_json_schema IS NOT NULL AND parse_config_json IS NOT NULL AND deleted = 0",
+            Integer.class,
+            "theme"
+        );
+        assertEquals(1, promptConfigContractCount);
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {

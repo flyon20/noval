@@ -31,6 +31,14 @@ public class PromptConfigEntity {
     private String difyWorkflowId;
     @TableField("dify_api_key_ref")
     private String difyApiKeyRef;
+    @TableField("output_json_schema")
+    private String outputJsonSchema;
+    @TableField("output_example_json")
+    private String outputExampleJson;
+    @TableField("post_process_type")
+    private String postProcessType;
+    @TableField("parse_config_json")
+    private String parseConfigJson;
     @TableField("create_time")
     private LocalDateTime createTime;
     @TableField("update_time")
@@ -124,6 +132,38 @@ public class PromptConfigEntity {
 
     public void setDifyApiKeyRef(String difyApiKeyRef) {
         this.difyApiKeyRef = difyApiKeyRef;
+    }
+
+    public String getOutputJsonSchema() {
+        return outputJsonSchema;
+    }
+
+    public void setOutputJsonSchema(String outputJsonSchema) {
+        this.outputJsonSchema = outputJsonSchema;
+    }
+
+    public String getOutputExampleJson() {
+        return outputExampleJson;
+    }
+
+    public void setOutputExampleJson(String outputExampleJson) {
+        this.outputExampleJson = outputExampleJson;
+    }
+
+    public String getPostProcessType() {
+        return postProcessType;
+    }
+
+    public void setPostProcessType(String postProcessType) {
+        this.postProcessType = postProcessType;
+    }
+
+    public String getParseConfigJson() {
+        return parseConfigJson;
+    }
+
+    public void setParseConfigJson(String parseConfigJson) {
+        this.parseConfigJson = parseConfigJson;
     }
 
     public LocalDateTime getCreateTime() {
