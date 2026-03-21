@@ -1,16 +1,24 @@
 package com.novelanalyzer.modules.analysis;
 
 import com.jayway.jsonpath.JsonPath;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterAll;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 
@@ -31,7 +39,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.sql.init.mode=never",
-        "app.security.rate-limit-per-minute=100"
+        "app.security.rate-limit-per-minute=100",
+        "app.ai.openai-compatible.api-key-ref=TEST_DEEPSEEK_API_KEY",
+        "app.ai.openai-compatible.default-model=deepseek-chat"
     }
 )
 @AutoConfigureMockMvc
@@ -40,18 +50,37 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "classpath:sql/phase2-schema-h2.sql",
         "classpath:sql/phase3-schema-h2.sql",
         "classpath:sql/phase4-schema-h2.sql",
+        "classpath:sql/phase5-schema-h2.sql",
         "classpath:sql/phase2-data-h2.sql",
-        "classpath:sql/phase4-data-h2.sql"
+        "classpath:sql/phase4-data-h2.sql",
+        "classpath:sql/phase5-data-h2.sql"
     },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
 class Phase4AnalysisIntegrationTest {
+
+    private static final HttpServer MOCK_OPENAI_SERVER = startMockOpenAiServer();
+
+    static {
+        System.setProperty("TEST_DEEPSEEK_API_KEY", "test-key");
+    }
 
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @DynamicPropertySource
+    static void registerAiProperties(DynamicPropertyRegistry registry) {
+        registry.add("app.ai.openai-compatible.base-url", () -> "http://127.0.0.1:" + MOCK_OPENAI_SERVER.getAddress().getPort() + "/v1");
+    }
+
+    @AfterAll
+    static void shutdownMockServer() {
+        MOCK_OPENAI_SERVER.stop(0);
+        System.clearProperty("TEST_DEEPSEEK_API_KEY");
+    }
 
     @Test
     void shouldAnalyzeAndPersistResult() throws Exception {
@@ -99,6 +128,31 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldUpdateAndGetPromptConfigWithModelParameters() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"promptType":"deconstruct","promptName":"default-deconstruct","promptContent":"UPDATED {{content}}","modelName":"deepseek-chat","temperature":0.55,"maxTokens":1200}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.modelName").value("deepseek-chat"))
+            .andExpect(jsonPath("$.data.temperature").value(0.55))
+            .andExpect(jsonPath("$.data.maxTokens").value(1200));
+
+        mockMvc.perform(get("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .param("promptType", "deconstruct"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.modelName").value("deepseek-chat"))
+            .andExpect(jsonPath("$.data.temperature").value(0.55))
+            .andExpect(jsonPath("$.data.maxTokens").value(1200));
+    }
+
+    @Test
     void shouldAllowUserRoleToUpdatePromptConfig() throws Exception {
         String token = loginAndGetToken("writer", "writer123");
         mockMvc.perform(put("/api/config/prompt")
@@ -142,6 +196,42 @@ class Phase4AnalysisIntegrationTest {
 
         assertThat(secondContent).contains("PROMPT-V2");
         assertThat(secondId.longValue()).isNotEqualTo(firstId.longValue());
+    }
+
+    @Test
+    void shouldAnalyzeViaLangChain4jAndPersistStructuredResult() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"promptType":"deconstruct","promptName":"default-deconstruct","promptContent":"JSON ONLY {{content}}","modelName":"deepseek-chat","temperature":0.55,"maxTokens":1200}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        MvcResult result = mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.modelName").value("deepseek-chat"))
+            .andExpect(jsonPath("$.data.resultJson.source").value("mock-openai"))
+            .andExpect(jsonPath("$.data.tokenUsed").value(200))
+            .andReturn();
+
+        String response = result.getResponse().getContentAsString();
+        String content = JsonPath.read(response, "$.data.resultContent");
+        assertThat(content).contains("mock summary");
+
+        String resultJson = jdbcTemplate.queryForObject(
+            "SELECT result_json FROM analysis_result WHERE analysis_type='deconstruct' ORDER BY id DESC LIMIT 1",
+            String.class
+        );
+        assertThat(resultJson).contains("\"source\":\"mock-openai\"");
     }
 
     @Test
@@ -307,5 +397,63 @@ class Phase4AnalysisIntegrationTest {
             Timestamp.valueOf(crawlTime),
             0
         );
+    }
+
+    private static HttpServer startMockOpenAiServer() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+            server.createContext("/v1/chat/completions", exchange -> {
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String marker = extractPromptMarker(requestBody);
+                byte[] response = """
+                    {
+                      "id": "chatcmpl-test",
+                      "object": "chat.completion",
+                      "created": 1760000000,
+                      "model": "deepseek-chat",
+                      "choices": [
+                        {
+                          "index": 0,
+                          "message": {
+                            "role": "assistant",
+                            "content": "{\\"summary\\":\\"mock summary %s\\",\\"source\\":\\"mock-openai\\",\\"analysisType\\":\\"deconstruct\\"}"
+                          },
+                          "finish_reason": "stop"
+                        }
+                      ],
+                      "usage": {
+                        "prompt_tokens": 120,
+                        "completion_tokens": 80,
+                        "total_tokens": 200
+                      }
+                    }
+                    """.formatted(marker).getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                try (OutputStream outputStream = exchange.getResponseBody()) {
+                    outputStream.write(response);
+                }
+            });
+            server.start();
+            return server;
+        } catch (IOException ex) {
+            throw new IllegalStateException("failed to start mock OpenAI server", ex);
+        }
+    }
+
+    private static String extractPromptMarker(String requestBody) {
+        if (requestBody == null || requestBody.isBlank()) {
+            return "";
+        }
+        if (requestBody.contains("PROMPT-V1")) {
+            return "PROMPT-V1";
+        }
+        if (requestBody.contains("PROMPT-V2")) {
+            return "PROMPT-V2";
+        }
+        if (requestBody.contains("JSON ONLY")) {
+            return "JSON ONLY";
+        }
+        return "DEFAULT";
     }
 }

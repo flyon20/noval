@@ -46,6 +46,12 @@ public class PromptConfigRepository {
             PromptConfigEntity dbEntity = existing.get();
             dbEntity.setPromptContent(entity.getPromptContent());
             dbEntity.setModelName(entity.getModelName());
+            if (entity.getTemperature() != null) {
+                dbEntity.setTemperature(entity.getTemperature());
+            }
+            if (entity.getMaxTokens() != null) {
+                dbEntity.setMaxTokens(entity.getMaxTokens());
+            }
             if (entity.getDifyWorkflowId() != null) {
                 dbEntity.setDifyWorkflowId(entity.getDifyWorkflowId());
             }

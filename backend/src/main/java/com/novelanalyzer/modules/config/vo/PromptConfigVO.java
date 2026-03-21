@@ -7,6 +7,8 @@ public class PromptConfigVO {
     private String promptName;
     private String promptContent;
     private String modelName;
+    private Double temperature;
+    private Integer maxTokens;
 
     public Long getId() {
         return id;
@@ -47,5 +49,20 @@ public class PromptConfigVO {
     public void setModelName(String modelName) {
         this.modelName = modelName;
     }
-}
 
+    public Double getTemperature() {
+        return temperature;
+    }
+
+    public void setTemperature(Double temperature) {
+        this.temperature = temperature;
+    }
+
+    public Integer getMaxTokens() {
+        return maxTokens;
+    }
+
+    public void setMaxTokens(Integer maxTokens) {
+        this.maxTokens = maxTokens;
+    }
+}

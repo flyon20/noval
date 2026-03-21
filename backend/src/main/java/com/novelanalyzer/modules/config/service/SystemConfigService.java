@@ -57,6 +57,11 @@ public class SystemConfigService {
             .orElse(defaultValue);
     }
 
+    public boolean getBooleanValueOrDefault(String configKey, boolean defaultValue) {
+        return parseBoolean(getValueOrDefault(configKey, null))
+            .orElse(defaultValue);
+    }
+
     private SystemConfigVO toVO(SystemConfigEntity entity) {
         SystemConfigVO vo = new SystemConfigVO();
         vo.setId(entity.getId());
@@ -82,5 +87,18 @@ public class SystemConfigService {
         } catch (NumberFormatException ex) {
             return Optional.empty();
         }
+    }
+
+    private Optional<Boolean> parseBoolean(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
+        if ("true".equalsIgnoreCase(value) || "1".equals(value.trim())) {
+            return Optional.of(Boolean.TRUE);
+        }
+        if ("false".equalsIgnoreCase(value) || "0".equals(value.trim())) {
+            return Optional.of(Boolean.FALSE);
+        }
+        return Optional.empty();
     }
 }

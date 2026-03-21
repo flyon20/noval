@@ -1,10 +1,15 @@
 package com.novelanalyzer.modules.analysis.service;
 
 import dev.langchain4j.model.input.PromptTemplate;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
+import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -16,25 +21,31 @@ import org.springframework.web.client.RestTemplate;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.time.Duration;
 
 @Service
 public class AiGatewayService {
 
     private final RestTemplate aiRestTemplate;
     private final AiProperties aiProperties;
+    private final SystemConfigService systemConfigService;
     private final ObjectMapper objectMapper;
 
-    public AiGatewayService(RestTemplate aiRestTemplate, AiProperties aiProperties, ObjectMapper objectMapper) {
+    public AiGatewayService(RestTemplate aiRestTemplate,
+                            AiProperties aiProperties,
+                            SystemConfigService systemConfigService,
+                            ObjectMapper objectMapper) {
         this.aiRestTemplate = aiRestTemplate;
         this.aiProperties = aiProperties;
+        this.systemConfigService = systemConfigService;
         this.objectMapper = objectMapper;
     }
 
     public AiInvokeResult analyze(PromptConfigEntity promptConfig, String text, String analysisType) {
         String renderedPrompt = renderPrompt(promptConfig.getPromptContent(), text, analysisType);
-        AiInvokeResult difyResult = invokeDify(promptConfig, renderedPrompt, analysisType);
-        if (difyResult != null) {
-            return difyResult;
+        AiInvokeResult providerResult = invokePreferredProvider(promptConfig, renderedPrompt, analysisType);
+        if (providerResult != null) {
+            return providerResult;
         }
         return buildFallbackResult(promptConfig, analysisType, renderedPrompt);
     }
@@ -44,6 +55,89 @@ public class AiGatewayService {
         return PromptTemplate.from(safeTemplate)
             .apply(Map.of("content", text, "analysisType", analysisType))
             .text();
+    }
+
+    private AiInvokeResult invokePreferredProvider(PromptConfigEntity promptConfig,
+                                                   String renderedPrompt,
+                                                   String analysisType) {
+        String providerType = resolveProviderType();
+        if ("dify".equalsIgnoreCase(providerType)) {
+            AiInvokeResult difyResult = invokeDify(promptConfig, renderedPrompt, analysisType);
+            if (difyResult != null) {
+                return difyResult;
+            }
+            return invokeOpenAiCompatible(promptConfig, renderedPrompt, analysisType);
+        }
+
+        AiInvokeResult openAiResult = invokeOpenAiCompatible(promptConfig, renderedPrompt, analysisType);
+        if (openAiResult != null) {
+            return openAiResult;
+        }
+        return invokeDify(promptConfig, renderedPrompt, analysisType);
+    }
+
+    private AiInvokeResult invokeOpenAiCompatible(PromptConfigEntity promptConfig,
+                                                  String renderedPrompt,
+                                                  String analysisType) {
+        String apiKey = resolveOpenAiCompatibleApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            return null;
+        }
+
+        String modelName = resolveOpenAiCompatibleModelName(promptConfig);
+        if (modelName == null || modelName.isBlank()) {
+            return null;
+        }
+
+        try {
+            OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
+                .baseUrl(resolveOpenAiCompatibleBaseUrl())
+                .apiKey(apiKey)
+                .modelName(modelName)
+                .timeout(Duration.ofMillis(resolveTimeoutMillis()))
+                .logRequests(false)
+                .logResponses(false);
+
+            if (promptConfig.getTemperature() != null) {
+                builder.temperature(promptConfig.getTemperature());
+            }
+            if (promptConfig.getMaxTokens() != null) {
+                builder.maxTokens(promptConfig.getMaxTokens());
+            }
+
+            ChatRequest chatRequest = ChatRequest.builder()
+                .messages(UserMessage.from(renderedPrompt))
+                .build();
+            ChatResponse chatResponse = builder.build().chat(chatRequest);
+            if (chatResponse == null || chatResponse.aiMessage() == null) {
+                return null;
+            }
+
+            String content = chatResponse.aiMessage().text();
+            if (content == null || content.isBlank()) {
+                return null;
+            }
+
+            String resolvedModelName = firstNonBlank(chatResponse.modelName(), modelName);
+            Integer totalTokens = Optional.ofNullable(chatResponse.tokenUsage())
+                .map(tokenUsage -> tokenUsage.totalTokenCount())
+                .orElse(null);
+            Map<String, Object> resultJson = buildStructuredResult(
+                Map.of(),
+                content,
+                analysisType,
+                resolvedModelName
+            );
+
+            return AiInvokeResult.of(
+                resolvedModelName,
+                content,
+                totalTokens == null ? Math.max(120, renderedPrompt.length() / 2) : totalTokens,
+                resultJson
+            );
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -134,11 +228,11 @@ public class AiGatewayService {
         if (keyRef == null || keyRef.isBlank()) {
             String globalKeyRef = aiProperties.getDifyApiKeyRef();
             if (globalKeyRef == null || globalKeyRef.isBlank()) {
-                return System.getenv("DIFY_API_KEY");
+                return resolveSecretValue("DIFY_API_KEY");
             }
-            return System.getenv(globalKeyRef);
+            return resolveSecretValue(globalKeyRef);
         }
-        return System.getenv(keyRef);
+        return resolveSecretValue(keyRef);
     }
 
     @SuppressWarnings("unchecked")
@@ -173,6 +267,51 @@ public class AiGatewayService {
         return clean.substring(0, max) + "...";
     }
 
+    private String resolveProviderType() {
+        return systemConfigService.getValueOrDefault("ai.provider.type", aiProperties.getProviderType());
+    }
+
+    private int resolveTimeoutMillis() {
+        return systemConfigService.getIntValueOrDefault("ai.timeout.millis", aiProperties.getTimeoutMillis());
+    }
+
+    private String resolveOpenAiCompatibleBaseUrl() {
+        return systemConfigService.getValueOrDefault(
+            "ai.openai-compatible.base-url",
+            aiProperties.getOpenAiCompatible().getBaseUrl()
+        );
+    }
+
+    private String resolveOpenAiCompatibleApiKey() {
+        return resolveSecretValue(aiProperties.getOpenAiCompatible().getApiKeyRef());
+    }
+
+    private String resolveOpenAiCompatibleModelName(PromptConfigEntity promptConfig) {
+        String configuredModel = promptConfig.getModelName();
+        if (configuredModel == null || configuredModel.isBlank() || "dify".equalsIgnoreCase(configuredModel)) {
+            return systemConfigService.getValueOrDefault(
+                "ai.openai-compatible.default-model",
+                aiProperties.getOpenAiCompatible().getDefaultModel()
+            );
+        }
+        return configuredModel;
+    }
+
+    private String resolveSecretValue(String refName) {
+        if (refName == null || refName.isBlank()) {
+            return null;
+        }
+        String envValue = System.getenv(refName);
+        if (envValue != null && !envValue.isBlank()) {
+            return envValue;
+        }
+        String propertyValue = System.getProperty(refName);
+        if (propertyValue != null && !propertyValue.isBlank()) {
+            return propertyValue;
+        }
+        return null;
+    }
+
     private Map<String, Object> buildStructuredResult(Map<String, Object> outputs,
                                                       String content,
                                                       String analysisType,
@@ -186,7 +325,7 @@ public class AiGatewayService {
         }
 
         try {
-            Map<String, Object> parsed = objectMapper.readValue(content, new TypeReference<Map<String, Object>>() {
+            Map<String, Object> parsed = objectMapper.readValue(extractJsonObject(content), new TypeReference<Map<String, Object>>() {
             });
             parsed.putIfAbsent("analysisType", analysisType);
             parsed.putIfAbsent("modelName", modelName);
@@ -199,5 +338,22 @@ public class AiGatewayService {
                 "content", content
             );
         }
+    }
+
+    private String extractJsonObject(String content) {
+        String trimmed = content == null ? "" : content.trim();
+        if (trimmed.startsWith("```")) {
+            int firstLineEnd = trimmed.indexOf('\n');
+            int lastFence = trimmed.lastIndexOf("```");
+            if (firstLineEnd >= 0 && lastFence > firstLineEnd) {
+                trimmed = trimmed.substring(firstLineEnd + 1, lastFence).trim();
+            }
+        }
+        int firstBrace = trimmed.indexOf('{');
+        int lastBrace = trimmed.lastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            return trimmed.substring(firstBrace, lastBrace + 1);
+        }
+        return trimmed;
     }
 }

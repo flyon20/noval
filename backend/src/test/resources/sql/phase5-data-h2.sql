@@ -4,13 +4,17 @@ VALUES
 
 INSERT INTO system_config (id, config_key, config_value, config_type, description, is_editable, deleted)
 VALUES
-    (1, 'ai.timeout.millis', '15000', 'ai', 'AI request timeout in milliseconds', 1, 0),
-    (2, 'crawler.default.chapter-count', '3', 'crawler', 'Default crawler chapter count', 1, 0),
-    (3, 'crawler.rank.refresh-days', '5', 'crawler', 'Rank refresh days', 1, 0),
-    (4, 'crawler.rank.force-cooldown-days', '2', 'crawler', 'Rank force refresh cooldown days', 1, 0),
-    (5, 'crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
-    (6, 'crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
-    (7, 'analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0);
+    (1, 'ai.provider.type', 'openai-compatible', 'ai', 'AI provider type', 1, 0),
+    (2, 'ai.timeout.millis', '15000', 'ai', 'AI request timeout in milliseconds', 1, 0),
+    (3, 'ai.openai-compatible.base-url', '', 'ai', 'OpenAI compatible base URL, blank means fallback to application config', 1, 0),
+    (4, 'ai.openai-compatible.default-model', 'deepseek-chat', 'ai', 'Default OpenAI compatible model name', 1, 0),
+    (5, 'ai.openai-compatible.streaming-enabled', 'false', 'ai', 'Whether OpenAI compatible streaming is enabled', 1, 0),
+    (6, 'crawler.default.chapter-count', '3', 'crawler', 'Default crawler chapter count', 1, 0),
+    (7, 'crawler.rank.refresh-days', '5', 'crawler', 'Rank refresh days', 1, 0),
+    (8, 'crawler.rank.force-cooldown-days', '2', 'crawler', 'Rank force refresh cooldown days', 1, 0),
+    (9, 'crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
+    (10, 'crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
+    (11, 'analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0);
 
 INSERT INTO crawl_book (id, platform, platform_book_id, book_name, author, intro, book_url, deleted)
 VALUES
