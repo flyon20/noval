@@ -36,6 +36,20 @@ const router = createRouter({
           path: 'history',
           component: () => import('@/views/history/HistoryView.vue'),
         },
+        {
+          path: 'config/prompt',
+          component: () => import('@/views/config/prompt/PromptConfigView.vue'),
+          meta: {
+            roles: ['ADMIN', 'USER'],
+          },
+        },
+        {
+          path: 'config/system',
+          component: () => import('@/views/config/system/SystemConfigView.vue'),
+          meta: {
+            roles: ['ADMIN'],
+          },
+        },
       ],
     },
   ],
@@ -48,9 +62,11 @@ router.beforeEach((to) => {
       path: to.path,
       meta: {
         public: Boolean(to.meta.public),
+        roles: Array.isArray(to.meta.roles) ? (to.meta.roles as string[]) : undefined,
       },
     },
     !!session,
+    session?.roles ?? [],
   );
 
   return redirect ?? true;

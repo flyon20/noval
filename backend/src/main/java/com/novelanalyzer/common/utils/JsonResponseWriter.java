@@ -1,6 +1,7 @@
 package com.novelanalyzer.common.utils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.novelanalyzer.common.result.HttpStatusMapper;
 import com.novelanalyzer.common.result.Result;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Component;
@@ -17,9 +18,9 @@ public class JsonResponseWriter {
     }
 
     public void write(HttpServletResponse response, Result<?> result) throws IOException {
+        response.setStatus(HttpStatusMapper.toHttpStatus(result.getCode()).value());
         response.setCharacterEncoding("UTF-8");
         response.setContentType("application/json");
         response.getWriter().write(objectMapper.writeValueAsString(result));
     }
 }
-

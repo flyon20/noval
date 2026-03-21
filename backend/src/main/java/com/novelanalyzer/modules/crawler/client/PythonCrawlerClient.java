@@ -9,6 +9,11 @@ import com.novelanalyzer.modules.crawler.client.model.ExternalBookDetail;
 import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
 import com.novelanalyzer.modules.crawler.client.model.PythonResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
@@ -19,6 +24,9 @@ import java.util.Map;
 
 @Component
 public class PythonCrawlerClient {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PythonCrawlerClient.class);
+    private static final String INTERNAL_API_KEY_HEADER = "X-Internal-Service-Token";
 
     private final RestTemplate crawlerRestTemplate;
     private final CrawlerProperties crawlerProperties;
@@ -37,17 +45,18 @@ public class PythonCrawlerClient {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("category", category);
-            PythonResult result = crawlerRestTemplate.postForObject(
+            PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/rank",
-                request,
+                buildRequestEntity(request),
                 PythonResult.class
-            );
+            ).getBody();
             if (result == null || result.getCode() == null || result.getCode() != 200) {
                 throw new BusinessException(ResultCode.INTERNAL_ERROR, "crawler rank call failed");
             }
             return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalRankItem>>() {
             });
         } catch (Exception ex) {
+            LOGGER.warn("crawler rank call failed, using fallback: {}", ex.getMessage());
             return buildFallbackRank(platform, category);
         }
     }
@@ -57,16 +66,17 @@ public class PythonCrawlerClient {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("bookUrl", bookUrl);
-            PythonResult result = crawlerRestTemplate.postForObject(
+            PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/book",
-                request,
+                buildRequestEntity(request),
                 PythonResult.class
-            );
+            ).getBody();
             if (result == null || result.getCode() == null || result.getCode() != 200) {
                 throw new BusinessException(ResultCode.INTERNAL_ERROR, "crawler book call failed");
             }
             return objectMapper.convertValue(result.getData(), ExternalBookDetail.class);
         } catch (Exception ex) {
+            LOGGER.warn("crawler book call failed, using fallback: {}", ex.getMessage());
             return buildFallbackBook(bookUrl);
         }
     }
@@ -77,19 +87,27 @@ public class PythonCrawlerClient {
             request.put("platform", platform);
             request.put("bookUrl", bookUrl);
             request.put("chapterCount", chapterCount);
-            PythonResult result = crawlerRestTemplate.postForObject(
+            PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/chapters",
-                request,
+                buildRequestEntity(request),
                 PythonResult.class
-            );
+            ).getBody();
             if (result == null || result.getCode() == null || result.getCode() != 200) {
                 throw new BusinessException(ResultCode.INTERNAL_ERROR, "crawler chapter call failed");
             }
             return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalChapterItem>>() {
             });
         } catch (Exception ex) {
+            LOGGER.warn("crawler chapter call failed, using fallback: {}", ex.getMessage());
             return buildFallbackChapters(chapterCount);
         }
+    }
+
+    private HttpEntity<Map<String, Object>> buildRequestEntity(Map<String, Object> request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set(INTERNAL_API_KEY_HEADER, crawlerProperties.getInternalApiKey());
+        return new HttpEntity<>(request, headers);
     }
 
     private List<ExternalRankItem> buildFallbackRank(String platform, String category) {
@@ -137,4 +155,3 @@ public class PythonCrawlerClient {
         return chapters;
     }
 }
-

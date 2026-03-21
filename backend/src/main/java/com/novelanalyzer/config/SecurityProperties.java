@@ -13,6 +13,7 @@ public class SecurityProperties {
     private long blacklistSeconds = 86400L;
     private List<String> protectedPathPrefixes = new ArrayList<>();
     private List<String> whitelistPaths = new ArrayList<>();
+    private List<String> trustedProxyIps = new ArrayList<>();
 
     public int getRateLimitPerMinute() {
         return rateLimitPerMinute;
@@ -53,5 +54,12 @@ public class SecurityProperties {
     public void setWhitelistPaths(List<String> whitelistPaths) {
         this.whitelistPaths = whitelistPaths;
     }
-}
 
+    public List<String> getTrustedProxyIps() {
+        return trustedProxyIps;
+    }
+
+    public void setTrustedProxyIps(List<String> trustedProxyIps) {
+        this.trustedProxyIps = trustedProxyIps;
+    }
+}

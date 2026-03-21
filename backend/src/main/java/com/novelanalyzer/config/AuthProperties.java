@@ -5,10 +5,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "app.auth")
 public class AuthProperties {
 
+    private boolean demoEnabled;
     private String demoUsername;
     private String demoPassword;
     private String jwtSecret;
     private long accessTokenExpireSeconds;
+
+    public boolean isDemoEnabled() {
+        return demoEnabled;
+    }
+
+    public void setDemoEnabled(boolean demoEnabled) {
+        this.demoEnabled = demoEnabled;
+    }
 
     public String getDemoUsername() {
         return demoUsername;
@@ -42,4 +51,3 @@ public class AuthProperties {
         this.accessTokenExpireSeconds = accessTokenExpireSeconds;
     }
 }
-

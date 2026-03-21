@@ -16,7 +16,7 @@ const emit = defineEmits<{
 <template>
   <div class="app-shell">
     <div class="app-shell__sidebar">
-      <AppSidebar />
+      <AppSidebar :roles="roles" />
     </div>
 
     <div class="app-shell__surface">

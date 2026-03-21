@@ -1,10 +1,12 @@
 package com.novelanalyzer.modules.auth.controller;
 
 import com.novelanalyzer.common.result.Result;
+import com.novelanalyzer.common.web.RequestIpResolver;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
 import com.novelanalyzer.modules.auth.dto.RefreshTokenRequest;
 import com.novelanalyzer.modules.auth.service.AuthService;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
+import com.novelanalyzer.modules.security.service.RateLimitService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
@@ -19,14 +21,22 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final RateLimitService rateLimitService;
+    private final RequestIpResolver requestIpResolver;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService,
+                          RateLimitService rateLimitService,
+                          RequestIpResolver requestIpResolver) {
         this.authService = authService;
+        this.rateLimitService = rateLimitService;
+        this.requestIpResolver = requestIpResolver;
     }
 
     @PostMapping("/login")
     public Result<TokenResponse> login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpServletRequest) {
-        return Result.success(authService.login(request, resolveRequestIp(httpServletRequest)));
+        String requestIp = requestIpResolver.resolve(httpServletRequest);
+        rateLimitService.assertWithinLimit(requestIp, "/api/auth/login", null);
+        return Result.success(authService.login(request, requestIp));
     }
 
     @PostMapping("/refresh")
@@ -38,13 +48,5 @@ public class AuthController {
     public Result<Void> logout(@Valid @RequestBody RefreshTokenRequest request) {
         authService.logout(request.getToken());
         return Result.success();
-    }
-
-    private String resolveRequestIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 }

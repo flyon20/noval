@@ -54,18 +54,29 @@ public class AuthService {
             return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes);
         }
 
-        validateDemoUser(request.getUsername(), request.getPassword(), loginIp);
-        return issueToken(0L, request.getUsername(), List.of("ADMIN"));
+        if (authProperties.isDemoEnabled()) {
+            validateDemoUser(request.getUsername(), request.getPassword(), loginIp);
+            return issueToken(0L, request.getUsername(), List.of("ADMIN"));
+        }
+
+        authRepository.insertLoginLog(null, request.getUsername(), loginIp, 0, "username or password is incorrect");
+        throw new BusinessException(ResultCode.UNAUTHORIZED, "username or password is incorrect");
     }
 
     public TokenResponse refresh(String token) {
+        if (tokenBlacklistService.isBlacklisted(token)) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+        }
         try {
             Claims claims = jwtUtils.parseClaims(token, authProperties.getJwtSecret());
             Long userId = claims.get("uid", Long.class);
-            String username = claims.get("username", String.class);
-            String roles = claims.get("roles", String.class);
-            List<String> roleCodes = roles == null || roles.isBlank() ? List.of() : List.of(roles.split(","));
-            return issueToken(userId == null ? 0L : userId, username == null ? claims.getSubject() : username, roleCodes);
+            if (userId == null || userId <= 0) {
+                throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+            }
+            AuthUserEntity dbUser = authRepository.findActiveUserById(userId)
+                .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
+            List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
+            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes);
         } catch (JwtException ex) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }

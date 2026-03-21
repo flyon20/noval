@@ -42,6 +42,22 @@ public class AuthRepository {
         return Optional.of(user);
     }
 
+    public Optional<AuthUserEntity> findActiveUserById(Long userId) {
+        List<AuthUserEntity> users = jdbcTemplate.query(
+            "SELECT id, username, password, status FROM sys_user WHERE id = ? AND deleted = 0 LIMIT 1",
+            AUTH_USER_ROW_MAPPER,
+            userId
+        );
+        if (users.isEmpty()) {
+            return Optional.empty();
+        }
+        AuthUserEntity user = users.get(0);
+        if (user.getStatus() == null || user.getStatus() != 1) {
+            return Optional.empty();
+        }
+        return Optional.of(user);
+    }
+
     public List<String> findRoleCodesByUserId(Long userId) {
         return jdbcTemplate.queryForList(
             """
@@ -76,4 +92,3 @@ public class AuthRepository {
         );
     }
 }
-

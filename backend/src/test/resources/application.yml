@@ -1,0 +1,19 @@
+app:
+  auth:
+    jwt-secret: test-jwt-secret-should-be-long-enough-1234567890
+    demo-enabled: false
+    access-token-expire-seconds: 7200
+  security:
+    protected-path-prefixes:
+      - /api/auth
+      - /api/secure
+      - /api/crawler
+      - /api/analysis
+      - /api/config
+      - /api/data
+    whitelist-paths:
+      - /api/system/health
+      - /api/auth/login
+      - /api/auth/refresh
+  crawler:
+    internal-api-key: crawler-internal-test-key-1234567890

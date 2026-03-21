@@ -12,7 +12,7 @@ const emit = defineEmits<{
 <template>
   <header class="app-header">
     <div>
-      <p class="app-header__eyebrow">当前会话</p>
+      <p class="app-header__eyebrow">Current Session</p>
       <h2 class="app-header__title">{{ username }}</h2>
     </div>
 

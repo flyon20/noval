@@ -1,5 +1,6 @@
 export function registerServiceWorker() {
   if (
+    !import.meta.env.PROD ||
     typeof navigator === 'undefined' ||
     !('serviceWorker' in navigator) ||
     import.meta.env.VITE_DISABLE_SW === 'true'

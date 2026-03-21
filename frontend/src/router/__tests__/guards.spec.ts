@@ -9,6 +9,7 @@ describe('route guards', () => {
           meta: {},
         },
         false,
+        [],
       ),
     ).toBe('/login');
   });
@@ -23,6 +24,7 @@ describe('route guards', () => {
           },
         },
         true,
+        ['USER'],
       ),
     ).toBe('/rank');
   });
@@ -35,6 +37,37 @@ describe('route guards', () => {
           meta: {},
         },
         true,
+        ['USER'],
+      ),
+    ).toBeNull();
+  });
+
+  test('redirects non-admin users away from admin route', () => {
+    expect(
+      resolveAuthRedirect(
+        {
+          path: '/config/system',
+          meta: {
+            roles: ['ADMIN'],
+          },
+        },
+        true,
+        ['USER'],
+      ),
+    ).toBe('/rank');
+  });
+
+  test('allows admin users to access admin route', () => {
+    expect(
+      resolveAuthRedirect(
+        {
+          path: '/config/system',
+          meta: {
+            roles: ['ADMIN'],
+          },
+        },
+        true,
+        ['ADMIN'],
       ),
     ).toBeNull();
   });

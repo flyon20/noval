@@ -23,8 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
-        "spring.sql.init.mode=never",
-        "app.security.rate-limit-per-minute=3"
+        "spring.sql.init.mode=never"
     }
 )
 @AutoConfigureMockMvc
@@ -43,7 +42,7 @@ class Phase2SecurityIntegrationTest {
     @Test
     void shouldReturn401WhenNoToken() throws Exception {
         mockMvc.perform(get("/api/secure/admin/ping"))
-            .andExpect(status().isOk())
+            .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value(401));
     }
 
@@ -52,14 +51,14 @@ class Phase2SecurityIntegrationTest {
         String userToken = loginAndGetToken("writer", "writer123");
         mockMvc.perform(get("/api/secure/admin/ping")
                 .header("Authorization", "Bearer " + userToken))
-            .andExpect(status().isOk())
+            .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.code").value(403));
     }
 
     @Test
     void shouldReturn429AndWriteLogWhenRateLimited() throws Exception {
         String adminToken = loginAndGetToken("admin", "admin123");
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 100; i++) {
             mockMvc.perform(get("/api/secure/user/ping")
                     .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
@@ -68,7 +67,7 @@ class Phase2SecurityIntegrationTest {
 
         mockMvc.perform(get("/api/secure/user/ping")
                 .header("Authorization", "Bearer " + adminToken))
-            .andExpect(status().isOk())
+            .andExpect(status().isTooManyRequests())
             .andExpect(jsonPath("$.code").value(429));
 
         Integer count = jdbcTemplate.queryForObject(
@@ -89,4 +88,3 @@ class Phase2SecurityIntegrationTest {
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
     }
 }
-

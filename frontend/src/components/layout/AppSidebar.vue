@@ -1,5 +1,22 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { PRIMARY_NAV_ITEMS } from '@/constants/navigation';
+
+const props = defineProps<{
+  roles: string[];
+}>();
+
+const configNavItems = computed(() => {
+  const items = [
+    { to: '/config/prompt', label: '提示词配置' },
+  ];
+
+  if (props.roles.includes('ADMIN')) {
+    items.push({ to: '/config/system', label: '系统配置' });
+  }
+
+  return items;
+});
 </script>
 
 <template>
@@ -23,6 +40,21 @@ import { PRIMARY_NAV_ITEMS } from '@/constants/navigation';
         <span>{{ item.label }}</span>
       </RouterLink>
     </nav>
+
+    <section class="app-sidebar__section">
+      <p class="app-sidebar__section-title">配置中心</p>
+      <nav class="app-sidebar__nav" aria-label="配置导航">
+        <RouterLink
+          v-for="item in configNavItems"
+          :key="item.to"
+          class="app-sidebar__link app-sidebar__link--secondary"
+          :to="item.to"
+          active-class="is-active"
+        >
+          <span>{{ item.label }}</span>
+        </RouterLink>
+      </nav>
+    </section>
   </aside>
 </template>
 
@@ -34,7 +66,8 @@ import { PRIMARY_NAV_ITEMS } from '@/constants/navigation';
   padding: 1.5rem;
 }
 
-.app-sidebar__brand {
+.app-sidebar__brand,
+.app-sidebar__section {
   display: grid;
   gap: 0.5rem;
 }
@@ -52,10 +85,17 @@ import { PRIMARY_NAV_ITEMS } from '@/constants/navigation';
   line-height: 1.1;
 }
 
-.app-sidebar__subtitle {
+.app-sidebar__subtitle,
+.app-sidebar__section-title {
   margin: 0;
   color: var(--color-text-muted);
   line-height: 1.7;
+}
+
+.app-sidebar__section-title {
+  font-size: 0.84rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .app-sidebar__nav {
@@ -76,6 +116,11 @@ import { PRIMARY_NAV_ITEMS } from '@/constants/navigation';
   text-decoration: none;
   font-weight: 600;
   transition: 180ms ease;
+}
+
+.app-sidebar__link--secondary {
+  justify-content: flex-start;
+  background: rgba(35, 65, 58, 0.03);
 }
 
 .app-sidebar__link:hover,

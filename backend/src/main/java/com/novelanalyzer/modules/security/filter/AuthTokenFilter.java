@@ -4,6 +4,7 @@ import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.common.result.Result;
 import com.novelanalyzer.common.result.ResultCode;
+import com.novelanalyzer.common.web.RequestIpResolver;
 import com.novelanalyzer.common.utils.JsonResponseWriter;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
@@ -43,6 +44,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
     private final IpBlacklistRepository ipBlacklistRepository;
     private final OperationLogRepository operationLogRepository;
     private final JsonResponseWriter jsonResponseWriter;
+    private final RequestIpResolver requestIpResolver;
 
     public AuthTokenFilter(JwtUtils jwtUtils,
                            AuthProperties authProperties,
@@ -51,7 +53,8 @@ public class AuthTokenFilter extends OncePerRequestFilter {
                            RateLimitService rateLimitService,
                            IpBlacklistRepository ipBlacklistRepository,
                            OperationLogRepository operationLogRepository,
-                           JsonResponseWriter jsonResponseWriter) {
+                           JsonResponseWriter jsonResponseWriter,
+                           RequestIpResolver requestIpResolver) {
         this.jwtUtils = jwtUtils;
         this.authProperties = authProperties;
         this.securityProperties = securityProperties;
@@ -60,6 +63,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
         this.ipBlacklistRepository = ipBlacklistRepository;
         this.operationLogRepository = operationLogRepository;
         this.jsonResponseWriter = jsonResponseWriter;
+        this.requestIpResolver = requestIpResolver;
     }
 
     @Override
@@ -72,7 +76,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
             return;
         }
 
-        String requestIp = resolveRequestIp(request);
+        String requestIp = requestIpResolver.resolve(request);
         if (ipBlacklistRepository.isBlacklisted(requestIp)) {
             operationLogRepository.insertOperationLog(
                 null,
@@ -142,14 +146,6 @@ public class AuthTokenFilter extends OncePerRequestFilter {
             return null;
         }
         return authHeader.substring(TOKEN_PREFIX.length()).trim();
-    }
-
-    private String resolveRequestIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 
     private AuthUser buildAuthUser(Claims claims) {

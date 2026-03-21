@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class CrawlerProperties {
 
     private String baseUrl;
+    private String internalApiKey;
     private int connectTimeoutMillis;
     private int readTimeoutMillis;
 
@@ -15,6 +16,14 @@ public class CrawlerProperties {
 
     public void setBaseUrl(String baseUrl) {
         this.baseUrl = baseUrl;
+    }
+
+    public String getInternalApiKey() {
+        return internalApiKey;
+    }
+
+    public void setInternalApiKey(String internalApiKey) {
+        this.internalApiKey = internalApiKey;
     }
 
     public int getConnectTimeoutMillis() {
@@ -33,4 +42,3 @@ public class CrawlerProperties {
         this.readTimeoutMillis = readTimeoutMillis;
     }
 }
-

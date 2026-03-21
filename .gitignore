@@ -9,6 +9,7 @@ Thumbs.db
 # Build
 backend/target/
 /.cache/
+__pycache__/
 
 # Logs
 *.log
