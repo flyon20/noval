@@ -2,31 +2,15 @@ package com.novelanalyzer.modules.analysis.vo;
 
 import java.util.Map;
 
-public class AnalysisResultVO {
+public class TrendAnalysisVO {
 
-    private Long id;
-    private Long bookId;
     private String analysisType;
+    private String platform;
+    private String category;
     private String modelName;
     private String resultContent;
     private Map<String, Object> resultJson;
-    private Integer tokenUsed;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public Long getBookId() {
-        return bookId;
-    }
-
-    public void setBookId(Long bookId) {
-        this.bookId = bookId;
-    }
+    private Integer sourceSnapshotCount;
 
     public String getAnalysisType() {
         return analysisType;
@@ -34,6 +18,22 @@ public class AnalysisResultVO {
 
     public void setAnalysisType(String analysisType) {
         this.analysisType = analysisType;
+    }
+
+    public String getPlatform() {
+        return platform;
+    }
+
+    public void setPlatform(String platform) {
+        this.platform = platform;
+    }
+
+    public String getCategory() {
+        return category;
+    }
+
+    public void setCategory(String category) {
+        this.category = category;
     }
 
     public String getModelName() {
@@ -60,11 +60,11 @@ public class AnalysisResultVO {
         this.resultJson = resultJson;
     }
 
-    public Integer getTokenUsed() {
-        return tokenUsed;
+    public Integer getSourceSnapshotCount() {
+        return sourceSnapshotCount;
     }
 
-    public void setTokenUsed(Integer tokenUsed) {
-        this.tokenUsed = tokenUsed;
+    public void setSourceSnapshotCount(Integer sourceSnapshotCount) {
+        this.sourceSnapshotCount = sourceSnapshotCount;
     }
 }

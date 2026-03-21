@@ -1,14 +1,42 @@
 package com.novelanalyzer.modules.config.model;
 
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
+import com.baomidou.mybatisplus.annotation.TableName;
+
+import java.time.LocalDateTime;
+
+@TableName("prompt_config")
 public class PromptConfigEntity {
 
+    @TableId(type = IdType.AUTO)
     private Long id;
+    @TableField("prompt_type")
     private String promptType;
+    @TableField("prompt_name")
     private String promptName;
+    @TableField("prompt_content")
     private String promptContent;
+    @TableField("model_name")
     private String modelName;
+    private Double temperature;
+    @TableField("max_tokens")
+    private Integer maxTokens;
+    private Integer status;
+    @TableField("is_default")
+    private Integer isDefault;
+    @TableField("dify_workflow_id")
     private String difyWorkflowId;
+    @TableField("dify_api_key_ref")
     private String difyApiKeyRef;
+    @TableField("create_time")
+    private LocalDateTime createTime;
+    @TableField("update_time")
+    private LocalDateTime updateTime;
+    @TableLogic
+    private Integer deleted;
 
     public Long getId() {
         return id;
@@ -50,6 +78,38 @@ public class PromptConfigEntity {
         this.modelName = modelName;
     }
 
+    public Double getTemperature() {
+        return temperature;
+    }
+
+    public void setTemperature(Double temperature) {
+        this.temperature = temperature;
+    }
+
+    public Integer getMaxTokens() {
+        return maxTokens;
+    }
+
+    public void setMaxTokens(Integer maxTokens) {
+        this.maxTokens = maxTokens;
+    }
+
+    public Integer getStatus() {
+        return status;
+    }
+
+    public void setStatus(Integer status) {
+        this.status = status;
+    }
+
+    public Integer getIsDefault() {
+        return isDefault;
+    }
+
+    public void setIsDefault(Integer isDefault) {
+        this.isDefault = isDefault;
+    }
+
     public String getDifyWorkflowId() {
         return difyWorkflowId;
     }
@@ -65,5 +125,28 @@ public class PromptConfigEntity {
     public void setDifyApiKeyRef(String difyApiKeyRef) {
         this.difyApiKeyRef = difyApiKeyRef;
     }
-}
 
+    public LocalDateTime getCreateTime() {
+        return createTime;
+    }
+
+    public void setCreateTime(LocalDateTime createTime) {
+        this.createTime = createTime;
+    }
+
+    public LocalDateTime getUpdateTime() {
+        return updateTime;
+    }
+
+    public void setUpdateTime(LocalDateTime updateTime) {
+        this.updateTime = updateTime;
+    }
+
+    public Integer getDeleted() {
+        return deleted;
+    }
+
+    public void setDeleted(Integer deleted) {
+        this.deleted = deleted;
+    }
+}

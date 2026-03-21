@@ -8,26 +8,27 @@ import com.baomidou.mybatisplus.annotation.TableName;
 
 import java.time.LocalDateTime;
 
-@TableName("crawl_book")
-public class CrawlBookEntity {
+@TableName("crawl_rank")
+public class CrawlRankEntity {
 
     @TableId(type = IdType.AUTO)
     private Long id;
     private String platform;
-    @TableField("platform_book_id")
-    private String platformBookId;
+    private String category;
+    @TableField("rank_no")
+    private Integer rankNo;
+    @TableField("book_id")
+    private Long bookId;
     @TableField("book_name")
     private String bookName;
-    private String author;
-    private String intro;
     @TableField("book_url")
     private String bookUrl;
-    @TableField("last_crawl_time")
-    private LocalDateTime lastCrawlTime;
+    private String author;
+    private String intro;
+    @TableField("crawl_time")
+    private LocalDateTime crawlTime;
     @TableField("create_time")
     private LocalDateTime createTime;
-    @TableField("update_time")
-    private LocalDateTime updateTime;
     @TableLogic
     private Integer deleted;
 
@@ -47,12 +48,28 @@ public class CrawlBookEntity {
         this.platform = platform;
     }
 
-    public String getPlatformBookId() {
-        return platformBookId;
+    public String getCategory() {
+        return category;
     }
 
-    public void setPlatformBookId(String platformBookId) {
-        this.platformBookId = platformBookId;
+    public void setCategory(String category) {
+        this.category = category;
+    }
+
+    public Integer getRankNo() {
+        return rankNo;
+    }
+
+    public void setRankNo(Integer rankNo) {
+        this.rankNo = rankNo;
+    }
+
+    public Long getBookId() {
+        return bookId;
+    }
+
+    public void setBookId(Long bookId) {
+        this.bookId = bookId;
     }
 
     public String getBookName() {
@@ -61,6 +78,14 @@ public class CrawlBookEntity {
 
     public void setBookName(String bookName) {
         this.bookName = bookName;
+    }
+
+    public String getBookUrl() {
+        return bookUrl;
+    }
+
+    public void setBookUrl(String bookUrl) {
+        this.bookUrl = bookUrl;
     }
 
     public String getAuthor() {
@@ -79,20 +104,12 @@ public class CrawlBookEntity {
         this.intro = intro;
     }
 
-    public String getBookUrl() {
-        return bookUrl;
+    public LocalDateTime getCrawlTime() {
+        return crawlTime;
     }
 
-    public void setBookUrl(String bookUrl) {
-        this.bookUrl = bookUrl;
-    }
-
-    public LocalDateTime getLastCrawlTime() {
-        return lastCrawlTime;
-    }
-
-    public void setLastCrawlTime(LocalDateTime lastCrawlTime) {
-        this.lastCrawlTime = lastCrawlTime;
+    public void setCrawlTime(LocalDateTime crawlTime) {
+        this.crawlTime = crawlTime;
     }
 
     public LocalDateTime getCreateTime() {
@@ -101,14 +118,6 @@ public class CrawlBookEntity {
 
     public void setCreateTime(LocalDateTime createTime) {
         this.createTime = createTime;
-    }
-
-    public LocalDateTime getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(LocalDateTime updateTime) {
-        this.updateTime = updateTime;
     }
 
     public Integer getDeleted() {

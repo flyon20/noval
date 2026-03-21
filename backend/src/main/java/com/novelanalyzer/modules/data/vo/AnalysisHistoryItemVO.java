@@ -1,16 +1,18 @@
-package com.novelanalyzer.modules.analysis.vo;
+package com.novelanalyzer.modules.data.vo;
 
 import java.util.Map;
 
-public class AnalysisResultVO {
+public class AnalysisHistoryItemVO {
 
     private Long id;
     private Long bookId;
+    private String bookName;
     private String analysisType;
+    private Integer chapterCount;
     private String modelName;
     private String resultContent;
     private Map<String, Object> resultJson;
-    private Integer tokenUsed;
+    private String createdAt;
 
     public Long getId() {
         return id;
@@ -28,12 +30,28 @@ public class AnalysisResultVO {
         this.bookId = bookId;
     }
 
+    public String getBookName() {
+        return bookName;
+    }
+
+    public void setBookName(String bookName) {
+        this.bookName = bookName;
+    }
+
     public String getAnalysisType() {
         return analysisType;
     }
 
     public void setAnalysisType(String analysisType) {
         this.analysisType = analysisType;
+    }
+
+    public Integer getChapterCount() {
+        return chapterCount;
+    }
+
+    public void setChapterCount(Integer chapterCount) {
+        this.chapterCount = chapterCount;
     }
 
     public String getModelName() {
@@ -60,11 +78,11 @@ public class AnalysisResultVO {
         this.resultJson = resultJson;
     }
 
-    public Integer getTokenUsed() {
-        return tokenUsed;
+    public String getCreatedAt() {
+        return createdAt;
     }
 
-    public void setTokenUsed(Integer tokenUsed) {
-        this.tokenUsed = tokenUsed;
+    public void setCreatedAt(String createdAt) {
+        this.createdAt = createdAt;
     }
 }

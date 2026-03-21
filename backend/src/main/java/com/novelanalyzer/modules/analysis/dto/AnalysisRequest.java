@@ -18,6 +18,8 @@ public class AnalysisRequest {
     @Max(value = 10, message = "chapterCount must be <= 10")
     private Integer chapterCount;
 
+    private Boolean forceReanalyze;
+
     public String getPlatform() {
         return platform;
     }
@@ -41,5 +43,12 @@ public class AnalysisRequest {
     public void setChapterCount(Integer chapterCount) {
         this.chapterCount = chapterCount;
     }
-}
 
+    public Boolean getForceReanalyze() {
+        return forceReanalyze;
+    }
+
+    public void setForceReanalyze(Boolean forceReanalyze) {
+        this.forceReanalyze = forceReanalyze;
+    }
+}

@@ -59,6 +59,7 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(header().exists("X-Trace-Id"))
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.analysisType").value("deconstruct"))
+            .andExpect(jsonPath("$.data.resultJson.analysisType").value("deconstruct"))
             .andExpect(jsonPath("$.traceId").isNotEmpty());
 
         Integer count = jdbcTemplate.queryForObject(
@@ -67,6 +68,11 @@ class Phase4AnalysisIntegrationTest {
         );
         assertThat(count).isNotNull();
         assertThat(count).isGreaterThan(0);
+        String resultJson = jdbcTemplate.queryForObject(
+            "SELECT result_json FROM analysis_result WHERE analysis_type='deconstruct' ORDER BY id DESC LIMIT 1",
+            String.class
+        );
+        assertThat(resultJson).contains("\"analysisType\":\"deconstruct\"");
     }
 
     @Test
@@ -75,7 +81,7 @@ class Phase4AnalysisIntegrationTest {
         mockMvc.perform(put("/api/config/prompt")
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"promptType\":\"deconstruct\",\"promptName\":\"default-deconstruct\",\"promptContent\":\"新的拆文提示词\",\"modelName\":\"dify\"}"))
+                .content("{\"promptType\":\"deconstruct\",\"promptName\":\"default-deconstruct\",\"promptContent\":\"UPDATED {{content}}\",\"modelName\":\"dify\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
 
@@ -84,7 +90,82 @@ class Phase4AnalysisIntegrationTest {
                 .param("promptType", "deconstruct"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.promptContent").value("新的拆文提示词"));
+            .andExpect(jsonPath("$.data.promptContent").value("UPDATED {{content}}"));
+    }
+
+    @Test
+    void shouldAllowUserRoleToUpdatePromptConfig() throws Exception {
+        String token = loginAndGetToken("writer", "writer123");
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"promptType\":\"deconstruct\",\"promptName\":\"default-deconstruct\",\"promptContent\":\"USER-EDIT {{content}}\",\"modelName\":\"dify\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.promptContent").value("USER-EDIT {{content}}"));
+    }
+
+    @Test
+    void shouldRejectPromptConfigWithoutContentPlaceholder() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"promptType\":\"deconstruct\",\"promptName\":\"default-deconstruct\",\"promptContent\":\"MISSING-PLACEHOLDER\",\"modelName\":\"dify\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.message").value("promptContent must contain {{content}} placeholder"));
+    }
+
+    @Test
+    void shouldRefreshAnalysisResultAfterPromptUpdateForSameRequest() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        updatePromptConfig(token, "PROMPT-V1 {{content}}");
+
+        MvcResult firstResult = analyzeDeconstruct(token);
+        String firstResponse = firstResult.getResponse().getContentAsString();
+        Number firstId = JsonPath.read(firstResponse, "$.data.id");
+        String firstContent = JsonPath.read(firstResponse, "$.data.resultContent");
+        assertThat(firstContent).contains("PROMPT-V1");
+
+        updatePromptConfig(token, "PROMPT-V2 {{content}}");
+
+        MvcResult secondResult = analyzeDeconstruct(token);
+        String secondResponse = secondResult.getResponse().getContentAsString();
+        Number secondId = JsonPath.read(secondResponse, "$.data.id");
+        String secondContent = JsonPath.read(secondResponse, "$.data.resultContent");
+
+        assertThat(secondContent).contains("PROMPT-V2");
+        assertThat(secondId.longValue()).isNotEqualTo(firstId.longValue());
+    }
+
+    @Test
+    void shouldReanalyzeWhenForceReanalyzeEnabled() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult firstResult = mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+        Number firstId = JsonPath.read(firstResult.getResponse().getContentAsString(), "$.data.id");
+
+        MvcResult secondResult = mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+        Number secondId = JsonPath.read(secondResult.getResponse().getContentAsString(), "$.data.id");
+
+        assertThat(secondId.longValue()).isNotEqualTo(firstId.longValue());
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
@@ -96,5 +177,25 @@ class Phase4AnalysisIntegrationTest {
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
     }
-}
 
+    private void updatePromptConfig(String token, String promptContent) throws Exception {
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"promptType\":\"deconstruct\",\"promptName\":\"default-deconstruct\",\"promptContent\":\""
+                    + promptContent + "\",\"modelName\":\"dify\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+    }
+
+    private MvcResult analyzeDeconstruct(String token) throws Exception {
+        return mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":1001,\"chapterCount\":2}"))
+            .andExpect(status().isOk())
+            .andExpect(header().exists("X-Trace-Id"))
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+    }
+}

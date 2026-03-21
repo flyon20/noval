@@ -29,10 +29,10 @@ CREATE TABLE analysis_result (
     prompt_config_id BIGINT,
     model_name VARCHAR(50),
     result_content CLOB,
+    result_json CLOB,
     token_used INT DEFAULT 0,
     cost_time BIGINT DEFAULT 0,
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0
 );
-

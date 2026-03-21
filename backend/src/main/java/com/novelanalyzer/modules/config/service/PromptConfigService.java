@@ -11,6 +11,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class PromptConfigService {
 
+    private static final String REQUIRED_CONTENT_PLACEHOLDER = "{{content}}";
+
     private final PromptConfigRepository promptConfigRepository;
 
     public PromptConfigService(PromptConfigRepository promptConfigRepository) {
@@ -24,6 +26,7 @@ public class PromptConfigService {
     }
 
     public PromptConfigVO save(PromptConfigUpdateRequest request) {
+        validatePromptContent(request.getPromptContent());
         PromptConfigEntity entity = new PromptConfigEntity();
         entity.setPromptType(request.getPromptType());
         entity.setPromptName(request.getPromptName());
@@ -36,6 +39,13 @@ public class PromptConfigService {
         return toVO(updated);
     }
 
+    private void validatePromptContent(String promptContent) {
+        if (promptContent == null || !promptContent.contains(REQUIRED_CONTENT_PLACEHOLDER)) {
+            throw new BusinessException(ResultCode.BAD_REQUEST,
+                "promptContent must contain {{content}} placeholder");
+        }
+    }
+
     private PromptConfigVO toVO(PromptConfigEntity entity) {
         PromptConfigVO vo = new PromptConfigVO();
         vo.setId(entity.getId());
@@ -46,4 +56,3 @@ public class PromptConfigService {
         return vo;
     }
 }
-

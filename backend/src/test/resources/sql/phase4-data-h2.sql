@@ -10,7 +10,13 @@ VALUES
 
 INSERT INTO crawl_chapter (platform, book_id, chapter_no, chapter_title, content, word_count, deleted)
 VALUES
-    ('fanqie', 1001, 1, '第一章', '第一章内容', 5, 0),
-    ('fanqie', 1001, 2, '第二章', '第二章内容', 5, 0),
-    ('fanqie', 1001, 3, '第三章', '第三章内容', 5, 0);
+    ('fanqie', 1001, 1, '第一章', '第一章节内容', 5, 0),
+    ('fanqie', 1001, 2, '第二章', '第二章节内容', 5, 0),
+    ('fanqie', 1001, 3, '第三章', '第三章节内容', 5, 0);
 
+INSERT INTO analysis_result
+    (id, user_id, platform, book_id, analysis_type, chapter_count, prompt_config_id, model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted)
+VALUES
+    (3001, 1, 'fanqie', 1001, 'deconstruct', 3, 1, 'dify', 'deconstruct result for book one', '{"analysisType":"deconstruct","summary":"deconstruct result for book one"}', 120, 500, TIMESTAMP '2026-03-18 12:00:00', TIMESTAMP '2026-03-18 12:00:00', 0),
+    (3002, 1, 'fanqie', 1001, 'structure', 3, 2, 'dify', 'structure result for book one', '{"analysisType":"structure","summary":"structure result for book one"}', 130, 520, TIMESTAMP '2026-03-19 12:00:00', TIMESTAMP '2026-03-19 12:00:00', 0),
+    (3003, 1, 'fanqie', 1002, 'plot', 3, 3, 'dify', 'plot result for book two', '{"analysisType":"plot","summary":"plot result for book two"}', 140, 540, TIMESTAMP '2026-03-20 12:00:00', TIMESTAMP '2026-03-20 12:00:00', 0);

@@ -1,44 +1,39 @@
 package com.novelanalyzer.modules.crawler.repository;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.novelanalyzer.modules.crawler.mapper.CrawlBookMapper;
+import com.novelanalyzer.modules.crawler.mapper.CrawlChapterMapper;
+import com.novelanalyzer.modules.crawler.mapper.CrawlRankMapper;
 import com.novelanalyzer.modules.crawler.model.CrawlBookEntity;
+import com.novelanalyzer.modules.crawler.model.CrawlChapterEntity;
+import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Repository
 public class CrawlerRepository {
 
-    private static final RowMapper<CrawlBookEntity> BOOK_ROW_MAPPER = (rs, rowNum) -> {
-        CrawlBookEntity entity = new CrawlBookEntity();
-        entity.setId(rs.getLong("id"));
-        entity.setPlatform(rs.getString("platform"));
-        entity.setPlatformBookId(rs.getString("platform_book_id"));
-        entity.setBookName(rs.getString("book_name"));
-        entity.setAuthor(rs.getString("author"));
-        entity.setIntro(rs.getString("intro"));
-        entity.setBookUrl(rs.getString("book_url"));
-        return entity;
-    };
-
-    private static final RowMapper<ChapterVO> CHAPTER_ROW_MAPPER = (rs, rowNum) -> {
-        ChapterVO vo = new ChapterVO();
-        vo.setBookId(rs.getLong("book_id"));
-        vo.setChapterNo(rs.getInt("chapter_no"));
-        vo.setChapterTitle(rs.getString("chapter_title"));
-        vo.setContent(rs.getString("content"));
-        vo.setWordCount(rs.getInt("word_count"));
-        return vo;
-    };
-
+    private final CrawlBookMapper crawlBookMapper;
+    private final CrawlRankMapper crawlRankMapper;
+    private final CrawlChapterMapper crawlChapterMapper;
     private final JdbcTemplate jdbcTemplate;
 
-    public CrawlerRepository(JdbcTemplate jdbcTemplate) {
+    public CrawlerRepository(CrawlBookMapper crawlBookMapper,
+                             CrawlRankMapper crawlRankMapper,
+                             CrawlChapterMapper crawlChapterMapper,
+                             JdbcTemplate jdbcTemplate) {
+        this.crawlBookMapper = crawlBookMapper;
+        this.crawlRankMapper = crawlRankMapper;
+        this.crawlChapterMapper = crawlChapterMapper;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -48,53 +43,24 @@ public class CrawlerRepository {
                                  String author,
                                  String intro,
                                  String bookUrl) {
-        List<Long> exists = jdbcTemplate.queryForList(
-            "SELECT id FROM crawl_book WHERE platform = ? AND book_url = ? AND deleted = 0 LIMIT 1",
-            Long.class,
-            platform,
-            bookUrl
+        CrawlBookEntity existing = findBookByPlatformAndPlatformBookId(platform, platformBookId).orElseGet(() ->
+            findBookByPlatformAndBookUrl(platform, bookUrl).orElse(null)
         );
-        if (!exists.isEmpty()) {
-            Long bookId = exists.get(0);
-            jdbcTemplate.update(
-                """
-                UPDATE crawl_book
-                SET platform_book_id = ?, book_name = ?, author = ?, intro = ?, last_crawl_time = ?, update_time = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                platformBookId,
-                bookName,
-                author,
-                intro,
-                Timestamp.valueOf(LocalDateTime.now()),
-                bookId
-            );
-            return bookId;
+        if (existing != null) {
+            mergeBook(existing, platformBookId, bookName, author, intro, bookUrl);
+            crawlBookMapper.updateById(existing);
+            return existing.getId();
         }
-        jdbcTemplate.update(
-            """
-            INSERT INTO crawl_book
-            (platform, platform_book_id, book_name, author, intro, book_url, last_crawl_time, create_time, update_time, deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
-            """,
-            platform,
-            platformBookId,
-            bookName,
-            author,
-            intro,
-            bookUrl,
-            Timestamp.valueOf(LocalDateTime.now())
-        );
-        List<Long> inserted = jdbcTemplate.queryForList(
-            "SELECT id FROM crawl_book WHERE platform = ? AND book_url = ? AND deleted = 0 ORDER BY id DESC LIMIT 1",
-            Long.class,
-            platform,
-            bookUrl
-        );
-        if (inserted.isEmpty()) {
+
+        CrawlBookEntity entity = new CrawlBookEntity();
+        entity.setPlatform(platform);
+        mergeBook(entity, platformBookId, bookName, author, intro, bookUrl);
+        entity.setDeleted(0);
+        crawlBookMapper.insert(entity);
+        if (entity.getId() == null) {
             throw new IllegalStateException("failed to generate crawl_book id");
         }
-        return inserted.get(0);
+        return entity.getId();
     }
 
     public void saveRankItem(String platform,
@@ -104,34 +70,30 @@ public class CrawlerRepository {
                              String bookName,
                              String bookUrl,
                              String author,
-                             String intro) {
-        jdbcTemplate.update(
-            """
-            INSERT INTO crawl_rank
-            (platform, category, rank_no, book_id, book_name, book_url, author, intro, crawl_time, create_time, deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
-            """,
-            platform,
-            category,
-            rankNo,
-            bookId,
-            bookName,
-            bookUrl,
-            author,
-            intro
-        );
+                             String intro,
+                             LocalDateTime snapshotTime) {
+        CrawlRankEntity entity = new CrawlRankEntity();
+        entity.setPlatform(platform);
+        entity.setCategory(category);
+        entity.setRankNo(rankNo);
+        entity.setBookId(bookId);
+        entity.setBookName(bookName);
+        entity.setBookUrl(bookUrl);
+        entity.setAuthor(author);
+        entity.setIntro(intro);
+        entity.setCrawlTime(snapshotTime);
+        entity.setDeleted(0);
+        crawlRankMapper.insert(entity);
     }
 
     public Optional<CrawlBookEntity> findBookById(Long id) {
-        List<CrawlBookEntity> books = jdbcTemplate.query(
-            "SELECT * FROM crawl_book WHERE id = ? AND deleted = 0 LIMIT 1",
-            BOOK_ROW_MAPPER,
-            id
+        CrawlBookEntity book = crawlBookMapper.selectOne(
+            new LambdaQueryWrapper<CrawlBookEntity>()
+                .eq(CrawlBookEntity::getId, id)
+                .eq(CrawlBookEntity::getDeleted, 0)
+                .last("LIMIT 1")
         );
-        if (books.isEmpty()) {
-            return Optional.empty();
-        }
-        return Optional.of(books.get(0));
+        return Optional.ofNullable(book);
     }
 
     public void saveOrUpdateChapter(String platform,
@@ -139,54 +101,200 @@ public class CrawlerRepository {
                                     Integer chapterNo,
                                     String chapterTitle,
                                     String content) {
-        List<Long> exists = jdbcTemplate.queryForList(
-            "SELECT id FROM crawl_chapter WHERE book_id = ? AND chapter_no = ? AND deleted = 0 LIMIT 1",
-            Long.class,
-            bookId,
-            chapterNo
+        CrawlChapterEntity existing = crawlChapterMapper.selectOne(
+            new LambdaQueryWrapper<CrawlChapterEntity>()
+                .eq(CrawlChapterEntity::getBookId, bookId)
+                .eq(CrawlChapterEntity::getChapterNo, chapterNo)
+                .eq(CrawlChapterEntity::getDeleted, 0)
+                .last("LIMIT 1")
         );
         int wordCount = content == null ? 0 : content.length();
-        if (!exists.isEmpty()) {
-            jdbcTemplate.update(
-                """
-                UPDATE crawl_chapter
-                SET chapter_title = ?, content = ?, word_count = ?, crawl_time = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                chapterTitle,
-                content,
-                wordCount,
-                exists.get(0)
-            );
+        if (existing != null) {
+            existing.setChapterTitle(chapterTitle);
+            existing.setContent(content);
+            existing.setWordCount(wordCount);
+            existing.setCrawlTime(LocalDateTime.now());
+            crawlChapterMapper.updateById(existing);
             return;
         }
-        jdbcTemplate.update(
-            """
-            INSERT INTO crawl_chapter
-            (platform, book_id, chapter_no, chapter_title, content, word_count, crawl_time, create_time, deleted)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
-            """,
-            platform,
-            bookId,
-            chapterNo,
-            chapterTitle,
-            content,
-            wordCount
-        );
+
+        CrawlChapterEntity entity = new CrawlChapterEntity();
+        entity.setPlatform(platform);
+        entity.setBookId(bookId);
+        entity.setChapterNo(chapterNo);
+        entity.setChapterTitle(chapterTitle);
+        entity.setContent(content);
+        entity.setWordCount(wordCount);
+        entity.setCrawlTime(LocalDateTime.now());
+        entity.setDeleted(0);
+        crawlChapterMapper.insert(entity);
     }
 
     public List<ChapterVO> findChapters(Long bookId, int limit) {
-        return jdbcTemplate.query(
+        return crawlChapterMapper.selectList(
+                new LambdaQueryWrapper<CrawlChapterEntity>()
+                    .eq(CrawlChapterEntity::getBookId, bookId)
+                    .eq(CrawlChapterEntity::getDeleted, 0)
+                    .orderByAsc(CrawlChapterEntity::getChapterNo)
+                    .last("LIMIT " + limit)
+            ).stream()
+            .sorted(Comparator.comparing(CrawlChapterEntity::getChapterNo))
+            .map(this::toChapterVO)
+            .collect(Collectors.toList());
+    }
+
+    public List<CrawlRankEntity> findRanks(String platform, String category) {
+        LambdaQueryWrapper<CrawlRankEntity> wrapper = new LambdaQueryWrapper<CrawlRankEntity>()
+            .eq(CrawlRankEntity::getPlatform, platform)
+            .eq(CrawlRankEntity::getDeleted, 0)
+            .orderByDesc(CrawlRankEntity::getCrawlTime)
+            .orderByAsc(CrawlRankEntity::getRankNo);
+        if (category != null && !category.isBlank()) {
+            wrapper.eq(CrawlRankEntity::getCategory, category);
+        }
+        return crawlRankMapper.selectList(wrapper);
+    }
+
+    public List<CrawlRankEntity> findLatestRankSnapshot(String platform, String category) {
+        List<CrawlRankEntity> ranks = findRanks(platform, category);
+        if (ranks.isEmpty()) {
+            return List.of();
+        }
+        LocalDateTime latestSnapshotTime = ranks.get(0).getCrawlTime();
+        return ranks.stream()
+            .filter(item -> Objects.equals(item.getCrawlTime(), latestSnapshotTime))
+            .sorted(Comparator.comparing(CrawlRankEntity::getRankNo))
+            .toList();
+    }
+
+    public LocalDateTime findLatestRankSnapshotTime(String platform, String category) {
+        return findLatestRankSnapshot(platform, category).stream()
+            .map(CrawlRankEntity::getCrawlTime)
+            .findFirst()
+            .orElse(null);
+    }
+
+    public int countRecentSuccessfulForceRefreshes(String platform, String category, LocalDateTime windowStart) {
+        Integer count = jdbcTemplate.queryForObject(
             """
-            SELECT book_id, chapter_no, chapter_title, content, word_count
-            FROM crawl_chapter
-            WHERE book_id = ? AND deleted = 0
-            ORDER BY chapter_no ASC
-            LIMIT ?
-            """,
-            CHAPTER_ROW_MAPPER,
-            bookId,
-            limit
+                SELECT COUNT(1)
+                FROM crawler_task
+                WHERE task_type = ?
+                  AND platform = ?
+                  AND status = 2
+                  AND create_time >= ?
+                  AND request_json LIKE ?
+                  AND request_json LIKE ?
+                """,
+            Integer.class,
+            "rank_refresh",
+            platform,
+            Timestamp.valueOf(windowStart),
+            "%\"refreshMode\":\"FORCE\"%",
+            "%\"category\":\"" + category + "\"%"
         );
+        return count == null ? 0 : count;
+    }
+
+    public void saveRankRefreshTask(String platform,
+                                    String category,
+                                    String refreshMode,
+                                    String forceReason,
+                                    int status,
+                                    String errorMessage,
+                                    LocalDateTime startTime,
+                                    LocalDateTime endTime) {
+        String requestJson = "{\"platform\":\"" + platform
+            + "\",\"category\":\"" + category
+            + "\",\"refreshMode\":\"" + refreshMode
+            + "\",\"forceReason\":\"" + (forceReason == null ? "" : forceReason.replace("\"", "'"))
+            + "\"}";
+        jdbcTemplate.update(
+            """
+                INSERT INTO crawler_task(task_type, platform, request_json, status, error_message, start_time, end_time, create_time, update_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            "rank_refresh",
+            platform,
+            requestJson,
+            status,
+            errorMessage,
+            Timestamp.valueOf(startTime),
+            Timestamp.valueOf(endTime),
+            Timestamp.valueOf(endTime),
+            Timestamp.valueOf(endTime)
+        );
+    }
+
+    public List<CrawlBookEntity> findBooksByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return crawlBookMapper.selectBatchIds(ids).stream()
+            .filter(item -> item.getDeleted() == null || item.getDeleted() == 0)
+            .collect(Collectors.toList());
+    }
+
+    private ChapterVO toChapterVO(CrawlChapterEntity entity) {
+        ChapterVO vo = new ChapterVO();
+        vo.setBookId(entity.getBookId());
+        vo.setChapterNo(entity.getChapterNo());
+        vo.setChapterTitle(entity.getChapterTitle());
+        vo.setContent(entity.getContent());
+        vo.setWordCount(entity.getWordCount());
+        return vo;
+    }
+
+    private Optional<CrawlBookEntity> findBookByPlatformAndPlatformBookId(String platform, String platformBookId) {
+        if (platformBookId == null || platformBookId.isBlank()) {
+            return Optional.empty();
+        }
+        CrawlBookEntity book = crawlBookMapper.selectOne(
+            new LambdaQueryWrapper<CrawlBookEntity>()
+                .eq(CrawlBookEntity::getPlatform, platform)
+                .eq(CrawlBookEntity::getPlatformBookId, platformBookId)
+                .eq(CrawlBookEntity::getDeleted, 0)
+                .last("LIMIT 1")
+        );
+        return Optional.ofNullable(book);
+    }
+
+    private Optional<CrawlBookEntity> findBookByPlatformAndBookUrl(String platform, String bookUrl) {
+        if (bookUrl == null || bookUrl.isBlank()) {
+            return Optional.empty();
+        }
+        CrawlBookEntity book = crawlBookMapper.selectOne(
+            new LambdaQueryWrapper<CrawlBookEntity>()
+                .eq(CrawlBookEntity::getPlatform, platform)
+                .eq(CrawlBookEntity::getBookUrl, bookUrl)
+                .eq(CrawlBookEntity::getDeleted, 0)
+                .last("LIMIT 1")
+        );
+        return Optional.ofNullable(book);
+    }
+
+    private void mergeBook(CrawlBookEntity entity,
+                           String platformBookId,
+                           String bookName,
+                           String author,
+                           String intro,
+                           String bookUrl) {
+        if (platformBookId != null && !platformBookId.isBlank()) {
+            entity.setPlatformBookId(platformBookId);
+        }
+        if (bookName != null && !bookName.isBlank()) {
+            entity.setBookName(bookName);
+        }
+        if (author != null && !author.isBlank()) {
+            entity.setAuthor(author);
+        }
+        if (intro != null && !intro.isBlank()) {
+            entity.setIntro(intro);
+        }
+        if (bookUrl != null && !bookUrl.isBlank()) {
+            entity.setBookUrl(bookUrl);
+        }
+        entity.setLastCrawlTime(LocalDateTime.now());
+        entity.setUpdateTime(LocalDateTime.now());
     }
 }
