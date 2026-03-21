@@ -17,13 +17,16 @@ class StubHttpClient:
 
 
 class StubDecoder:
-    def __init__(self, decoded_text: str) -> None:
+    def __init__(self, decoded_text: str | None = None, mapping: dict[str, str] | None = None) -> None:
         self.decoded_text = decoded_text
+        self.mapping = mapping or {}
         self.called = False
 
     def decode(self, raw_text: str, css: str) -> str:
         self.called = True
-        return self.decoded_text
+        if self.decoded_text is not None:
+            return self.decoded_text
+        return self.mapping.get(raw_text, raw_text)
 
 
 class FanqieCrawlerTest(unittest.TestCase):
@@ -53,7 +56,7 @@ class FanqieCrawlerTest(unittest.TestCase):
             StubHttpClient(
                 {
                     "https://fanqienovel.com/rank/1_2_1141": (
-                        '<script>(function(){window.__INITIAL_STATE__={"rank":{"book_list":['
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"book_list":['
                         '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"},'
                         '{"currentPos":2,"bookId":"102","bookName":"Book B","author":"Author B","abstract":"Intro B"}'
                         ']}};})()</script>'
@@ -67,6 +70,35 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertEqual(2, len(result))
         self.assertEqual("Book A", result[0].bookName)
         self.assertEqual("https://fanqienovel.com/page/101", result[0].bookUrl)
+
+    def test_fetch_rank_should_decode_obfuscated_fields(self) -> None:
+        raw_name = "\ue4e9\ue3ea\ue4f3\ue4e7"
+        raw_author = "\ue478\ue4f3\ue4a2"
+        raw_intro = "\ue3e9\ue421\ue4de\ue436"
+        decoder = StubDecoder(mapping={
+            raw_name: "测试书",
+            raw_author: "作者甲",
+            raw_intro: "在这一了",
+        })
+        crawler = FanqieCrawler(
+            StubHttpClient(
+                {
+                    "https://fanqienovel.com/rank/1_2_1141": (
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"book_list":['
+                        '{"currentPos":1,"bookId":"101","bookName":"' + raw_name + '","author":"' + raw_author + '","abstract":"' + raw_intro + '"}'
+                        ']}};})()</script>'
+                    )
+                }
+            ),
+            decoder,
+        )
+
+        result = crawler.fetch_rank("1_2_1141")
+
+        self.assertTrue(decoder.called)
+        self.assertEqual("测试书", result[0].bookName)
+        self.assertEqual("作者甲", result[0].author)
+        self.assertEqual("在这一了", result[0].intro)
 
     def test_fetch_book_and_chapters(self) -> None:
         crawler = FanqieCrawler(
@@ -96,6 +128,34 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertEqual(2, len(chapters))
         self.assertEqual("Chapter 1", chapters[0].chapterTitle)
         self.assertEqual("Line 1\nLine 2", chapters[0].content)
+
+    def test_fetch_book_should_decode_obfuscated_fields(self) -> None:
+        raw_name = "\ue4e9\ue3ea\ue4f3\ue4e7"
+        raw_author = "\ue478\ue4f3\ue4a2"
+        raw_intro = "\ue3e9\ue421\ue4de\ue436"
+        decoder = StubDecoder(mapping={
+            raw_name: "测试书",
+            raw_author: "作者甲",
+            raw_intro: "在这一了",
+        })
+        crawler = FanqieCrawler(
+            StubHttpClient(
+                {
+                    "https://fanqienovel.com/page/101": (
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"page":{"bookId":"101","bookName":"' + raw_name + '",'
+                        '"author":"' + raw_author + '","abstract":"' + raw_intro + '","itemIds":["c1"]}};})()</script>'
+                    ),
+                }
+            ),
+            decoder,
+        )
+
+        book = crawler.fetch_book("https://fanqienovel.com/page/101")
+
+        self.assertTrue(decoder.called)
+        self.assertEqual("测试书", book.bookName)
+        self.assertEqual("作者甲", book.author)
+        self.assertEqual("在这一了", book.intro)
 
     def test_fetch_chapters_should_decode_obfuscated_text(self) -> None:
         decoder = StubDecoder("第二章\n正常中文内容")

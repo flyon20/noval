@@ -29,6 +29,7 @@ class FanqieCrawler(BaseCrawler):
     def fetch_rank(self, category: str) -> List[RankItem]:
         rank_url = self._resolve_rank_url(category)
         state = self._fetch_state(rank_url)
+        css = str(state.get("common", {}).get("css") or "")
         rank_state = state.get("rank", {})
         book_list = rank_state.get("book_list") or rank_state.get("readRankList") or rank_state.get("newRankList") or []
         if not book_list:
@@ -39,12 +40,15 @@ class FanqieCrawler(BaseCrawler):
             book_id = str(item.get("bookId") or "")
             if not book_id:
                 continue
+            book_name = self._decode_text_if_needed(str(item.get("bookName") or ""), css)
+            author = self._decode_text_if_needed(str(item.get("author") or ""), css)
+            intro = self._decode_text_if_needed(str(item.get("abstract") or item.get("description") or ""), css)
             items.append(
                 RankItem(
                     rankNo=int(item.get("currentPos") or item.get("rankPos") or index),
-                    bookName=str(item.get("bookName") or ""),
-                    author=str(item.get("author") or ""),
-                    intro=str(item.get("abstract") or item.get("description") or ""),
+                    bookName=book_name,
+                    author=author,
+                    intro=intro,
                     bookUrl=f"{settings.fanqie_base_url}/page/{book_id}",
                     platformBookId=book_id,
                 )
@@ -56,15 +60,16 @@ class FanqieCrawler(BaseCrawler):
     def fetch_book(self, book_url: str) -> BookDetail:
         normalized_url = self._normalize_book_url(book_url)
         state = self._fetch_state(normalized_url)
+        css = str(state.get("common", {}).get("css") or "")
         page_state = state.get("page", {})
         book_id = str(page_state.get("bookId") or self._extract_path_id(normalized_url))
-        book_name = str(page_state.get("bookName") or "")
+        book_name = self._decode_text_if_needed(str(page_state.get("bookName") or ""), css)
         if not book_name:
             raise ValueError("book detail parse failed")
         return BookDetail(
             bookName=book_name,
-            author=str(page_state.get("author") or ""),
-            intro=str(page_state.get("abstract") or page_state.get("description") or ""),
+            author=self._decode_text_if_needed(str(page_state.get("author") or ""), css),
+            intro=self._decode_text_if_needed(str(page_state.get("abstract") or page_state.get("description") or ""), css),
             bookUrl=normalized_url,
             platformBookId=book_id,
         )
@@ -140,3 +145,10 @@ class FanqieCrawler(BaseCrawler):
 
     def _extract_path_id(self, url: str) -> str:
         return url.rstrip("/").rsplit("/", maxsplit=1)[-1]
+
+    def _decode_text_if_needed(self, raw_text: str, css: str) -> str:
+        if not raw_text:
+            return raw_text
+        if any(0xE000 <= ord(ch) <= 0xF8FF for ch in raw_text):
+            return self._decoder.decode(raw_text, css)
+        return raw_text

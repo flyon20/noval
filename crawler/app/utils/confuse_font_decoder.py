@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import tempfile
 from pathlib import Path
@@ -21,16 +22,19 @@ class ConfuseFontDecoder:
     FONT_URL_PATTERN = re.compile(r"src:url\((https://[^)]+?\.woff2)\)")
     KNOWN_OVERRIDES = {
         "dc027189e0ba4cd": {
+            0xE403: "3",
             0xE3F3: "只",
             0xE3FC: "儿",
             0xE418: "当",
             0xE41C: "些",
             0xE41F: "十",
             0xE422: "气",
+            0xE42D: "1",
             0xE436: "了",
             0xE4DE: "一",
             0xE534: "己",
             0xE535: "老",
+            0xE536: "2",
             0xE52F: "友",
             0xE542: "太",
             0xE547: "她",
@@ -40,11 +44,11 @@ class ConfuseFontDecoder:
         }
     }
 
-    def __init__(self) -> None:
+    def __init__(self, cache_dir: str | None = None) -> None:
         self._ocr = RapidOCR()
         self._font_path_cache: dict[str, str] = {}
         self._mapping_cache: dict[str, dict[str, str]] = {}
-        self._workdir = Path(tempfile.gettempdir()) / "novel-crawler-fonts"
+        self._workdir = Path(cache_dir) if cache_dir else Path(tempfile.gettempdir()) / "novel-crawler-fonts"
         self._workdir.mkdir(parents=True, exist_ok=True)
 
     def decode(self, raw_text: str, css: str) -> str:
@@ -53,10 +57,11 @@ class ConfuseFontDecoder:
             return raw_text
 
         font_signature, font_path = self._ensure_font_path(css)
-        mapping = self._mapping_cache.setdefault(font_signature, {})
+        mapping = self._mapping_cache.setdefault(font_signature, self._load_cached_mapping(font_signature))
         missing = [ch for ch in obfuscated_chars if ch not in mapping]
         if missing:
             mapping.update(self._build_mapping(font_signature, missing, font_path))
+            self._save_cached_mapping(font_signature, mapping)
         return "".join(mapping.get(ch, ch) for ch in raw_text)
 
     def _build_mapping(self, font_signature: str, chars: list[str], font_path: str) -> dict[str, str]:
@@ -70,7 +75,7 @@ class ConfuseFontDecoder:
         for index in range(0, len(unresolved), self.BATCH_SIZE):
             batch = unresolved[index:index + self.BATCH_SIZE]
             text = self._recognize_batch(batch, font_path)
-            if text and len(text) == len(batch):
+            if text and len(text) == len(batch) and not self._should_reject_batch_text(text):
                 for source, target in zip(batch, text):
                     mapping[source] = target
 
@@ -161,6 +166,37 @@ class ConfuseFontDecoder:
             return True
         if 0x3400 <= code <= 0x4DBF:
             return True
+        if 0x30 <= code <= 0x39:
+            return True
+        if 0x41 <= code <= 0x5A:
+            return True
+        if 0x61 <= code <= 0x7A:
+            return True
         if char in "，。！？；：、“”‘’（）《》〈〉【】[]—…,.!?;:'\"()-":
             return True
         return False
+
+    def _should_reject_batch_text(self, text: str) -> bool:
+        return any(('A' <= ch <= 'Z') or ('a' <= ch <= 'z') for ch in text)
+
+    def _mapping_file(self, font_signature: str) -> Path:
+        return self._workdir / f"{font_signature}.mapping.json"
+
+    def _load_cached_mapping(self, font_signature: str) -> dict[str, str]:
+        path = self._mapping_file(font_signature)
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(key): str(value) for key, value in data.items()}
+        except Exception:
+            return {}
+        return {}
+
+    def _save_cached_mapping(self, font_signature: str, mapping: dict[str, str]) -> None:
+        path = self._mapping_file(font_signature)
+        path.write_text(
+            json.dumps(mapping, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )

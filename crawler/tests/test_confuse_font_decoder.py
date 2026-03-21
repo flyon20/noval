@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 
 from app.utils.confuse_font_decoder import ConfuseFontDecoder
 
 
 class TestableConfuseFontDecoder(ConfuseFontDecoder):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, cache_dir: str | None = None) -> None:
+        super().__init__(cache_dir=cache_dir)
         self.row_results: dict[tuple[str, ...], str | None] = {}
         self.single_results: dict[str, str] = {}
 
@@ -37,3 +38,36 @@ class ConfuseFontDecoderTest(unittest.TestCase):
         decoder = TestableConfuseFontDecoder()
         decoded = decoder.decode(chr(int("e418", 16)), "@font-face{font-family:test;}")
         self.assertEqual("当", decoded)
+
+    def test_should_accept_ascii_letters_and_digits_from_ocr(self) -> None:
+        decoder = TestableConfuseFontDecoder()
+        for ch in "BOSS123":
+            self.assertTrue(decoder._is_acceptable_char(ch))
+
+    def test_should_fallback_to_single_when_batch_contains_ascii_letters(self) -> None:
+        decoder = TestableConfuseFontDecoder()
+        chars = [chr(int(code, 16)) for code in ["e510", "e511", "e512", "e513"]]
+        decoder.row_results[tuple(chars)] = "测B中文"
+        decoder.single_results = {
+            chars[0]: "测",
+            chars[1]: "试",
+            chars[2]: "中",
+            chars[3]: "文",
+        }
+
+        decoded = decoder.decode("".join(chars), "@font-face{font-family:test;}")
+
+        self.assertEqual("试中文", decoded[1:])
+        self.assertEqual("测试中文", decoded)
+
+    def test_should_persist_mapping_to_disk_and_reuse_across_instances(self) -> None:
+        chars = [chr(int(code, 16)) for code in ["e600", "e601", "e602", "e603"]]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first = TestableConfuseFontDecoder(cache_dir=temp_dir)
+            first.row_results[tuple(chars)] = "性能优化"
+            decoded_first = first.decode("".join(chars), "@font-face{font-family:test;}")
+            self.assertEqual("性能优化", decoded_first)
+
+            second = TestableConfuseFontDecoder(cache_dir=temp_dir)
+            decoded_second = second.decode("".join(chars), "@font-face{font-family:test;}")
+            self.assertEqual("性能优化", decoded_second)
