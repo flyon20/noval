@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from app.api import rank as rank_api
+from app.models.rank import RankRequest
 from app.services.fanqie_crawler import FanqieCrawler
 from app.utils.parsers import extract_initial_state, html_to_text
 
@@ -27,6 +30,15 @@ class StubDecoder:
         if self.decoded_text is not None:
             return self.decoded_text
         return self.mapping.get(raw_text, raw_text)
+
+
+class StubRankCrawler:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    def fetch_rank(self, *args: str):
+        self.calls.append(args)
+        return [{"ok": True}]
 
 
 class FanqieCrawlerTest(unittest.TestCase):
@@ -78,6 +90,41 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertEqual(2, len(result[0].boards))
         self.assertEqual("1141", result[0].boards[0].boardCode)
         self.assertEqual("Hot", result[0].boards[0].boardName)
+
+    def test_rank_request_accepts_legacy_category_payload(self) -> None:
+        request = RankRequest.model_validate({"platform": "fanqie", "category": "male-hot-a"})
+
+        self.assertEqual("fanqie", request.platform)
+        self.assertEqual("male-hot-a", request.category)
+
+    def test_fetch_rank_supports_legacy_category_alias(self) -> None:
+        crawler = FanqieCrawler(
+            StubHttpClient(
+                {
+                    "https://fanqienovel.com/rank/1_2_1141": (
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
+                        '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"}'
+                        ']}};})()</script>'
+                    )
+                }
+            )
+        )
+
+        result = crawler.fetch_rank("male-hot-a")
+
+        self.assertEqual(1, len(result))
+        self.assertEqual("Book A", result[0].bookName)
+        self.assertEqual("101", result[0].platformBookId)
+
+    def test_rank_api_accepts_legacy_category_payload(self) -> None:
+        crawler = StubRankCrawler()
+        request = RankRequest.model_validate({"platform": "fanqie", "category": "male-hot-a"})
+
+        with patch("app.api.rank.build_crawler", return_value=crawler):
+            response = rank_api.rank(request)
+
+        self.assertEqual([("male-hot-a",)], crawler.calls)
+        self.assertEqual([{"ok": True}], response.data)
 
     def test_fetch_rank_uses_channel_code_and_board_code(self) -> None:
         crawler = FanqieCrawler(

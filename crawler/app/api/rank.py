@@ -26,7 +26,12 @@ def board_catalog(platform: str):
 def rank(req: RankRequest):
     try:
         crawler = build_crawler(req.platform)
-        data = crawler.fetch_rank(req.channelCode, req.boardCode)
+        if req.channelCode and req.boardCode:
+            data = crawler.fetch_rank(req.channelCode, req.boardCode)
+        elif req.category:
+            data = crawler.fetch_rank(req.category)
+        else:
+            raise ValueError("either category or channelCode + boardCode is required")
         return ApiResult(code=200, message="success", data=data)
     except ValueError as ex:
         raise HTTPException(status_code=400, detail=str(ex)) from ex

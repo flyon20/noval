@@ -14,6 +14,12 @@ from app.utils.parsers import extract_initial_state, html_to_text
 
 
 class FanqieCrawler(BaseCrawler):
+    CATEGORY_ALIAS = {
+        "male-hot-a": "1_2_1141",
+        "male-hot-b": "1_2_1140",
+        "male-new-a": "1_1_1141",
+    }
+
     def __init__(self,
                  http_client: HttpClient | None = None,
                  decoder: ConfuseFontDecoder | None = None) -> None:
@@ -49,16 +55,15 @@ class FanqieCrawler(BaseCrawler):
             raise ValueError("board catalog parse failed")
         return channels
 
-    def fetch_rank(self, channel_code: str, board_code: str) -> List[RankItem]:
-        rank_url = self._resolve_rank_url(channel_code, board_code)
+    def fetch_rank(self, category_or_channel_code: str, board_code: str | None = None) -> List[RankItem]:
+        rank_url = self._resolve_rank_url(category_or_channel_code, board_code)
         state = self._fetch_state(rank_url)
         css = str(state.get("common", {}).get("css") or "")
         rank_state = state.get("rank", {})
         book_list = self._extract_rank_books(rank_state)
         if not book_list:
-            raise ValueError(
-                f"rank list is empty for channelCode: {channel_code}, boardCode: {board_code}"
-            )
+            locator = self._format_rank_locator(category_or_channel_code, board_code)
+            raise ValueError(f"rank list is empty for {locator}")
 
         items: List[RankItem] = []
         for index, item in enumerate(book_list, start=1):
@@ -79,9 +84,8 @@ class FanqieCrawler(BaseCrawler):
                 )
             )
         if not items:
-            raise ValueError(
-                f"rank list parse failed for channelCode: {channel_code}, boardCode: {board_code}"
-            )
+            locator = self._format_rank_locator(category_or_channel_code, board_code)
+            raise ValueError(f"rank list parse failed for {locator}")
         return items
 
     def fetch_book(self, book_url: str) -> BookDetail:
@@ -130,12 +134,24 @@ class FanqieCrawler(BaseCrawler):
             )
         return chapters
 
-    def _resolve_rank_url(self, channel_code: str, board_code: str) -> str:
-        normalized_channel = (channel_code or "").strip()
+    def _resolve_rank_url(self, category_or_channel_code: str, board_code: str | None = None) -> str:
+        normalized_value = (category_or_channel_code or "").strip()
+        if board_code is None:
+            if not normalized_value:
+                return settings.fanqie_rank_url
+            mapped = self.CATEGORY_ALIAS.get(normalized_value, normalized_value.lstrip("/"))
+            if mapped.startswith("http://") or mapped.startswith("https://"):
+                return mapped
+            if mapped.startswith("rank/"):
+                return f"{settings.fanqie_base_url}/{mapped}"
+            if mapped.count("_") == 2:
+                return f"{settings.fanqie_base_url}/rank/{mapped}"
+            return settings.fanqie_rank_url
+
         normalized_board = (board_code or "").strip()
-        if not normalized_channel or not normalized_board:
+        if not normalized_value or not normalized_board:
             raise ValueError("channelCode and boardCode are required")
-        return f"{settings.fanqie_base_url}/rank/1_{normalized_channel}_{normalized_board}"
+        return f"{settings.fanqie_base_url}/rank/1_{normalized_value}_{normalized_board}"
 
     def _normalize_book_url(self, book_url: str) -> str:
         normalized = (book_url or "").strip()
@@ -178,6 +194,11 @@ class FanqieCrawler(BaseCrawler):
                 if book_list:
                     return book_list
         return []
+
+    def _format_rank_locator(self, category_or_channel_code: str, board_code: str | None = None) -> str:
+        if board_code is None:
+            return f"category: {category_or_channel_code}"
+        return f"channelCode: {category_or_channel_code}, boardCode: {board_code}"
 
     def _extract_path_id(self, url: str) -> str:
         return url.rstrip("/").rsplit("/", maxsplit=1)[-1]
