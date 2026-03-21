@@ -6,19 +6,34 @@ import type { KnownSystemConfigKey, SystemConfig } from '@/types/config';
 
 const SYSTEM_CONFIG_KEYS: Array<{ key: KnownSystemConfigKey; label: string; hint: string }> = [
   {
+    key: 'ai.provider.type',
+    label: 'AI 提供方类型',
+    hint: '控制分析请求优先使用的 AI Provider 类型。',
+  },
+  {
     key: 'ai.timeout.millis',
     label: 'AI 超时毫秒数',
-    hint: '控制 AI 调用等待时长。',
+    hint: '控制 AI 调用的超时等待时间。',
+  },
+  {
+    key: 'ai.openai-compatible.base-url',
+    label: 'OpenAI 兼容 Base URL',
+    hint: '留空时回退到后端应用配置中的默认地址。',
+  },
+  {
+    key: 'ai.openai-compatible.default-model',
+    label: 'OpenAI 兼容默认模型',
+    hint: '配置 OpenAI 兼容 Provider 的默认模型名称。',
+  },
+  {
+    key: 'ai.openai-compatible.streaming-enabled',
+    label: 'OpenAI 兼容流式开关',
+    hint: '控制 OpenAI 兼容 Provider 是否开启流式输出。',
   },
   {
     key: 'crawler.default.chapter-count',
-    label: '默认抓章数',
-    hint: '控制扫榜页默认抓取章节数。',
-  },
-  {
-    key: 'security.audit.enabled',
-    label: '安全审计开关',
-    hint: '控制安全审计日志是否开启。',
+    label: '默认抓章数量',
+    hint: '控制扫榜页面默认抓取的章节数。',
   },
 ];
 
@@ -91,7 +106,7 @@ onMounted(() => {
       <p class="system-config-page__eyebrow">System Config</p>
       <h2 class="system-config-page__title">系统配置</h2>
       <p class="system-config-page__subtitle">
-        当前前端固定管理 3 个系统配置 key，并对齐后端 `/api/config/system`。
+        当前前端固定管理 6 个系统配置 key，并对齐后端 `/api/config/system`。
       </p>
     </header>
 
@@ -117,7 +132,7 @@ onMounted(() => {
               {{
                 SYSTEM_CONFIG_KEYS.find((config) => config.key === item.configKey)?.hint ??
                 item.description ??
-                '无额外说明'
+                '暂无额外说明'
               }}
             </p>
           </div>

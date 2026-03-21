@@ -18,6 +18,7 @@ describe('LoginView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     push.mockReset();
+    vi.clearAllMocks();
   });
 
   test('successful login stores session and navigates to /rank', async () => {
@@ -56,13 +57,32 @@ describe('LoginView', () => {
       },
     });
 
-    await wrapper.get('input[placeholder="请输入用户名"]').setValue('demo');
+    await wrapper.get('input[autocomplete="username"]').setValue('demo');
     await wrapper.get('input[type="password"]').setValue('password');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
     expect(authApi.login).toHaveBeenCalled();
     expect(push).toHaveBeenCalledWith('/rank');
+  });
+
+  test('renders a single login form to avoid nested submit handlers', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/login', component: LoginView }, { path: '/rank', component: { template: '<div />' } }],
+    });
+    await router.push('/login');
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    const forms = wrapper.findAll('form');
+
+    expect(forms).toHaveLength(1);
+    expect(wrapper.get('button[type="submit"]').element.closest('form')).toBe(forms[0]?.element);
   });
 
   test('failed login displays backend message', async () => {
@@ -89,7 +109,7 @@ describe('LoginView', () => {
       },
     });
 
-    await wrapper.get('input[placeholder="请输入用户名"]').setValue('demo');
+    await wrapper.get('input[autocomplete="username"]').setValue('demo');
     await wrapper.get('input[type="password"]').setValue('wrong');
     await wrapper.get('form').trigger('submit');
     await flushPromises();

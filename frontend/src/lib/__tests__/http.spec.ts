@@ -1,8 +1,12 @@
 import AxiosMockAdapter from 'axios-mock-adapter';
 import type { TokenResponse } from '@/types/auth';
-import { createHttpClient } from '@/lib/http';
+import { API_BASE_URL, createHttpClient } from '@/lib/http';
 
 describe('http client', () => {
+  test('uses relative api base url by default for local dev proxying', () => {
+    expect(API_BASE_URL).toBe('');
+  });
+
   test('attaches authorization header', async () => {
     const client = createHttpClient({
       baseURL: 'http://localhost:8080',

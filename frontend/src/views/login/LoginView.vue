@@ -88,36 +88,34 @@ async function handleSubmit() {
           type="error"
         />
 
-        <form class="login-card__form" @submit.prevent="handleSubmit">
-          <el-form label-position="top">
-            <el-form-item label="用户名" required>
-              <el-input
-                v-model="form.username"
-                autocomplete="username"
-                placeholder="请输入用户名"
-              />
-            </el-form-item>
+        <el-form class="login-card__form" label-position="top" @submit.prevent="handleSubmit">
+          <el-form-item label="用户名" required>
+            <el-input
+              v-model="form.username"
+              autocomplete="username"
+              placeholder="请输入用户名"
+            />
+          </el-form-item>
 
-            <el-form-item label="密码" required>
-              <el-input
-                v-model="form.password"
-                autocomplete="current-password"
-                placeholder="请输入密码"
-                show-password
-                type="password"
-              />
-            </el-form-item>
+          <el-form-item label="密码" required>
+            <el-input
+              v-model="form.password"
+              autocomplete="current-password"
+              placeholder="请输入密码"
+              show-password
+              type="password"
+            />
+          </el-form-item>
 
-            <el-button
-              class="login-card__submit"
-              :loading="state.submitting"
-              native-type="submit"
-              type="primary"
-            >
-              登录进入
-            </el-button>
-          </el-form>
-        </form>
+          <el-button
+            class="login-card__submit"
+            :loading="state.submitting"
+            native-type="submit"
+            type="primary"
+          >
+            登录进入
+          </el-button>
+        </el-form>
       </div>
     </section>
   </div>

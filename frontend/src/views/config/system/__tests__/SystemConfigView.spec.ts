@@ -36,6 +36,14 @@ function createSystemConfig(
 describe('SystemConfigView', () => {
   test('loads fixed system config keys on mount', async () => {
     const { systemConfigApi } = await import('@/api/config');
+    const expectedKeys = [
+      'ai.provider.type',
+      'ai.timeout.millis',
+      'ai.openai-compatible.base-url',
+      'ai.openai-compatible.default-model',
+      'ai.openai-compatible.streaming-enabled',
+      'crawler.default.chapter-count',
+    ];
 
     vi.mocked(systemConfigApi.getByKey).mockImplementation(async (configKey) => ({
       data: {
@@ -61,10 +69,11 @@ describe('SystemConfigView', () => {
 
     await flushPromises();
 
-    expect(systemConfigApi.getByKey).toHaveBeenCalledWith('ai.timeout.millis');
-    expect(systemConfigApi.getByKey).toHaveBeenCalledWith('crawler.default.chapter-count');
-    expect(systemConfigApi.getByKey).toHaveBeenCalledWith('security.audit.enabled');
-    expect(wrapper.text()).toContain('ai.timeout.millis');
+    expect(systemConfigApi.getByKey).toHaveBeenCalledTimes(expectedKeys.length);
+    expectedKeys.forEach((configKey) => {
+      expect(systemConfigApi.getByKey).toHaveBeenCalledWith(configKey);
+    });
+    expect(wrapper.text()).toContain('ai.provider.type');
   });
 
   test('updates editable system config item', async () => {

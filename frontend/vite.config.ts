@@ -52,12 +52,21 @@ async function resolvePwaPlugin() {
 
 export default defineConfig(async () => {
   const pwaPlugin = await resolvePwaPlugin();
+  const proxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://127.0.0.1:8080';
 
   return {
     plugins: [vue(), ...(pwaPlugin ? [pwaPlugin] : [])],
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
+      },
+    },
+    server: {
+      proxy: {
+        '/api': {
+          target: proxyTarget,
+          changeOrigin: true,
+        },
       },
     },
     test: {

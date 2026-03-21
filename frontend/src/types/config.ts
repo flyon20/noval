@@ -20,9 +20,12 @@ export interface PromptConfigUpdateRequest {
 }
 
 export type KnownSystemConfigKey =
+  | 'ai.provider.type'
   | 'ai.timeout.millis'
-  | 'crawler.default.chapter-count'
-  | 'security.audit.enabled';
+  | 'ai.openai-compatible.base-url'
+  | 'ai.openai-compatible.default-model'
+  | 'ai.openai-compatible.streaming-enabled'
+  | 'crawler.default.chapter-count';
 
 export interface SystemConfig {
   id: number;
