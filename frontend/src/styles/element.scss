@@ -1,0 +1,10 @@
+@use './tokens.scss';
+@import 'element-plus/dist/index.css';
+
+:root {
+  --el-color-primary: var(--color-primary);
+  --el-color-primary-light-3: #45665d;
+  --el-color-danger: var(--color-danger);
+  --el-border-radius-base: 14px;
+  --el-font-size-base: 15px;
+}
