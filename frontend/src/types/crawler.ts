@@ -15,6 +15,13 @@ export interface RankBoardCatalog {
   boards: RankBoardOption[];
 }
 
+export interface UserRankPreference {
+  userId: number;
+  platform: Platform;
+  channelCode: string;
+  boardCode: string;
+}
+
 export interface CrawlerRankRequest {
   platform: Platform;
   category?: string;
@@ -76,6 +83,14 @@ export interface CrawlerChapterRequest {
   platform: Platform;
   bookId: number;
   chapterCount: number;
+}
+
+export interface ChapterRefreshResult {
+  chapters: ChapterItem[];
+  maxAllowedRefreshTimes: number;
+  usedRefreshTimes: number;
+  remainingRefreshTimes: number;
+  windowDays: number;
 }
 
 export interface ChapterItem {

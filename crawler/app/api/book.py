@@ -15,7 +15,7 @@ router = APIRouter(
 @router.post("/book", response_model=ApiResult)
 def book(req: BookRequest):
     try:
-        crawler = build_crawler(req.platform)
+        crawler = build_crawler(req.platform, timeout_seconds=req.timeoutSeconds)
         data = crawler.fetch_book(req.bookUrl)
         return ApiResult(code=200, message="success", data=data)
     except ValueError as ex:

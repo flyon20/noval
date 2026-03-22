@@ -1,6 +1,7 @@
 DROP TABLE IF EXISTS system_config;
 DROP TABLE IF EXISTS rank_snapshot;
 DROP TABLE IF EXISTS rank_board;
+DROP TABLE IF EXISTS user_rank_preference;
 
 CREATE TABLE system_config (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -38,6 +39,18 @@ CREATE TABLE rank_snapshot (
     deleted TINYINT DEFAULT 0
 );
 CREATE UNIQUE INDEX uk_board_snapshot_time ON rank_snapshot(rank_board_id, snapshot_time);
+
+CREATE TABLE user_rank_preference (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    platform VARCHAR(20) NOT NULL,
+    channel_code VARCHAR(50) NOT NULL,
+    board_code VARCHAR(50) NOT NULL,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted TINYINT DEFAULT 0
+);
+CREATE UNIQUE INDEX uk_user_platform ON user_rank_preference(user_id, platform);
 
 ALTER TABLE crawl_rank ADD COLUMN IF NOT EXISTS snapshot_id BIGINT;
 ALTER TABLE crawl_rank ADD COLUMN IF NOT EXISTS channel_code VARCHAR(50);

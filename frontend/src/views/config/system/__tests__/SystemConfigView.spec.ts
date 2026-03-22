@@ -43,6 +43,10 @@ describe('SystemConfigView', () => {
       'ai.openai-compatible.default-model',
       'ai.openai-compatible.streaming-enabled',
       'crawler.default.chapter-count',
+      'crawler.http.timeout-seconds',
+      'crawler.chapter.fetch-workers',
+      'crawler.chapter.force-refresh.user-max-times',
+      'crawler.rank.refresh-days',
     ];
 
     vi.mocked(systemConfigApi.getByKey).mockImplementation(async (configKey) => ({

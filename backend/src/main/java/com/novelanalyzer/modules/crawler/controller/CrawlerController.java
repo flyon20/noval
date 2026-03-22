@@ -3,13 +3,16 @@ package com.novelanalyzer.modules.crawler.controller;
 import com.novelanalyzer.common.result.Result;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerRankRequest;
+import com.novelanalyzer.modules.crawler.dto.UserRankPreferenceRequest;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.crawler.vo.BookDetailVO;
+import com.novelanalyzer.modules.crawler.vo.ChapterRefreshResultVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import com.novelanalyzer.modules.crawler.vo.RankBoardCatalogVO;
 import com.novelanalyzer.modules.crawler.vo.RankBookItemVO;
 import com.novelanalyzer.modules.crawler.vo.RankPageVO;
 import com.novelanalyzer.modules.crawler.vo.RankRefreshResultVO;
+import com.novelanalyzer.modules.crawler.vo.UserRankPreferenceVO;
 import com.novelanalyzer.modules.security.annotation.RequireRole;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -47,6 +50,16 @@ public class CrawlerController {
         return Result.success(crawlerService.getBoardCatalog(platform));
     }
 
+    @GetMapping("/preference")
+    public Result<UserRankPreferenceVO> getPreference(@RequestParam("platform") @NotBlank String platform) {
+        return Result.success(crawlerService.getUserRankPreference(platform));
+    }
+
+    @PostMapping("/preference")
+    public Result<UserRankPreferenceVO> savePreference(@Valid @RequestBody UserRankPreferenceRequest request) {
+        return Result.success(crawlerService.saveUserRankPreference(request));
+    }
+
     @PostMapping("/rank/refresh")
     public Result<RankRefreshResultVO> refresh(@Valid @RequestBody CrawlerRankRequest request) {
         return Result.success(crawlerService.refreshRankBoard(request));
@@ -70,5 +83,10 @@ public class CrawlerController {
     @PostMapping("/chapters")
     public Result<List<ChapterVO>> chapters(@Valid @RequestBody CrawlerChapterRequest request) {
         return Result.success(crawlerService.getChapters(request));
+    }
+
+    @PostMapping("/chapters/refresh")
+    public Result<ChapterRefreshResultVO> refreshChapters(@Valid @RequestBody CrawlerChapterRequest request) {
+        return Result.success(crawlerService.refreshChapters(request));
     }
 }

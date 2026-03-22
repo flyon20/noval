@@ -83,6 +83,30 @@ class Phase5BackendIntegrationTest {
     }
 
     @Test
+    void shouldBootstrapMissingCrawlerRuntimeSystemConfigDefaults() throws Exception {
+        jdbcTemplate.update("DELETE FROM system_config WHERE config_key IN (?, ?)",
+            "crawler.http.timeout-seconds",
+            "crawler.chapter.fetch-workers");
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .param("configKey", "crawler.http.timeout-seconds"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configKey").value("crawler.http.timeout-seconds"))
+            .andExpect(jsonPath("$.data.configValue").value("20"));
+
+        mockMvc.perform(get("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .param("configKey", "crawler.chapter.fetch-workers"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configKey").value("crawler.chapter.fetch-workers"))
+            .andExpect(jsonPath("$.data.configValue").value("3"));
+    }
+
+    @Test
     void shouldReturn400WhenTrendPlatformBlank() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
 

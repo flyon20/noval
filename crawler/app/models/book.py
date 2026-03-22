@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class BookRequest(BaseModel):
     platform: str
     bookUrl: str
+    timeoutSeconds: int | None = None
 
 
 class BookDetail(BaseModel):
@@ -12,4 +13,3 @@ class BookDetail(BaseModel):
     intro: str
     bookUrl: str
     platformBookId: str
-

@@ -12,6 +12,7 @@ import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
 import com.novelanalyzer.modules.crawler.model.RankBoardEntity;
 import com.novelanalyzer.modules.crawler.model.RankSnapshotEntity;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
+import com.novelanalyzer.modules.crawler.vo.UserRankPreferenceVO;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -413,6 +414,59 @@ public class CrawlerRepository {
         );
     }
 
+    public int countRecentSuccessfulChapterRefreshes(Long userId, LocalDateTime windowStart) {
+        if (userId == null) {
+            return 0;
+        }
+        Integer count = jdbcTemplate.queryForObject(
+            """
+                SELECT COUNT(1)
+                FROM crawler_task
+                WHERE task_type = ?
+                  AND status = 2
+                  AND create_time >= ?
+                  AND request_json LIKE ?
+                """,
+            Integer.class,
+            "chapter_force_refresh",
+            Timestamp.valueOf(windowStart),
+            "%\"userId\":" + userId + "%"
+        );
+        return count == null ? 0 : count;
+    }
+
+    public void saveChapterRefreshTask(Long userId,
+                                       String username,
+                                       String platform,
+                                       Long bookId,
+                                       Integer chapterCount,
+                                       int status,
+                                       String errorMessage,
+                                       LocalDateTime startTime,
+                                       LocalDateTime endTime) {
+        String requestJson = "{\"platform\":\"" + platform
+            + "\",\"bookId\":" + bookId
+            + ",\"chapterCount\":" + chapterCount
+            + ",\"userId\":" + (userId == null ? "null" : userId)
+            + ",\"username\":\"" + (username == null ? "" : username.replace("\"", "'"))
+            + "\"}";
+        jdbcTemplate.update(
+            """
+                INSERT INTO crawler_task(task_type, platform, request_json, status, error_message, start_time, end_time, create_time, update_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            "chapter_force_refresh",
+            platform,
+            requestJson,
+            status,
+            errorMessage,
+            Timestamp.valueOf(startTime),
+            Timestamp.valueOf(endTime),
+            Timestamp.valueOf(endTime),
+            Timestamp.valueOf(endTime)
+        );
+    }
+
     public List<CrawlBookEntity> findBooksByIds(List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
             return List.of();
@@ -420,6 +474,59 @@ public class CrawlerRepository {
         return crawlBookMapper.selectBatchIds(ids).stream()
             .filter(item -> item.getDeleted() == null || item.getDeleted() == 0)
             .collect(Collectors.toList());
+    }
+
+    public Optional<UserRankPreferenceVO> findUserRankPreference(Long userId, String platform) {
+        List<UserRankPreferenceVO> results = jdbcTemplate.query(
+            """
+                SELECT user_id, platform, channel_code, board_code
+                FROM user_rank_preference
+                WHERE user_id = ? AND platform = ? AND deleted = 0
+                LIMIT 1
+                """,
+            (rs, rowNum) -> {
+                UserRankPreferenceVO vo = new UserRankPreferenceVO();
+                vo.setUserId(rs.getLong("user_id"));
+                vo.setPlatform(rs.getString("platform"));
+                vo.setChannelCode(rs.getString("channel_code"));
+                vo.setBoardCode(rs.getString("board_code"));
+                return vo;
+            },
+            userId,
+            platform
+        );
+        return results.stream().findFirst();
+    }
+
+    public UserRankPreferenceVO saveUserRankPreference(Long userId,
+                                                       String platform,
+                                                       String channelCode,
+                                                       String boardCode) {
+        int updated = jdbcTemplate.update(
+            """
+                UPDATE user_rank_preference
+                SET channel_code = ?, board_code = ?, update_time = CURRENT_TIMESTAMP, deleted = 0
+                WHERE user_id = ? AND platform = ?
+                """,
+            channelCode,
+            boardCode,
+            userId,
+            platform
+        );
+        if (updated == 0) {
+            jdbcTemplate.update(
+                """
+                    INSERT INTO user_rank_preference(user_id, platform, channel_code, board_code, create_time, update_time, deleted)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                    """,
+                userId,
+                platform,
+                channelCode,
+                boardCode
+            );
+        }
+        return findUserRankPreference(userId, platform)
+            .orElseThrow(() -> new IllegalStateException("failed to save user rank preference"));
     }
 
     private ChapterVO toChapterVO(CrawlChapterEntity entity) {

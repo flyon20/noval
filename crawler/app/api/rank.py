@@ -13,9 +13,9 @@ router = APIRouter(
 
 
 @router.get("/board-catalog", response_model=ApiResult)
-def board_catalog(platform: str):
+def board_catalog(platform: str, timeoutSeconds: int | None = None):
     try:
-        crawler = build_crawler(platform)
+        crawler = build_crawler(platform, timeout_seconds=timeoutSeconds)
         data = crawler.fetch_board_catalog()
         return ApiResult(code=200, message="success", data=data)
     except ValueError as ex:
@@ -25,7 +25,7 @@ def board_catalog(platform: str):
 @router.post("/rank", response_model=ApiResult)
 def rank(req: RankRequest):
     try:
-        crawler = build_crawler(req.platform)
+        crawler = build_crawler(req.platform, timeout_seconds=req.timeoutSeconds)
         if req.channelCode and req.boardCode:
             data = crawler.fetch_rank(req.channelCode, req.boardCode)
         elif req.category:

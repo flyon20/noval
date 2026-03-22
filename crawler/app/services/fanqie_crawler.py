@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List
 from urllib.parse import urljoin
 
@@ -36,9 +37,12 @@ class FanqieCrawler(BaseCrawler):
 
     def __init__(self,
                  http_client: HttpClient | None = None,
-                 decoder: ConfuseFontDecoder | None = None) -> None:
-        self._http_client = http_client or HttpClient()
+                 decoder: ConfuseFontDecoder | None = None,
+                 timeout_seconds: int | None = None,
+                 chapter_fetch_workers: int | None = None) -> None:
+        self._http_client = http_client or HttpClient(timeout_seconds=timeout_seconds)
         self._decoder = decoder or ConfuseFontDecoder()
+        self._chapter_fetch_workers = max(1, chapter_fetch_workers or settings.chapter_fetch_workers)
 
     def fetch_board_catalog(self) -> List[BoardCatalogChannel]:
         state = self._fetch_state(settings.fanqie_rank_url)
@@ -114,34 +118,31 @@ class FanqieCrawler(BaseCrawler):
             platformBookId=book_id,
         )
 
-    def fetch_chapters(self, book_url: str, chapter_count: int) -> List[ChapterItem]:
+    def fetch_chapters(self, book_url: str, chapter_count: int, start_chapter_no: int = 1) -> List[ChapterItem]:
         normalized_url = self._normalize_book_url(book_url)
         state = self._fetch_state(normalized_url)
         page_state = state.get("page", {})
-        chapter_ids = self._extract_chapter_ids(page_state)
-        if not chapter_ids:
+        chapter_refs = self._extract_chapter_refs(page_state)
+        if not chapter_refs:
             raise ValueError("chapter directory parse failed")
 
-        chapters: List[ChapterItem] = []
-        for chapter_no, item_id in enumerate(chapter_ids[:chapter_count], start=1):
-            reader_url = f"{settings.fanqie_base_url}/reader/{item_id}"
-            reader_state = self._fetch_state(reader_url)
-            chapter_data = reader_state.get("reader", {}).get("chapterData", {})
-            title = str(chapter_data.get("title") or f"Chapter {chapter_no}")
-            content = html_to_text(str(chapter_data.get("content") or ""))
-            if any(0xE000 <= ord(ch) <= 0xF8FF for ch in content):
-                css = str(reader_state.get("common", {}).get("css") or "")
-                content = self._decoder.decode(content, css)
-            if not content:
-                raise ValueError(f"chapter content parse failed for itemId: {item_id}")
-            chapters.append(
-                ChapterItem(
-                    chapterNo=chapter_no,
-                    chapterTitle=title,
-                    content=content,
-                )
-            )
-        return chapters
+        safe_start_chapter_no = max(1, start_chapter_no)
+        start_index = safe_start_chapter_no - 1
+        selected_refs = chapter_refs[start_index:start_index + chapter_count]
+        if not selected_refs:
+            raise ValueError("chapter directory parse failed")
+        if len(selected_refs) == 1 or self._chapter_fetch_workers == 1:
+            return [
+                self._fetch_single_chapter(chapter_no, item_id, title)
+                for chapter_no, (item_id, title) in enumerate(selected_refs, start=safe_start_chapter_no)
+            ]
+
+        with ThreadPoolExecutor(max_workers=min(self._chapter_fetch_workers, len(selected_refs))) as executor:
+            futures = [
+                executor.submit(self._fetch_single_chapter, chapter_no, item_id, title)
+                for chapter_no, (item_id, title) in enumerate(selected_refs, start=safe_start_chapter_no)
+            ]
+            return [future.result() for future in futures]
 
     def _resolve_rank_url(self, category_or_channel_code: str, board_code: str | None = None) -> str:
         normalized_value = (category_or_channel_code or "").strip()
@@ -173,18 +174,60 @@ class FanqieCrawler(BaseCrawler):
             return f"{settings.fanqie_base_url}/page/{normalized}"
         raise ValueError(f"unsupported book url: {book_url}")
 
-    def _extract_chapter_ids(self, page_state: dict[str, Any]) -> List[str]:
-        item_ids = page_state.get("itemIds") or []
-        if item_ids:
-            return [str(item_id) for item_id in item_ids]
+    def _extract_chapter_refs(self, page_state: dict[str, Any]) -> List[tuple[str, str | None]]:
+        chapter_refs: List[tuple[str, str | None]] = []
+        seen_item_ids: set[str] = set()
 
-        chapter_ids: List[str] = []
         for volume in page_state.get("chapterListWithVolume") or []:
-            for chapter in volume.get("chapterList") or []:
-                item_id = chapter.get("itemId")
-                if item_id:
-                    chapter_ids.append(str(item_id))
-        return chapter_ids
+            if isinstance(volume, dict):
+                chapter_items = volume.get("chapterList") or []
+            elif isinstance(volume, list):
+                chapter_items = volume
+            else:
+                continue
+            for chapter in chapter_items:
+                if not isinstance(chapter, dict):
+                    continue
+                item_id = str(chapter.get("itemId") or "").strip()
+                if not item_id or item_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(item_id)
+                chapter_refs.append(
+                    (
+                        item_id,
+                        str(
+                            chapter.get("title")
+                            or chapter.get("chapterTitle")
+                            or chapter.get("itemTitle")
+                            or ""
+                        ).strip() or None,
+                    )
+                )
+
+        for item_id in page_state.get("itemIds") or []:
+            normalized_item_id = str(item_id).strip()
+            if not normalized_item_id or normalized_item_id in seen_item_ids:
+                continue
+            seen_item_ids.add(normalized_item_id)
+            chapter_refs.append((normalized_item_id, None))
+        return chapter_refs
+
+    def _fetch_single_chapter(self, chapter_no: int, item_id: str, fallback_title: str | None) -> ChapterItem:
+        reader_url = f"{settings.fanqie_base_url}/reader/{item_id}"
+        reader_state = self._fetch_state(reader_url)
+        chapter_data = reader_state.get("reader", {}).get("chapterData", {})
+        title = str(chapter_data.get("title") or fallback_title or f"Chapter {chapter_no}")
+        content = html_to_text(str(chapter_data.get("content") or ""))
+        if any(0xE000 <= ord(ch) <= 0xF8FF for ch in content):
+            css = str(reader_state.get("common", {}).get("css") or "")
+            content = self._decoder.decode(content, css)
+        if not content:
+            raise ValueError(f"chapter content parse failed for itemId: {item_id}")
+        return ChapterItem(
+            chapterNo=chapter_no,
+            chapterTitle=title,
+            content=content,
+        )
 
     def _fetch_state(self, url: str) -> dict[str, Any]:
         html = self._http_client.get_text(url)

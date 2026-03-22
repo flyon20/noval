@@ -43,10 +43,15 @@ public class PythonCrawlerClient {
     }
 
     public List<ExternalRankItem> fetchRank(String platform, String category) {
+        return fetchRank(platform, category, (Integer) null);
+    }
+
+    public List<ExternalRankItem> fetchRank(String platform, String category, Integer timeoutSeconds) {
         try {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("category", category);
+            putIfPositive(request, "timeoutSeconds", timeoutSeconds);
             PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/rank",
                 buildRequestEntity(request),
@@ -63,11 +68,16 @@ public class PythonCrawlerClient {
     }
 
     public List<ExternalRankItem> fetchRank(String platform, String channelCode, String boardCode) {
+        return fetchRank(platform, channelCode, boardCode, null);
+    }
+
+    public List<ExternalRankItem> fetchRank(String platform, String channelCode, String boardCode, Integer timeoutSeconds) {
         try {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("channelCode", channelCode);
             request.put("boardCode", boardCode);
+            putIfPositive(request, "timeoutSeconds", timeoutSeconds);
             PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/rank",
                 buildRequestEntity(request),
@@ -84,11 +94,16 @@ public class PythonCrawlerClient {
     }
 
     public List<ExternalRankBoard> fetchBoardCatalog(String platform) {
+        return fetchBoardCatalog(platform, null);
+    }
+
+    public List<ExternalRankBoard> fetchBoardCatalog(String platform, Integer timeoutSeconds) {
         try {
-            String url = UriComponentsBuilder
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder
                 .fromHttpUrl(crawlerProperties.getBaseUrl() + "/internal/board-catalog")
-                .queryParam("platform", platform)
-                .toUriString();
+                .queryParam("platform", platform);
+            putIfPositive(uriBuilder, "timeoutSeconds", timeoutSeconds);
+            String url = uriBuilder.toUriString();
             PythonResult result = crawlerRestTemplate.exchange(
                 url,
                 HttpMethod.GET,
@@ -105,10 +120,15 @@ public class PythonCrawlerClient {
     }
 
     public ExternalBookDetail fetchBook(String platform, String bookUrl) {
+        return fetchBook(platform, bookUrl, null);
+    }
+
+    public ExternalBookDetail fetchBook(String platform, String bookUrl, Integer timeoutSeconds) {
         try {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("bookUrl", bookUrl);
+            putIfPositive(request, "timeoutSeconds", timeoutSeconds);
             PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/book",
                 buildRequestEntity(request),
@@ -124,11 +144,23 @@ public class PythonCrawlerClient {
     }
 
     public List<ExternalChapterItem> fetchChapters(String platform, String bookUrl, Integer chapterCount) {
+        return fetchChapters(platform, bookUrl, chapterCount, null, null, null);
+    }
+
+    public List<ExternalChapterItem> fetchChapters(String platform,
+                                                   String bookUrl,
+                                                   Integer chapterCount,
+                                                   Integer startChapterNo,
+                                                   Integer timeoutSeconds,
+                                                   Integer chapterFetchWorkers) {
         try {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("bookUrl", bookUrl);
             request.put("chapterCount", chapterCount);
+            putIfPositive(request, "startChapterNo", startChapterNo);
+            putIfPositive(request, "timeoutSeconds", timeoutSeconds);
+            putIfPositive(request, "chapterFetchWorkers", chapterFetchWorkers);
             PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/chapters",
                 buildRequestEntity(request),
@@ -186,5 +218,17 @@ public class PythonCrawlerClient {
 
     private String asString(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private void putIfPositive(Map<String, Object> request, String key, Integer value) {
+        if (value != null && value > 0) {
+            request.put(key, value);
+        }
+    }
+
+    private void putIfPositive(UriComponentsBuilder uriBuilder, String key, Integer value) {
+        if (value != null && value > 0) {
+            uriBuilder.queryParam(key, value);
+        }
     }
 }

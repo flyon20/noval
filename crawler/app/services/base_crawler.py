@@ -14,6 +14,5 @@ class BaseCrawler:
     def fetch_book(self, book_url: str) -> BookDetail:
         raise NotImplementedError
 
-    def fetch_chapters(self, book_url: str, chapter_count: int) -> List[ChapterItem]:
+    def fetch_chapters(self, book_url: str, chapter_count: int, start_chapter_no: int = 1) -> List[ChapterItem]:
         raise NotImplementedError
-

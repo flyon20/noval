@@ -17,10 +17,10 @@ VALID_INTERNAL_KEY = "crawler-internal-test-key-1234567890"
 
 
 class StubChapterCrawler:
-    def fetch_chapters(self, book_url: str, chapter_count: int):
+    def fetch_chapters(self, book_url: str, chapter_count: int, start_chapter_no: int = 1):
         return [
             {
-                "chapterNo": 1,
+                "chapterNo": start_chapter_no,
                 "chapterTitle": "Chapter 1",
                 "content": "content",
             }

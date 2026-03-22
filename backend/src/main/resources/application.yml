@@ -57,7 +57,7 @@ app:
     base-url: ${CRAWLER_BASE_URL:http://127.0.0.1:5000}
     internal-api-key: ${CRAWLER_INTERNAL_API_KEY:}
     connect-timeout-millis: ${CRAWLER_CONNECT_TIMEOUT_MILLIS:5000}
-    read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:15000}
+    read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:60000}
   ai:
     provider-type: ${AI_PROVIDER_TYPE:openai-compatible}
     dify-base-url: ${DIFY_BASE_URL:https://api.dify.ai/v1}

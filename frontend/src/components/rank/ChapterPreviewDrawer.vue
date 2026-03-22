@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { ChapterItem, Platform } from '@/types/crawler';
+import type { ChapterItem, ChapterRefreshResult, Platform } from '@/types/crawler';
 
 const props = defineProps<{
   modelValue: boolean;
   chapters: ChapterItem[];
   loading?: boolean;
+  refreshLoading?: boolean;
   traceId?: string;
   bookId?: number;
   platform?: Platform;
   chapterCount: number;
+  refreshSummary?: ChapterRefreshResult | null;
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   goAnalysis: [];
+  refreshChapters: [];
 }>();
 
 const visible = computed({
@@ -36,7 +39,7 @@ const visible = computed({
       <div class="chapter-drawer__header">
         <div>
           <p>章节预览</p>
-          <h3>已抓取 {{ chapters.length }} 章</h3>
+          <h3>当前已加载 {{ chapters.length }} 章</h3>
         </div>
         <el-button
           data-testid="go-analysis"
@@ -46,6 +49,20 @@ const visible = computed({
         >
           进入分析页
         </el-button>
+      </div>
+
+      <div class="chapter-drawer__actions">
+        <el-button
+          data-testid="refresh-chapters"
+          :disabled="!bookId || !platform"
+          :loading="refreshLoading"
+          @click="emit('refreshChapters')"
+        >
+          重新抓取章节
+        </el-button>
+        <p v-if="refreshSummary" class="chapter-drawer__quota">
+          当前窗口 {{ refreshSummary.windowDays }} 天，已用 {{ refreshSummary.usedRefreshTimes }}/{{ refreshSummary.maxAllowedRefreshTimes }}，剩余 {{ refreshSummary.remainingRefreshTimes }}
+        </p>
       </div>
 
       <el-skeleton v-if="loading" animated :rows="8" />
@@ -79,10 +96,18 @@ const visible = computed({
   gap: 1rem;
 }
 
+.chapter-drawer__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .chapter-drawer__header p,
 .chapter-drawer__header h3,
 .chapter-drawer__trace,
 .chapter-drawer__hint,
+.chapter-drawer__quota,
 .chapter-card p {
   margin: 0;
 }
@@ -122,7 +147,8 @@ const visible = computed({
 }
 
 .chapter-drawer__trace,
-.chapter-drawer__hint {
+.chapter-drawer__hint,
+.chapter-drawer__quota {
   color: var(--color-text-muted);
   font-size: 0.85rem;
 }

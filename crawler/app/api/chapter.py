@@ -15,8 +15,12 @@ router = APIRouter(
 @router.post("/chapters", response_model=ApiResult)
 def chapters(req: ChapterRequest):
     try:
-        crawler = build_crawler(req.platform)
-        data = crawler.fetch_chapters(req.bookUrl, req.chapterCount)
+        crawler = build_crawler(
+            req.platform,
+            timeout_seconds=req.timeoutSeconds,
+            chapter_fetch_workers=req.chapterFetchWorkers,
+        )
+        data = crawler.fetch_chapters(req.bookUrl, req.chapterCount, req.startChapterNo)
         return ApiResult(code=200, message="success", data=data)
     except ValueError as ex:
         raise HTTPException(status_code=400, detail=str(ex)) from ex

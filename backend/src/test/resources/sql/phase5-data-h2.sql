@@ -10,11 +10,14 @@ VALUES
     (4, 'ai.openai-compatible.default-model', 'deepseek-chat', 'ai', 'Default OpenAI compatible model name', 1, 0),
     (5, 'ai.openai-compatible.streaming-enabled', 'false', 'ai', 'Whether OpenAI compatible streaming is enabled', 1, 0),
     (6, 'crawler.default.chapter-count', '3', 'crawler', 'Default crawler chapter count', 1, 0),
-    (7, 'crawler.rank.refresh-days', '5', 'crawler', 'Rank refresh days', 1, 0),
-    (8, 'crawler.rank.force-cooldown-days', '2', 'crawler', 'Rank force refresh cooldown days', 1, 0),
-    (9, 'crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
-    (10, 'crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
-    (11, 'analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0);
+    (7, 'crawler.http.timeout-seconds', '20', 'crawler', 'Python crawler page fetch timeout in seconds', 1, 0),
+    (8, 'crawler.chapter.fetch-workers', '3', 'crawler', 'Python crawler chapter fetch workers', 1, 0),
+    (9, 'crawler.chapter.force-refresh.user-max-times', '3', 'crawler', 'Maximum chapter force refresh times for normal users in current rank cache window', 1, 0),
+    (10, 'crawler.rank.refresh-days', '5', 'crawler', 'Rank refresh days', 1, 0),
+    (11, 'crawler.rank.force-cooldown-days', '2', 'crawler', 'Rank force refresh cooldown days', 1, 0),
+    (12, 'crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
+    (13, 'crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
+    (14, 'analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0);
 
 INSERT INTO crawl_book (id, platform, platform_book_id, book_name, author, intro, book_url, deleted)
 VALUES

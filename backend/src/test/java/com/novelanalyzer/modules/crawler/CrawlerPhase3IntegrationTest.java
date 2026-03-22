@@ -68,7 +68,7 @@ class CrawlerPhase3IntegrationTest {
 
     @Test
     void shouldSyncBoardCatalogFromCrawler() throws Exception {
-        when(pythonCrawlerClient.fetchBoardCatalog("fanqie")).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchBoardCatalog("fanqie", 20)).thenReturn(List.of(
             boardItem("fanqie", "male-new", "男频新书榜", "urban-brain", "都市脑洞"),
             boardItem("fanqie", "male-read", "男频阅读榜", "urban-power", "都市高武")
         ));
@@ -94,8 +94,34 @@ class CrawlerPhase3IntegrationTest {
     }
 
     @Test
+    void shouldSaveAndReturnUserRankPreference() throws Exception {
+        String token = loginAndGetToken("writer", "writer123");
+
+        mockMvc.perform(post("/api/crawler/preference")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.platform").value("fanqie"))
+            .andExpect(jsonPath("$.data.channelCode").value("male-new"))
+            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"));
+
+        mockMvc.perform(get("/api/crawler/preference")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.userId").value(2))
+            .andExpect(jsonPath("$.data.channelCode").value("male-new"))
+            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"));
+    }
+
+    @Test
     void shouldCacheRankAndPersistData() throws Exception {
-        when(pythonCrawlerClient.fetchRank(anyString(), anyString())).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank(anyString(), anyString(), anyInt())).thenReturn(List.of(
             rankItem(1, "示例书1", "作者1", "https://fanqienovel.com/page/abc1"),
             rankItem(2, "示例书2", "作者2", "https://fanqienovel.com/page/abc2")
         ));
@@ -119,7 +145,7 @@ class CrawlerPhase3IntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.length()").value(2));
 
-        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-hot-a");
+        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-hot-a", 20);
         Integer rankCount = jdbcTemplate.queryForObject("SELECT COUNT(1) FROM crawl_rank", Integer.class);
         Integer bookCount = jdbcTemplate.queryForObject("SELECT COUNT(1) FROM crawl_book", Integer.class);
         assertThat(rankCount).isEqualTo(2);
@@ -130,11 +156,11 @@ class CrawlerPhase3IntegrationTest {
     void shouldFetchBookAndChapters() throws Exception {
         insertSystemConfig("crawler.book.refresh-days", "7");
 
-        when(pythonCrawlerClient.fetchRank(anyString(), anyString())).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank(anyString(), anyString(), anyInt())).thenReturn(List.of(
             rankItem(1, "示例书3", "作者3", "https://fanqienovel.com/page/abc3")
         ));
-        when(pythonCrawlerClient.fetchBook(anyString(), anyString())).thenReturn(bookDetail("https://fanqienovel.com/page/abc3"));
-        when(pythonCrawlerClient.fetchChapters(anyString(), anyString(), anyInt())).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchBook(anyString(), anyString(), anyInt())).thenReturn(bookDetail("https://fanqienovel.com/page/abc3"));
+        when(pythonCrawlerClient.fetchChapters(anyString(), anyString(), anyInt(), anyInt(), anyInt(), anyInt())).thenReturn(List.of(
             chapterItem(1, "第一章"),
             chapterItem(2, "第二章"),
             chapterItem(3, "第三章")
@@ -176,7 +202,7 @@ class CrawlerPhase3IntegrationTest {
         insertSystemConfig("crawler.rank.force-cooldown-days", "2");
         insertSystemConfig("crawler.rank.force-max-times", "2");
 
-        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain")).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 20)).thenReturn(List.of(
             rankItem(1, "Book 01", "Author 01", "https://fanqienovel.com/page/board-01"),
             rankItem(2, "Book 02", "Author 02", "https://fanqienovel.com/page/board-02"),
             rankItem(3, "Book 03", "Author 03", "https://fanqienovel.com/page/board-03"),
@@ -231,7 +257,7 @@ class CrawlerPhase3IntegrationTest {
             .andExpect(jsonPath("$.data.total").value(12))
             .andExpect(jsonPath("$.data.reused").value(true));
 
-        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-new", "urban-brain");
+        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-new", "urban-brain", 20);
     }
 
     @Test
@@ -254,7 +280,7 @@ class CrawlerPhase3IntegrationTest {
             "{\"platform\":\"fanqie\",\"channelCode\":\"male-read\",\"boardCode\":\"urban-power\",\"refreshMode\":\"FORCE\"}",
             2, LocalDateTime.now().minusHours(6), LocalDateTime.now().minusHours(6).plusMinutes(1));
 
-        when(pythonCrawlerClient.fetchRank("fanqie", "male-read", "urban-power")).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-read", "urban-power", 20)).thenReturn(List.of(
             rankItem(1, "Crawler Forced Book", "Crawler Author", "https://fanqienovel.com/page/crawler-force")
         ));
 
@@ -272,7 +298,7 @@ class CrawlerPhase3IntegrationTest {
             .andExpect(jsonPath("$.data.reused").value(true))
             .andExpect(jsonPath("$.data.refreshLimited").value(true));
 
-        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-read", "urban-power");
+        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-read", "urban-power", 20);
     }
 
     @Test
@@ -283,9 +309,9 @@ class CrawlerPhase3IntegrationTest {
         long bookId = insertBook("fanqie", "123456", "Repair Target", "Repair Author", "Repair Intro",
             "https://fanqienovel.com/page/invalid-old", lastCrawlTime);
 
-        when(pythonCrawlerClient.fetchBook("fanqie", "https://fanqienovel.com/page/invalid-old"))
+        when(pythonCrawlerClient.fetchBook("fanqie", "https://fanqienovel.com/page/invalid-old", 20))
             .thenThrow(new RuntimeException("invalid link"));
-        when(pythonCrawlerClient.fetchBook("fanqie", "https://fanqienovel.com/page/123456"))
+        when(pythonCrawlerClient.fetchBook("fanqie", "https://fanqienovel.com/page/123456", 20))
             .thenReturn(bookDetail("https://fanqienovel.com/page/123456"));
 
         String token = loginAndGetToken("admin", "admin123");
@@ -295,6 +321,230 @@ class CrawlerPhase3IntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.bookUrl").value("https://fanqienovel.com/page/123456"));
+    }
+
+    @Test
+    void shouldRefetchChaptersWhenPersistedChaptersAreStaleDescendingSnapshot() throws Exception {
+        insertSystemConfig("crawler.book.refresh-days", "7");
+
+        LocalDateTime lastCrawlTime = LocalDateTime.now().minusHours(2);
+        long bookId = insertBook(
+            "fanqie",
+            "repair-chapter-1",
+            "Repair Chapter Target",
+            "Repair Author",
+            "Repair Intro",
+            "https://fanqienovel.com/page/repair-chapter-1",
+            lastCrawlTime
+        );
+        insertChapter(bookId, 1, "第128章 潜入", "old chapter 128", lastCrawlTime);
+        insertChapter(bookId, 2, "第127章 计策", "old chapter 127", lastCrawlTime);
+        insertChapter(bookId, 3, "第126章 粮草大营", "old chapter 126", lastCrawlTime);
+
+        when(pythonCrawlerClient.fetchChapters("fanqie", "https://fanqienovel.com/page/repair-chapter-1", 3, 1, 20, 3))
+            .thenReturn(List.of(
+                chapterItem(1, "第1章 开局"),
+                chapterItem(2, "第2章 相遇"),
+                chapterItem(3, "第3章 启程")
+            ));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/chapters")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":3}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(3))
+            .andExpect(jsonPath("$.data[0].chapterTitle").value("第1章 开局"))
+            .andExpect(jsonPath("$.data[2].chapterTitle").value("第3章 启程"));
+
+        verify(pythonCrawlerClient, times(1))
+            .fetchChapters("fanqie", "https://fanqienovel.com/page/repair-chapter-1", 3, 1, 20, 3);
+    }
+
+    @Test
+    void shouldReuseStoredPrefixChaptersWithoutRecrawlingForSmallerRequest() throws Exception {
+        LocalDateTime crawlTime = LocalDateTime.now().minusHours(1);
+        long bookId = insertBook(
+            "fanqie",
+            "prefix-reuse-1",
+            "Prefix Reuse Book",
+            "Reuse Author",
+            "Reuse Intro",
+            "https://fanqienovel.com/page/prefix-reuse-1",
+            crawlTime
+        );
+        insertChapter(bookId, 1, "第1章 开局", "chapter 1", crawlTime);
+        insertChapter(bookId, 2, "第2章 相遇", "chapter 2", crawlTime);
+        insertChapter(bookId, 3, "第3章 启程", "chapter 3", crawlTime);
+        insertChapter(bookId, 4, "第4章 破局", "chapter 4", crawlTime);
+        insertChapter(bookId, 5, "第5章 收束", "chapter 5", crawlTime);
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/chapters")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":3}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(3))
+            .andExpect(jsonPath("$.data[0].chapterTitle").value("第1章 开局"))
+            .andExpect(jsonPath("$.data[2].chapterTitle").value("第3章 启程"));
+
+        verify(pythonCrawlerClient, times(0))
+            .fetchChapters(anyString(), anyString(), anyInt(), anyInt(), anyInt(), anyInt());
+    }
+
+    @Test
+    void shouldOnlyFetchMissingChapterRangeWhenExtendingStoredPrefix() throws Exception {
+        LocalDateTime crawlTime = LocalDateTime.now().minusHours(1);
+        long bookId = insertBook(
+            "fanqie",
+            "prefix-extend-1",
+            "Prefix Extend Book",
+            "Extend Author",
+            "Extend Intro",
+            "https://fanqienovel.com/page/prefix-extend-1",
+            crawlTime
+        );
+        insertChapter(bookId, 1, "第1章 开局", "chapter 1", crawlTime);
+        insertChapter(bookId, 2, "第2章 相遇", "chapter 2", crawlTime);
+        insertChapter(bookId, 3, "第3章 启程", "chapter 3", crawlTime);
+        insertChapter(bookId, 4, "第4章 破局", "chapter 4", crawlTime);
+        insertChapter(bookId, 5, "第5章 收束", "chapter 5", crawlTime);
+
+        when(pythonCrawlerClient.fetchChapters("fanqie", "https://fanqienovel.com/page/prefix-extend-1", 5, 6, 20, 3))
+            .thenReturn(List.of(
+                chapterItem(6, "第6章 转折"),
+                chapterItem(7, "第7章 深入"),
+                chapterItem(8, "第8章 对峙"),
+                chapterItem(9, "第9章 反转"),
+                chapterItem(10, "第10章 定局")
+            ));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/chapters")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":10}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(10))
+            .andExpect(jsonPath("$.data[0].chapterTitle").value("第1章 开局"))
+            .andExpect(jsonPath("$.data[9].chapterTitle").value("第10章 定局"));
+
+        verify(pythonCrawlerClient, times(1))
+            .fetchChapters("fanqie", "https://fanqienovel.com/page/prefix-extend-1", 5, 6, 20, 3);
+    }
+
+    @Test
+    void shouldForceRefreshChaptersAndReturnUsageStatsForNormalUser() throws Exception {
+        insertSystemConfig("crawler.chapter.force-refresh.user-max-times", "3");
+        insertSystemConfig("crawler.rank.refresh-days", "5");
+        LocalDateTime crawlTime = LocalDateTime.now().minusHours(1);
+        long bookId = insertBook(
+            "fanqie",
+            "force-refresh-user-1",
+            "Force Refresh User Book",
+            "User Author",
+            "User Intro",
+            "https://fanqienovel.com/page/force-refresh-user-1",
+            crawlTime
+        );
+        insertChapter(bookId, 1, "第1章 旧内容", "old chapter 1", crawlTime);
+        insertChapter(bookId, 2, "第2章 旧内容", "old chapter 2", crawlTime);
+        insertChapter(bookId, 3, "第3章 旧内容", "old chapter 3", crawlTime);
+
+        when(pythonCrawlerClient.fetchChapters("fanqie", "https://fanqienovel.com/page/force-refresh-user-1", 3, 1, 20, 3))
+            .thenReturn(List.of(
+                chapterItem(1, "第1章 新内容"),
+                chapterItem(2, "第2章 新内容"),
+                chapterItem(3, "第3章 新内容")
+            ));
+
+        String token = loginAndGetToken("writer", "writer123");
+        mockMvc.perform(post("/api/crawler/chapters/refresh")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":3}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.maxAllowedRefreshTimes").value(3))
+            .andExpect(jsonPath("$.data.usedRefreshTimes").value(1))
+            .andExpect(jsonPath("$.data.remainingRefreshTimes").value(2))
+            .andExpect(jsonPath("$.data.windowDays").value(5))
+            .andExpect(jsonPath("$.data.chapters[0].chapterTitle").value("第1章 新内容"))
+            .andExpect(jsonPath("$.data.chapters[2].chapterTitle").value("第3章 新内容"));
+
+        verify(pythonCrawlerClient, times(1))
+            .fetchChapters("fanqie", "https://fanqienovel.com/page/force-refresh-user-1", 3, 1, 20, 3);
+    }
+
+    @Test
+    void shouldRejectForceRefreshWhenNormalUserExceedsConfiguredLimit() throws Exception {
+        insertSystemConfig("crawler.chapter.force-refresh.user-max-times", "1");
+        insertSystemConfig("crawler.rank.refresh-days", "5");
+        LocalDateTime crawlTime = LocalDateTime.now().minusHours(1);
+        long bookId = insertBook(
+            "fanqie",
+            "force-refresh-limit-1",
+            "Force Refresh Limit Book",
+            "Limit Author",
+            "Limit Intro",
+            "https://fanqienovel.com/page/force-refresh-limit-1",
+            crawlTime
+        );
+        insertCrawlerTask(
+            "chapter_force_refresh",
+            "fanqie",
+            "{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":3,\"userId\":2,\"username\":\"writer\"}",
+            2,
+            LocalDateTime.now().minusHours(2),
+            LocalDateTime.now().minusHours(2).plusMinutes(1)
+        );
+
+        String token = loginAndGetToken("writer", "writer123");
+        mockMvc.perform(post("/api/crawler/chapters/refresh")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":3}"))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.code").value(429));
+
+        verify(pythonCrawlerClient, times(0))
+            .fetchChapters(anyString(), anyString(), anyInt(), anyInt(), anyInt(), anyInt());
+    }
+
+    @Test
+    void shouldUseFixedAdminRefreshLimitOfTwenty() throws Exception {
+        insertSystemConfig("crawler.chapter.force-refresh.user-max-times", "1");
+        insertSystemConfig("crawler.rank.refresh-days", "5");
+        LocalDateTime crawlTime = LocalDateTime.now().minusHours(1);
+        long bookId = insertBook(
+            "fanqie",
+            "force-refresh-admin-1",
+            "Force Refresh Admin Book",
+            "Admin Author",
+            "Admin Intro",
+            "https://fanqienovel.com/page/force-refresh-admin-1",
+            crawlTime
+        );
+
+        when(pythonCrawlerClient.fetchChapters("fanqie", "https://fanqienovel.com/page/force-refresh-admin-1", 1, 1, 20, 3))
+            .thenReturn(List.of(chapterItem(1, "第1章 管理员刷新")));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/chapters/refresh")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":1}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.maxAllowedRefreshTimes").value(20))
+            .andExpect(jsonPath("$.data.usedRefreshTimes").value(1))
+            .andExpect(jsonPath("$.data.remainingRefreshTimes").value(19))
+            .andExpect(jsonPath("$.data.chapters[0].chapterTitle").value("第1章 管理员刷新"));
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
@@ -492,6 +742,25 @@ class CrawlerPhase3IntegrationTest {
             Timestamp.valueOf(endTime),
             Timestamp.valueOf(endTime),
             Timestamp.valueOf(endTime)
+        );
+    }
+
+    private void insertChapter(long bookId,
+                               int chapterNo,
+                               String chapterTitle,
+                               String content,
+                               LocalDateTime crawlTime) {
+        jdbcTemplate.update(
+            "INSERT INTO crawl_chapter(platform, book_id, chapter_no, chapter_title, content, word_count, crawl_time, create_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "fanqie",
+            bookId,
+            chapterNo,
+            chapterTitle,
+            content,
+            content.length(),
+            Timestamp.valueOf(crawlTime),
+            Timestamp.valueOf(crawlTime),
+            0
         );
     }
 }

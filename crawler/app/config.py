@@ -8,6 +8,7 @@ class Settings(BaseModel):
     host: str = "0.0.0.0"
     port: int = 5000
     timeout_seconds: int = 20
+    chapter_fetch_workers: int = max(1, int(os.getenv("CRAWLER_CHAPTER_FETCH_WORKERS", "3")))
     internal_api_key: str = os.getenv("CRAWLER_INTERNAL_API_KEY", "")
     fanqie_base_url: str = "https://fanqienovel.com"
     fanqie_rank_url: str = "https://fanqienovel.com/rank?enter_from=menu"

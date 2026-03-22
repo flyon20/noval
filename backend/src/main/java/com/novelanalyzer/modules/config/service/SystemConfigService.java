@@ -8,10 +8,29 @@ import com.novelanalyzer.modules.config.repository.SystemConfigRepository;
 import com.novelanalyzer.modules.config.vo.SystemConfigVO;
 import org.springframework.stereotype.Service;
 
+import java.util.Map;
 import java.util.Optional;
 
 @Service
 public class SystemConfigService {
+
+    private static final Map<String, DefaultSystemConfig> DEFAULT_SYSTEM_CONFIGS = Map.ofEntries(
+        Map.entry("ai.provider.type", new DefaultSystemConfig("openai-compatible", "ai", "AI provider type", true)),
+        Map.entry("ai.timeout.millis", new DefaultSystemConfig("15000", "ai", "AI request timeout in milliseconds", true)),
+        Map.entry("ai.openai-compatible.base-url", new DefaultSystemConfig("", "ai", "OpenAI compatible base URL, blank means fallback to application config", true)),
+        Map.entry("ai.openai-compatible.default-model", new DefaultSystemConfig("deepseek-chat", "ai", "Default OpenAI compatible model name", true)),
+        Map.entry("ai.openai-compatible.streaming-enabled", new DefaultSystemConfig("false", "ai", "Whether OpenAI compatible streaming is enabled", true)),
+        Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "Default crawler chapter count", true)),
+        Map.entry("crawler.http.timeout-seconds", new DefaultSystemConfig("20", "crawler", "Python crawler page fetch timeout in seconds", true)),
+        Map.entry("crawler.chapter.fetch-workers", new DefaultSystemConfig("3", "crawler", "Python crawler chapter fetch workers", true)),
+        Map.entry("crawler.chapter.force-refresh.user-max-times", new DefaultSystemConfig("3", "crawler", "Maximum chapter force refresh times for normal users in current rank cache window", true)),
+        Map.entry("crawler.rank.refresh-days", new DefaultSystemConfig("5", "crawler", "Rank refresh days", true)),
+        Map.entry("crawler.rank.force-cooldown-days", new DefaultSystemConfig("2", "crawler", "Rank force refresh cooldown days", true)),
+        Map.entry("crawler.rank.force-max-times", new DefaultSystemConfig("2", "crawler", "Rank force refresh max times", true)),
+        Map.entry("crawler.book.refresh-days", new DefaultSystemConfig("7", "crawler", "Book refresh days", true)),
+        Map.entry("analysis.reanalyze.cooldown-hours", new DefaultSystemConfig("0", "analysis", "Analysis reanalyze cooldown hours", true)),
+        Map.entry("security.audit.enabled", new DefaultSystemConfig("true", "security", "Whether audit logging is enabled", true))
+    );
 
     private final SystemConfigRepository systemConfigRepository;
 
@@ -20,7 +39,7 @@ public class SystemConfigService {
     }
 
     public SystemConfigVO getByKey(String configKey) {
-        SystemConfigEntity entity = systemConfigRepository.findByKey(configKey)
+        SystemConfigEntity entity = findOrCreateDefaultConfig(configKey)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "system config not found"));
         return toVO(entity);
     }
@@ -41,7 +60,7 @@ public class SystemConfigService {
     }
 
     public String getValueOrDefault(String configKey, String defaultValue) {
-        return systemConfigRepository.findByKey(configKey)
+        return findOrCreateDefaultConfig(configKey)
             .map(SystemConfigEntity::getConfigValue)
             .filter(value -> value != null && !value.isBlank())
             .orElse(defaultValue);
@@ -100,5 +119,28 @@ public class SystemConfigService {
             return Optional.of(Boolean.FALSE);
         }
         return Optional.empty();
+    }
+
+    private Optional<SystemConfigEntity> findOrCreateDefaultConfig(String configKey) {
+        Optional<SystemConfigEntity> existing = systemConfigRepository.findByKey(configKey);
+        if (existing.isPresent()) {
+            return existing;
+        }
+
+        DefaultSystemConfig defaultConfig = DEFAULT_SYSTEM_CONFIGS.get(configKey);
+        if (defaultConfig == null) {
+            return Optional.empty();
+        }
+
+        SystemConfigEntity entity = new SystemConfigEntity();
+        entity.setConfigKey(configKey);
+        entity.setConfigValue(defaultConfig.configValue());
+        entity.setConfigType(defaultConfig.configType());
+        entity.setDescription(defaultConfig.description());
+        entity.setEditable(defaultConfig.editable() ? 1 : 0);
+        return Optional.of(systemConfigRepository.saveOrUpdate(entity));
+    }
+
+    private record DefaultSystemConfig(String configValue, String configType, String description, boolean editable) {
     }
 }

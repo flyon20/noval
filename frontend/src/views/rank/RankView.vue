@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive } from 'vue';
+import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { crawlerApi } from '@/api/crawler';
 import BookDetailDrawer from '@/components/rank/BookDetailDrawer.vue';
@@ -9,6 +10,7 @@ import { getErrorPayload } from '@/lib/http-error';
 import type {
   BookDetail,
   ChapterItem,
+  ChapterRefreshResult,
   RankBoardCatalog,
   RankBoardOption,
   RankBookItem,
@@ -30,6 +32,7 @@ const state = reactive({
   listLoading: false,
   detailLoading: false,
   chapterLoading: false,
+  chapterRefreshLoading: false,
   errorMessage: '',
   traceId: '',
   detailTraceId: '',
@@ -38,6 +41,7 @@ const state = reactive({
   rankList: [] as RankBookItem[],
   selectedBook: null as BookDetail | null,
   chapterPreview: [] as ChapterItem[],
+  chapterRefreshSummary: null as ChapterRefreshResult | null,
   detailOpen: false,
   chapterOpen: false,
   activeBookId: undefined as number | undefined,
@@ -93,8 +97,15 @@ async function initializePage() {
       return;
     }
 
-    filters.channelCode = firstChannel.channelCode;
-    filters.boardCode = firstBoard.boardCode;
+    const preference = await loadUserPreference();
+    const preferredChannel = preference
+      ? state.boardCatalog.find((item) => item.channelCode === preference.channelCode)
+      : null;
+    const preferredBoard = preferredChannel
+      ? preferredChannel.boards.find((item) => item.boardCode === preference.boardCode)
+      : null;
+    filters.channelCode = preferredChannel?.channelCode ?? firstChannel.channelCode;
+    filters.boardCode = preferredBoard?.boardCode ?? preferredChannel?.boards[0]?.boardCode ?? firstBoard.boardCode;
     await refreshCurrentBoard('AUTO');
   } catch (error) {
     applyListError(error, '榜单目录加载失败');
@@ -163,11 +174,13 @@ async function handleChannelChange(channelCode: string) {
   const nextBoard = nextChannel?.boards[0];
   filters.channelCode = channelCode;
   filters.boardCode = nextBoard?.boardCode ?? '';
+  await saveUserPreference();
   await refreshCurrentBoard('AUTO');
 }
 
 async function handleBoardChange(boardCode: string) {
   filters.boardCode = boardCode;
+  await saveUserPreference();
   await refreshCurrentBoard('AUTO');
 }
 
@@ -198,6 +211,7 @@ async function openChapters(row: RankBookItem) {
   state.chapterLoading = true;
   state.chapterTraceId = '';
   state.activeBookId = row.bookId;
+  state.chapterRefreshSummary = null;
 
   try {
     const response = await crawlerApi.getChapters({
@@ -214,6 +228,31 @@ async function openChapters(row: RankBookItem) {
     state.chapterTraceId = payload.traceId ?? '';
   } finally {
     state.chapterLoading = false;
+  }
+}
+
+async function refreshChapters() {
+  if (!state.activeBookId) {
+    return;
+  }
+
+  state.chapterRefreshLoading = true;
+  try {
+    const response = await crawlerApi.refreshChapters({
+      platform: filters.platform,
+      bookId: state.activeBookId,
+      chapterCount: filters.chapterCount,
+    });
+    state.chapterPreview = response.data.data.chapters;
+    state.chapterRefreshSummary = response.data.data;
+    state.chapterTraceId = response.data.traceId;
+    ElMessage.success('章节已重新抓取并更新缓存');
+  } catch (error) {
+    const payload = getErrorPayload(error);
+    state.chapterTraceId = payload.traceId ?? '';
+    ElMessage.error(payload.message ?? '重新抓取章节失败');
+  } finally {
+    state.chapterRefreshLoading = false;
   }
 }
 
@@ -246,6 +285,32 @@ function applyListError(error: unknown, fallbackMessage: string) {
   state.errorMessage = payload.message ?? fallbackMessage;
   state.traceId = payload.traceId ?? '';
   state.rankList = [];
+}
+
+async function loadUserPreference() {
+  try {
+    const response = await crawlerApi.getPreference({
+      platform: filters.platform,
+    });
+    return response.data.data;
+  } catch {
+    return null;
+  }
+}
+
+async function saveUserPreference() {
+  if (!filters.channelCode || !filters.boardCode) {
+    return;
+  }
+  try {
+    await crawlerApi.savePreference({
+      platform: filters.platform,
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+    });
+  } catch {
+    // Ignore preference write failures to avoid blocking rank browsing.
+  }
 }
 
 onMounted(() => {
@@ -389,9 +454,12 @@ onMounted(() => {
       :chapter-count="filters.chapterCount"
       :chapters="state.chapterPreview"
       :loading="state.chapterLoading"
+      :refresh-loading="state.chapterRefreshLoading"
+      :refresh-summary="state.chapterRefreshSummary"
       :platform="filters.platform"
       :trace-id="state.chapterTraceId"
       @go-analysis="goAnalysis"
+      @refresh-chapters="refreshChapters"
     />
   </section>
 </template>

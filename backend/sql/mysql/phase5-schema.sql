@@ -42,6 +42,19 @@ CREATE TABLE IF NOT EXISTS rank_snapshot (
     INDEX idx_rank_board_id (rank_board_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='rank snapshot';
 
+CREATE TABLE IF NOT EXISTS user_rank_preference (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'user rank preference id',
+    user_id BIGINT NOT NULL COMMENT 'user id',
+    platform VARCHAR(20) NOT NULL COMMENT 'platform',
+    channel_code VARCHAR(50) NOT NULL COMMENT 'channel code',
+    board_code VARCHAR(50) NOT NULL COMMENT 'board code',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    UNIQUE KEY uk_user_platform (user_id, platform),
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='user rank preference';
+
 ALTER TABLE crawl_rank
     ADD COLUMN IF NOT EXISTS snapshot_id BIGINT COMMENT 'rank snapshot id',
     ADD COLUMN IF NOT EXISTS channel_code VARCHAR(50) COMMENT 'channel code',

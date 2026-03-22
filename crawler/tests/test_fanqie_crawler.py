@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -12,11 +14,37 @@ from app.utils.parsers import extract_initial_state, html_to_text
 class StubHttpClient:
     def __init__(self, responses: dict[str, str]) -> None:
         self._responses = responses
+        self.calls: list[str] = []
+        self.timeout_seconds = 20
 
     def get_text(self, url: str) -> str:
+        self.calls.append(url)
         if url not in self._responses:
             raise AssertionError(f"unexpected url: {url}")
         return self._responses[url]
+
+
+class SlowTrackingHttpClient(StubHttpClient):
+    def __init__(self, responses: dict[str, str], delay_seconds: float = 0.15) -> None:
+        super().__init__(responses)
+        self.delay_seconds = delay_seconds
+        self.max_inflight = 0
+        self._inflight = 0
+        self._lock = threading.Lock()
+
+    def get_text(self, url: str) -> str:
+        self.calls.append(url)
+        if url not in self._responses:
+            raise AssertionError(f"unexpected url: {url}")
+        with self._lock:
+            self._inflight += 1
+            self.max_inflight = max(self.max_inflight, self._inflight)
+        try:
+            time.sleep(self.delay_seconds)
+            return self._responses[url]
+        finally:
+            with self._lock:
+                self._inflight -= 1
 
 
 class StubDecoder:
@@ -42,6 +70,16 @@ class StubRankCrawler:
 
 
 class FanqieCrawlerTest(unittest.TestCase):
+
+    def test_should_allow_runtime_overrides_for_timeout_and_workers(self) -> None:
+        crawler = FanqieCrawler(
+            decoder=StubDecoder(),
+            timeout_seconds=45,
+            chapter_fetch_workers=4,
+        )
+
+        self.assertEqual(4, crawler._chapter_fetch_workers)
+        self.assertEqual(45, crawler._http_client.timeout_seconds)
 
     def test_extract_initial_state(self) -> None:
         html = '<script>(function(){window.__INITIAL_STATE__={"rank":{"book_list":[{"bookId":"1"}]}};})()</script>'
@@ -273,6 +311,177 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertTrue(decoder.called)
         self.assertEqual("Decoded chapter content", chapters[0].content)
         self.assertFalse(any(0xE000 <= ord(ch) <= 0xF8FF for ch in chapters[0].content))
+
+    def test_fetch_chapters_should_follow_catalog_order_instead_of_unsorted_item_ids(self) -> None:
+        http_client = StubHttpClient(
+            {
+                "https://fanqienovel.com/page/101": (
+                    '<script>(function(){window.__INITIAL_STATE__={"page":{"bookId":"101","bookName":"Book A",'
+                    '"author":"Author A","abstract":"Intro A","itemIds":["c3","c1","c2","c4"],'
+                    '"chapterListWithVolume":[{"chapterList":['
+                    '{"itemId":"c1","title":"Chapter 1"},'
+                    '{"itemId":"c2","title":"Chapter 2"},'
+                    '{"itemId":"c3","title":"Chapter 3"},'
+                    '{"itemId":"c4","title":"Chapter 4"}'
+                    ']}]}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c1": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 1","content":"<p>Content 1</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c2": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 2","content":"<p>Content 2</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c3": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 3","content":"<p>Content 3</p>"}}};})()</script>'
+                ),
+            }
+        )
+        crawler = FanqieCrawler(http_client=http_client)
+
+        chapters = crawler.fetch_chapters("https://fanqienovel.com/page/101", 3)
+
+        self.assertEqual(["Chapter 1", "Chapter 2", "Chapter 3"], [item.chapterTitle for item in chapters])
+        self.assertEqual(
+            [
+                "https://fanqienovel.com/page/101",
+                "https://fanqienovel.com/reader/c1",
+                "https://fanqienovel.com/reader/c2",
+                "https://fanqienovel.com/reader/c3",
+            ],
+            http_client.calls,
+        )
+
+    def test_fetch_chapters_should_support_real_world_nested_volume_structure(self) -> None:
+        http_client = StubHttpClient(
+            {
+                "https://fanqienovel.com/page/101": (
+                    '<script>(function(){window.__INITIAL_STATE__={"page":{"bookId":"101","bookName":"Book A",'
+                    '"author":"Author A","abstract":"Intro A","itemIds":["c5","c4","c3","c2","c1"],'
+                    '"chapterListWithVolume":[['
+                    '{"itemId":"c1","title":"Chapter 1","realChapterOrder":"1"},'
+                    '{"itemId":"c2","title":"Chapter 2","realChapterOrder":"2"},'
+                    '{"itemId":"c3","title":"Chapter 3","realChapterOrder":"3"},'
+                    '{"itemId":"c4","title":"Chapter 4","realChapterOrder":"4"},'
+                    '{"itemId":"c5","title":"Chapter 5","realChapterOrder":"5"}'
+                    ']]}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c1": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 1","content":"<p>Content 1</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c2": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 2","content":"<p>Content 2</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c3": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 3","content":"<p>Content 3</p>"}}};})()</script>'
+                ),
+            }
+        )
+        crawler = FanqieCrawler(http_client=http_client)
+
+        chapters = crawler.fetch_chapters("https://fanqienovel.com/page/101", 3)
+
+        self.assertEqual(["Chapter 1", "Chapter 2", "Chapter 3"], [item.chapterTitle for item in chapters])
+
+    def test_fetch_chapters_should_only_fetch_missing_range_when_start_chapter_no_is_provided(self) -> None:
+        http_client = StubHttpClient(
+            {
+                "https://fanqienovel.com/page/101": (
+                    '<script>(function(){window.__INITIAL_STATE__={"page":{"bookId":"101","bookName":"Book A",'
+                    '"author":"Author A","abstract":"Intro A","chapterListWithVolume":[['
+                    '{"itemId":"c1","title":"Chapter 1","realChapterOrder":"1"},'
+                    '{"itemId":"c2","title":"Chapter 2","realChapterOrder":"2"},'
+                    '{"itemId":"c3","title":"Chapter 3","realChapterOrder":"3"},'
+                    '{"itemId":"c4","title":"Chapter 4","realChapterOrder":"4"},'
+                    '{"itemId":"c5","title":"Chapter 5","realChapterOrder":"5"},'
+                    '{"itemId":"c6","title":"Chapter 6","realChapterOrder":"6"},'
+                    '{"itemId":"c7","title":"Chapter 7","realChapterOrder":"7"},'
+                    '{"itemId":"c8","title":"Chapter 8","realChapterOrder":"8"},'
+                    '{"itemId":"c9","title":"Chapter 9","realChapterOrder":"9"},'
+                    '{"itemId":"c10","title":"Chapter 10","realChapterOrder":"10"}'
+                    ']]}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c6": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 6","content":"<p>Content 6</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c7": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 7","content":"<p>Content 7</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c8": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 8","content":"<p>Content 8</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c9": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 9","content":"<p>Content 9</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c10": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 10","content":"<p>Content 10</p>"}}};})()</script>'
+                ),
+            }
+        )
+        crawler = FanqieCrawler(http_client=http_client)
+
+        chapters = crawler.fetch_chapters("https://fanqienovel.com/page/101", 5, start_chapter_no=6)
+
+        self.assertEqual([6, 7, 8, 9, 10], [item.chapterNo for item in chapters])
+        self.assertEqual(["Chapter 6", "Chapter 7", "Chapter 8", "Chapter 9", "Chapter 10"], [item.chapterTitle for item in chapters])
+        self.assertEqual(
+            [
+                "https://fanqienovel.com/page/101",
+                "https://fanqienovel.com/reader/c6",
+                "https://fanqienovel.com/reader/c7",
+                "https://fanqienovel.com/reader/c8",
+                "https://fanqienovel.com/reader/c9",
+                "https://fanqienovel.com/reader/c10",
+            ],
+            http_client.calls,
+        )
+
+    def test_fetch_chapters_should_fetch_multiple_chapters_with_limited_parallelism(self) -> None:
+        http_client = SlowTrackingHttpClient(
+            {
+                "https://fanqienovel.com/page/101": (
+                    '<script>(function(){window.__INITIAL_STATE__={"page":{"bookId":"101","bookName":"Book A",'
+                    '"author":"Author A","abstract":"Intro A","chapterListWithVolume":[{"chapterList":['
+                    '{"itemId":"c1","title":"Chapter 1"},'
+                    '{"itemId":"c2","title":"Chapter 2"},'
+                    '{"itemId":"c3","title":"Chapter 3"},'
+                    '{"itemId":"c4","title":"Chapter 4"}'
+                    ']}]}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c1": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 1","content":"<p>Content 1</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c2": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 2","content":"<p>Content 2</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c3": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 3","content":"<p>Content 3</p>"}}};})()</script>'
+                ),
+                "https://fanqienovel.com/reader/c4": (
+                    '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                    '"title":"Chapter 4","content":"<p>Content 4</p>"}}};})()</script>'
+                ),
+            }
+        )
+        crawler = FanqieCrawler(http_client=http_client)
+
+        chapters = crawler.fetch_chapters("https://fanqienovel.com/page/101", 4)
+
+        self.assertEqual(["Chapter 1", "Chapter 2", "Chapter 3", "Chapter 4"], [item.chapterTitle for item in chapters])
+        self.assertGreaterEqual(http_client.max_inflight, 2)
 
 
 if __name__ == "__main__":

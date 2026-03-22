@@ -9,10 +9,13 @@ const push = vi.fn();
 vi.mock('@/api/crawler', () => ({
   crawlerApi: {
     getBoards: vi.fn(),
+    getPreference: vi.fn(),
+    savePreference: vi.fn(),
     refreshRankBoard: vi.fn(),
     getRankPage: vi.fn(),
     getBookDetail: vi.fn(),
     getChapters: vi.fn(),
+    refreshChapters: vi.fn(),
   },
 }));
 
@@ -20,9 +23,9 @@ function buildPageItems() {
   return Array.from({ length: 5 }, (_, index) => ({
     bookId: 1001 + index,
     rankNo: index + 1,
-    bookName: `书籍 ${index + 1}`,
-    author: `作者 ${index + 1}`,
-    intro: `简介 ${index + 1}`,
+    bookName: `Book ${index + 1}`,
+    author: `Author ${index + 1}`,
+    intro: `Intro ${index + 1}`,
     bookUrl: `https://book.test/${index + 1}`,
     platform: 'fanqie' as const,
     category: 'male-new:urban-brain',
@@ -45,10 +48,10 @@ describe('RankView', () => {
         data: [
           {
             channelCode: 'male-new',
-            channelName: '男频新书榜',
+            channelName: 'Male New',
             boards: [
-              { boardCode: 'urban-brain', boardName: '都市脑洞' },
-              { boardCode: 'urban-power', boardName: '都市高武' },
+              { boardCode: 'urban-brain', boardName: 'Urban Brain' },
+              { boardCode: 'urban-power', boardName: 'Urban Power' },
             ],
           },
         ],
@@ -90,6 +93,20 @@ describe('RankView', () => {
         traceId: 'trace-page',
       },
     });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          userId: 2,
+          platform: 'fanqie',
+          channelCode: 'male-new',
+          boardCode: 'urban-power',
+        },
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
 
     const router = createRouter({
       history: createMemoryHistory(),
@@ -107,21 +124,22 @@ describe('RankView', () => {
     await flushPromises();
 
     expect(crawlerApi.getBoards).toHaveBeenCalledWith({ platform: 'fanqie' });
+    expect(crawlerApi.getPreference).toHaveBeenCalledWith({ platform: 'fanqie' });
     expect(crawlerApi.refreshRankBoard).toHaveBeenCalledWith({
       platform: 'fanqie',
       channelCode: 'male-new',
-      boardCode: 'urban-brain',
+      boardCode: 'urban-power',
       refreshMode: 'AUTO',
     });
     expect(crawlerApi.getRankPage).toHaveBeenCalledWith({
       platform: 'fanqie',
       channelCode: 'male-new',
-      boardCode: 'urban-brain',
+      boardCode: 'urban-power',
       page: 1,
       pageSize: 5,
     });
-    expect(wrapper.text()).toContain('都市脑洞');
-    expect(wrapper.text()).toContain('书籍 1');
+    expect(wrapper.text()).toContain('Urban Power');
+    expect(wrapper.text()).toContain('Book 1');
   });
 
   test('manual refresh uses force mode and pagination only requests page data', async () => {
@@ -133,8 +151,8 @@ describe('RankView', () => {
         data: [
           {
             channelCode: 'male-new',
-            channelName: '男频新书榜',
-            boards: [{ boardCode: 'urban-brain', boardName: '都市脑洞' }],
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
           },
         ],
         timestamp: 1,
@@ -173,6 +191,29 @@ describe('RankView', () => {
         },
         timestamp: 1,
         traceId: 'trace-page',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 404,
+        message: 'not found',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    } as never);
+    vi.mocked(crawlerApi.savePreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          userId: 2,
+          platform: 'fanqie',
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+        },
+        timestamp: 1,
+        traceId: 'trace-save-preference',
       },
     });
 
@@ -222,9 +263,10 @@ describe('RankView', () => {
       page: 2,
       pageSize: 5,
     });
+
   });
 
-  test('opens detail and chapter flow from current page item', async () => {
+  test('opens detail, refreshes chapters, then navigates to analysis', async () => {
     const { crawlerApi } = await import('@/api/crawler');
     vi.mocked(crawlerApi.getBoards).mockResolvedValue({
       data: {
@@ -233,8 +275,8 @@ describe('RankView', () => {
         data: [
           {
             channelCode: 'male-new',
-            channelName: '男频新书榜',
-            boards: [{ boardCode: 'urban-brain', boardName: '都市脑洞' }],
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
           },
         ],
         timestamp: 1,
@@ -275,6 +317,29 @@ describe('RankView', () => {
         traceId: 'trace-page',
       },
     });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 404,
+        message: 'not found',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    } as never);
+    vi.mocked(crawlerApi.savePreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          userId: 2,
+          platform: 'fanqie',
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+        },
+        timestamp: 1,
+        traceId: 'trace-save-preference',
+      },
+    });
     vi.mocked(crawlerApi.getBookDetail).mockResolvedValue({
       data: {
         code: 200,
@@ -282,9 +347,9 @@ describe('RankView', () => {
         data: {
           bookId: 1001,
           platform: 'fanqie',
-          bookName: '书籍 1',
-          author: '作者 1',
-          intro: '长简介',
+          bookName: 'Book 1',
+          author: 'Author 1',
+          intro: 'Long intro',
           bookUrl: 'https://book.test/1',
         },
         timestamp: 1,
@@ -299,13 +364,36 @@ describe('RankView', () => {
           {
             bookId: 1001,
             chapterNo: 1,
-            chapterTitle: '第一章',
-            content: '正文',
+            chapterTitle: 'Chapter 1',
+            content: 'Old content',
             wordCount: 1234,
           },
         ],
         timestamp: 1,
         traceId: 'trace-chapters',
+      },
+    });
+    vi.mocked(crawlerApi.refreshChapters).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          chapters: [
+            {
+              bookId: 1001,
+              chapterNo: 1,
+              chapterTitle: 'Chapter 1 Refreshed',
+              content: 'New content',
+              wordCount: 1357,
+            },
+          ],
+          maxAllowedRefreshTimes: 3,
+          usedRefreshTimes: 1,
+          remainingRefreshTimes: 2,
+          windowDays: 5,
+        },
+        timestamp: 1,
+        traceId: 'trace-refresh-chapters',
       },
     });
 
@@ -331,8 +419,19 @@ describe('RankView', () => {
     await wrapper.get('[data-testid="rank-chapters-1001"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.text()).toContain('长简介');
-    expect(wrapper.text()).toContain('第一章');
+    expect(wrapper.text()).toContain('Long intro');
+    expect(wrapper.text()).toContain('Chapter 1');
+
+    await wrapper.get('[data-testid="refresh-chapters"]').trigger('click');
+    await flushPromises();
+
+    expect(crawlerApi.refreshChapters).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      bookId: 1001,
+      chapterCount: 3,
+    });
+    expect(wrapper.text()).toContain('Chapter 1 Refreshed');
+    expect(wrapper.text()).toContain('剩余 2');
 
     await wrapper.get('[data-testid="go-analysis"]').trigger('click');
 

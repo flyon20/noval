@@ -13,6 +13,8 @@ public class CrawlerRefreshPolicyService {
     private static final int DEFAULT_RANK_FORCE_COOLDOWN_DAYS = 2;
     private static final int DEFAULT_RANK_FORCE_MAX_TIMES = 2;
     private static final int DEFAULT_BOOK_REFRESH_DAYS = 7;
+    private static final int DEFAULT_CHAPTER_FORCE_REFRESH_USER_MAX_TIMES = 3;
+    private static final int MAX_CHAPTER_FORCE_REFRESH_TIMES = 20;
 
     private final SystemConfigService systemConfigService;
 
@@ -49,6 +51,26 @@ public class CrawlerRefreshPolicyService {
             return false;
         }
         return lastCrawlTime.isAfter(LocalDateTime.now().minusDays(getBookRefreshDays()));
+    }
+
+    public LocalDateTime chapterForceRefreshWindowStart() {
+        return LocalDateTime.now().minusDays(getRankRefreshDays());
+    }
+
+    public int chapterForceRefreshWindowDays() {
+        return getRankRefreshDays();
+    }
+
+    public int chapterForceRefreshUserMaxTimes() {
+        int configured = systemConfigService.getIntValueOrDefault(
+            "crawler.chapter.force-refresh.user-max-times",
+            DEFAULT_CHAPTER_FORCE_REFRESH_USER_MAX_TIMES
+        );
+        return Math.min(Math.max(configured, 0), MAX_CHAPTER_FORCE_REFRESH_TIMES);
+    }
+
+    public int chapterForceRefreshAdminMaxTimes() {
+        return MAX_CHAPTER_FORCE_REFRESH_TIMES;
     }
 
     private int getRankRefreshDays() {

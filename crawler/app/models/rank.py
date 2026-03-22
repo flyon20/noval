@@ -6,6 +6,7 @@ class RankRequest(BaseModel):
     category: str | None = None
     channelCode: str | None = None
     boardCode: str | None = None
+    timeoutSeconds: int | None = None
 
     @model_validator(mode="after")
     def validate_rank_locator(self) -> "RankRequest":

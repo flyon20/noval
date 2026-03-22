@@ -60,6 +60,15 @@ public class CrawlerCacheService {
         }
     }
 
+    public void evict(String key) {
+        try {
+            stringRedisTemplate.delete(key);
+        } catch (Exception ignored) {
+            // Redis unavailable, fallback to local cache.
+        }
+        localCache.remove(key);
+    }
+
     private String getJson(String key) {
         try {
             String redisValue = stringRedisTemplate.opsForValue().get(key);
@@ -83,4 +92,3 @@ public class CrawlerCacheService {
     private record LocalCacheEntry(String json, long expireAt) {
     }
 }
-

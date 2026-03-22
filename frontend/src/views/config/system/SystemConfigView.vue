@@ -7,33 +7,53 @@ import type { KnownSystemConfigKey, SystemConfig } from '@/types/config';
 const SYSTEM_CONFIG_KEYS: Array<{ key: KnownSystemConfigKey; label: string; hint: string }> = [
   {
     key: 'ai.provider.type',
-    label: 'AI 提供方类型',
-    hint: '控制分析请求优先使用的 AI Provider 类型。',
+    label: 'AI Provider Type',
+    hint: 'Choose the preferred AI provider used by backend analysis requests.',
   },
   {
     key: 'ai.timeout.millis',
-    label: 'AI 超时毫秒数',
-    hint: '控制 AI 调用的超时等待时间。',
+    label: 'AI Timeout (ms)',
+    hint: 'Control the timeout used by backend AI calls.',
   },
   {
     key: 'ai.openai-compatible.base-url',
-    label: 'OpenAI 兼容 Base URL',
-    hint: '留空时回退到后端应用配置中的默认地址。',
+    label: 'OpenAI-Compatible Base URL',
+    hint: 'Leave blank to use the backend application default.',
   },
   {
     key: 'ai.openai-compatible.default-model',
-    label: 'OpenAI 兼容默认模型',
-    hint: '配置 OpenAI 兼容 Provider 的默认模型名称。',
+    label: 'OpenAI-Compatible Default Model',
+    hint: 'Default model name used when prompt config does not override it.',
   },
   {
     key: 'ai.openai-compatible.streaming-enabled',
-    label: 'OpenAI 兼容流式开关',
-    hint: '控制 OpenAI 兼容 Provider 是否开启流式输出。',
+    label: 'OpenAI-Compatible Streaming',
+    hint: 'Toggle whether OpenAI-compatible streaming is enabled.',
   },
   {
     key: 'crawler.default.chapter-count',
-    label: '默认抓章数量',
-    hint: '控制扫榜页面默认抓取的章节数。',
+    label: 'Default Chapter Count',
+    hint: 'Default chapter count shown on the rank page.',
+  },
+  {
+    key: 'crawler.http.timeout-seconds',
+    label: 'Crawler HTTP Timeout (s)',
+    hint: 'Timeout used by the Python crawler when requesting Fanqie pages.',
+  },
+  {
+    key: 'crawler.chapter.fetch-workers',
+    label: 'Chapter Fetch Workers',
+    hint: 'Maximum parallel workers used for multi-chapter fetching.',
+  },
+  {
+    key: 'crawler.chapter.force-refresh.user-max-times',
+    label: 'User Chapter Refresh Limit',
+    hint: 'Maximum force-refresh times for normal users in the current rank cache window (capped at 20).',
+  },
+  {
+    key: 'crawler.rank.refresh-days',
+    label: 'Rank Cache Window (days)',
+    hint: 'Chapter force-refresh usage is counted within this same cache window.',
   },
 ];
 
@@ -64,7 +84,7 @@ async function loadConfigs() {
 
     items.value = responses;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '系统配置加载失败';
+    errorMessage.value = error instanceof Error ? error.message : 'Failed to load system config.';
   } finally {
     loading.value = false;
   }
@@ -89,9 +109,9 @@ async function saveItem(item: SystemConfigFormItem) {
     item.configType = updated.configType ?? undefined;
     item.description = updated.description ?? undefined;
     item.editable = updated.editable;
-    ElMessage.success(`${item.configKey} 已更新`);
+    ElMessage.success(`${item.configKey} updated`);
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '系统配置保存失败');
+    ElMessage.error(error instanceof Error ? error.message : 'Failed to save system config.');
   }
 }
 
@@ -106,7 +126,7 @@ onMounted(() => {
       <p class="system-config-page__eyebrow">System Config</p>
       <h2 class="system-config-page__title">系统配置</h2>
       <p class="system-config-page__subtitle">
-        当前前端固定管理 6 个系统配置 key，并对齐后端 `/api/config/system`。
+        当前前端固定管理 10 个系统配置 key，并对齐后端 `/api/config/system`。
       </p>
     </header>
 
@@ -132,12 +152,12 @@ onMounted(() => {
               {{
                 SYSTEM_CONFIG_KEYS.find((config) => config.key === item.configKey)?.hint ??
                 item.description ??
-                '暂无额外说明'
+                'No extra description.'
               }}
             </p>
           </div>
           <span class="system-config-page__badge">
-            {{ item.editable ? '可编辑' : '只读' }}
+            {{ item.editable ? 'Editable' : 'Read Only' }}
           </span>
         </div>
 
