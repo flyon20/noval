@@ -2,21 +2,43 @@
 const props = defineProps<{
   running: boolean;
   disabling?: boolean;
+  availableModels?: string[];
+  modelName?: string;
 }>();
 
 const emit = defineEmits<{
   stop: [];
   rerun: [];
   copy: [];
+  'update:modelName': [value: string];
 }>();
 
 function handleCopy() {
   emit('copy');
 }
+
+function handleModelChange(value: string) {
+  emit('update:modelName', value);
+}
 </script>
 
 <template>
   <div class="analysis-toolbar">
+    <el-select
+      v-if="props.availableModels && props.availableModels.length > 1"
+      :model-value="props.modelName"
+      class="analysis-toolbar__model-select"
+      placeholder="选择模型"
+      data-test="analysis-toolbar-model-select"
+      @update:model-value="handleModelChange"
+    >
+      <el-option
+        v-for="model in props.availableModels"
+        :key="model"
+        :label="model"
+        :value="model"
+      />
+    </el-select>
     <el-button
       plain
       type="warning"
@@ -48,5 +70,16 @@ function handleCopy() {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.analysis-toolbar__model-select {
+  width: 180px;
+}
+
+@media (max-width: 768px) {
+  .analysis-toolbar__model-select {
+    width: 100%;
+  }
 }
 </style>

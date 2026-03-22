@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus';
 import { onMounted, reactive, ref } from 'vue';
-import { promptConfigApi } from '@/api/config';
+import { promptConfigApi, systemConfigApi } from '@/api/config';
 import type { PromptConfig, PromptType } from '@/types/config';
 
 const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
@@ -96,8 +96,16 @@ async function handleSave() {
   }
 }
 
+const availableModels = ref<string[]>([]);
+
 onMounted(() => {
   void loadPromptConfig();
+  void systemConfigApi.getAvailableModels().then((res) => {
+    const models = res.data.data ?? [];
+    availableModels.value = models.includes('dify') ? models : ['dify', ...models];
+  }).catch(() => {
+    availableModels.value = ['dify'];
+  });
 });
 </script>
 
@@ -153,11 +161,22 @@ onMounted(() => {
         </el-form-item>
 
         <el-form-item label="模型名称">
-          <el-input
+          <el-select
             v-model="formState.modelName"
+            allow-create
+            filterable
+            default-first-option
             data-test="prompt-model-input"
-            placeholder="请输入模型名称"
-          />
+            placeholder="选择或输入模型名称"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="model in availableModels"
+              :key="model"
+              :label="model"
+              :value="model"
+            />
+          </el-select>
         </el-form-item>
 
         <el-form-item label="Temperature">

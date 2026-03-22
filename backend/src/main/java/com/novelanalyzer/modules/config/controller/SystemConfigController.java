@@ -15,10 +15,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @Validated
 @RestController
 @RequestMapping("/api/config")
-@RequireRole({"ADMIN"})
 public class SystemConfigController {
 
     private final SystemConfigService systemConfigService;
@@ -28,12 +29,20 @@ public class SystemConfigController {
     }
 
     @GetMapping("/system")
+    @RequireRole({"ADMIN"})
     public Result<SystemConfigVO> getSystemConfig(@RequestParam("configKey") @NotBlank String configKey) {
         return Result.success(systemConfigService.getByKey(configKey));
     }
 
     @PutMapping("/system")
+    @RequireRole({"ADMIN"})
     public Result<SystemConfigVO> updateSystemConfig(@Valid @RequestBody SystemConfigUpdateRequest request) {
         return Result.success(systemConfigService.save(request));
+    }
+
+    @GetMapping("/system/available-models")
+    @RequireRole({"ADMIN", "USER"})
+    public Result<List<String>> getAvailableModels() {
+        return Result.success(systemConfigService.getAvailableModels());
     }
 }

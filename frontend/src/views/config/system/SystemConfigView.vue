@@ -4,12 +4,17 @@ import { onMounted, ref } from 'vue';
 import { systemConfigApi } from '@/api/config';
 import type { KnownSystemConfigKey, SystemConfig } from '@/types/config';
 
+const PASSWORD_KEYS = new Set(['ai.openai-compatible.api-key']);
+const COMMA_LIST_KEYS = new Set(['ai.available-models']);
+
 const SYSTEM_CONFIG_KEYS: Array<{ key: KnownSystemConfigKey; label: string; hint: string }> = [
   { key: 'ai.provider.type', label: 'AI Provider Type', hint: '选择后端分析优先使用的 AI 提供方。' },
   { key: 'ai.timeout.millis', label: 'AI Timeout (ms)', hint: '控制 AI 请求超时。' },
+  { key: 'ai.openai-compatible.api-key', label: 'OpenAI-Compatible API Key', hint: 'API Key，保存后加密存储。' },
   { key: 'ai.openai-compatible.base-url', label: 'OpenAI-Compatible Base URL', hint: '留空则使用后端默认地址。' },
   { key: 'ai.openai-compatible.default-model', label: 'OpenAI-Compatible Default Model', hint: '默认模型名称。' },
   { key: 'ai.openai-compatible.streaming-enabled', label: 'OpenAI-Compatible Streaming', hint: '控制是否启用流式调用。' },
+  { key: 'ai.available-models', label: 'Available Models', hint: '可供用户选择的模型列表，多个模型用英文逗号分隔。' },
   { key: 'analysis.chunk.max-input-tokens', label: 'Analysis Chunk Max Tokens', hint: '单次分析允许的估算输入 Token 上限；超过后会自动切换为 LangChain4j 分段汇总。推荐值：6000。' },
   { key: 'analysis.chunk.target-input-tokens', label: 'Analysis Chunk Target Tokens', hint: '分段分析时每段的目标输入 Token 大小；数值越小分段越多。推荐值：3500。' },
   { key: 'crawler.default.chapter-count', label: 'Default Chapter Count', hint: '扫榜页默认抓章数量。' },
@@ -130,8 +135,11 @@ onMounted(() => {
           <el-input
             v-model="item.draftValue"
             :disabled="!item.editable"
+            :type="PASSWORD_KEYS.has(item.configKey) ? 'password' : 'text'"
+            :show-password="PASSWORD_KEYS.has(item.configKey)"
             :data-test="`system-config-value-${item.configKey}`"
           />
+          <p v-if="COMMA_LIST_KEYS.has(item.configKey)" style="margin: 0.3rem 0 0; font-size: 0.82rem; color: var(--color-text-muted);">多个模型用英文逗号分隔，例如：deepseek-chat,gpt-4o</p>
         </div>
 
         <div class="system-config-page__meta">

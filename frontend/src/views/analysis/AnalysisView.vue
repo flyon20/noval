@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus';
-import { computed, onBeforeUnmount, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { analysisApi } from '@/api/analysis';
+import { systemConfigApi, userConfigApi } from '@/api/config';
 import AnalysisContextBar from '@/components/analysis/AnalysisContextBar.vue';
 import AnalysisEmptyState from '@/components/analysis/AnalysisEmptyState.vue';
 import AnalysisModeTabs from '@/components/analysis/AnalysisModeTabs.vue';
@@ -13,6 +14,36 @@ import type { AnalysisType } from '@/types/analysis';
 
 const route = useRoute();
 const router = useRouter();
+
+const availableModels = ref<string[]>([]);
+const selectedModel = ref('');
+
+async function loadModelPreferences() {
+  try {
+    const [modelsRes, prefRes] = await Promise.all([
+      systemConfigApi.getAvailableModels(),
+      userConfigApi.get('ai.preferred-model'),
+    ]);
+    availableModels.value = modelsRes.data.data ?? [];
+    const preferred = prefRes.data.data?.configValue;
+    if (preferred && availableModels.value.includes(preferred)) {
+      selectedModel.value = preferred;
+    } else if (availableModels.value.length > 0) {
+      selectedModel.value = availableModels.value[0];
+    }
+  } catch {
+    // non-critical
+  }
+}
+
+async function handleModelChange(model: string) {
+  selectedModel.value = model;
+  try {
+    await userConfigApi.update({ configKey: 'ai.preferred-model', configValue: model });
+  } catch {
+    // non-critical
+  }
+}
 
 const modeLabelMap: Record<AnalysisType, string> = {
   deconstruct: '拆文分析',
@@ -131,6 +162,10 @@ watch(
   { immediate: true },
 );
 
+onMounted(() => {
+  void loadModelPreferences();
+});
+
 onBeforeUnmount(() => {
   analysis.stopAnalysis();
 });
@@ -190,11 +225,14 @@ async function goBack() {
             @update:model-value="handleModeChange"
           />
           <AnalysisToolbar
+            :available-models="availableModels"
             :disabling="!pageContext"
+            :model-name="selectedModel"
             :running="isRunning"
             @copy="handleCopy"
             @rerun="handleRerun"
             @stop="handleStop"
+            @update:model-name="handleModelChange"
           />
         </div>
 
@@ -257,6 +295,23 @@ async function goBack() {
 @media (max-width: 960px) {
   .analysis-page__hero {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .analysis-page {
+    gap: 0.75rem;
+  }
+
+  .analysis-page__hero,
+  .analysis-page__panel {
+    padding: 0.875rem;
+    border-radius: 1rem;
+    gap: 0.75rem;
+  }
+
+  .analysis-page__controls {
+    gap: 0.6rem;
   }
 }
 </style>

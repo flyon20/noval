@@ -6,6 +6,8 @@ import type {
   PromptType,
   SystemConfig,
   SystemConfigUpdateRequest,
+  UserConfig,
+  UserConfigUpdateRequest,
 } from '@/types/config';
 
 export const promptConfigApi = {
@@ -27,5 +29,19 @@ export const systemConfigApi = {
   },
   update(payload: SystemConfigUpdateRequest) {
     return httpClient.put<ApiResponse<SystemConfig>>('/api/config/system', payload);
+  },
+  getAvailableModels() {
+    return httpClient.get<ApiResponse<string[]>>('/api/config/system/available-models');
+  },
+};
+
+export const userConfigApi = {
+  get(configKey: string) {
+    return httpClient.get<ApiResponse<UserConfig>>('/api/config/user', {
+      params: { configKey },
+    });
+  },
+  update(payload: UserConfigUpdateRequest) {
+    return httpClient.put<ApiResponse<UserConfig>>('/api/config/user', payload);
   },
 };

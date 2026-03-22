@@ -8,6 +8,8 @@ import com.novelanalyzer.modules.config.repository.SystemConfigRepository;
 import com.novelanalyzer.modules.config.vo.SystemConfigVO;
 import org.springframework.stereotype.Service;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -19,7 +21,9 @@ public class SystemConfigService {
         Map.entry("ai.timeout.millis", new DefaultSystemConfig("15000", "ai", "AI request timeout in milliseconds", true)),
         Map.entry("ai.openai-compatible.base-url", new DefaultSystemConfig("", "ai", "OpenAI compatible base URL, blank means fallback to application config", true)),
         Map.entry("ai.openai-compatible.default-model", new DefaultSystemConfig("deepseek-chat", "ai", "Default OpenAI compatible model name", true)),
+        Map.entry("ai.openai-compatible.api-key", new DefaultSystemConfig("", "ai", "OpenAI compatible API key (stored in DB, takes precedence over env var)", true)),
         Map.entry("ai.openai-compatible.streaming-enabled", new DefaultSystemConfig("false", "ai", "Whether OpenAI compatible streaming is enabled", true)),
+        Map.entry("ai.available-models", new DefaultSystemConfig("deepseek-chat", "ai", "Comma-separated list of available AI models for user selection", true)),
         Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "Default crawler chapter count", true)),
         Map.entry("crawler.http.timeout-seconds", new DefaultSystemConfig("20", "crawler", "Python crawler page fetch timeout in seconds", true)),
         Map.entry("crawler.chapter.fetch-workers", new DefaultSystemConfig("3", "crawler", "Python crawler chapter fetch workers", true)),
@@ -81,6 +85,17 @@ public class SystemConfigService {
     public boolean getBooleanValueOrDefault(String configKey, boolean defaultValue) {
         return parseBoolean(getValueOrDefault(configKey, null))
             .orElse(defaultValue);
+    }
+
+    public List<String> getAvailableModels() {
+        String value = getValueOrDefault("ai.available-models", "");
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(value.split(","))
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .toList();
     }
 
     private SystemConfigVO toVO(SystemConfigEntity entity) {

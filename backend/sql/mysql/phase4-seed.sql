@@ -15,3 +15,9 @@ ON DUPLICATE KEY UPDATE
     is_default = VALUES(is_default),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO system_config (config_key, config_value, config_type, description, is_editable, deleted)
+VALUES ('ai.available-models', 'deepseek-chat', 'ai', 'Comma-separated list of available AI models', 1, 0)
+ON DUPLICATE KEY UPDATE
+    config_value = VALUES(config_value),
+    update_time = CURRENT_TIMESTAMP;

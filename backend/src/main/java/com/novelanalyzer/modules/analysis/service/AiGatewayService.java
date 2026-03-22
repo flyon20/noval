@@ -7,10 +7,12 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
-import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
+import com.novelanalyzer.modules.config.service.SystemConfigService;
+import com.novelanalyzer.modules.config.service.UserConfigService;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -36,15 +38,18 @@ public class AiGatewayService {
     private final RestTemplate aiRestTemplate;
     private final AiProperties aiProperties;
     private final SystemConfigService systemConfigService;
+    private final UserConfigService userConfigService;
     private final ObjectMapper objectMapper;
 
     public AiGatewayService(RestTemplate aiRestTemplate,
                             AiProperties aiProperties,
                             SystemConfigService systemConfigService,
+                            UserConfigService userConfigService,
                             ObjectMapper objectMapper) {
         this.aiRestTemplate = aiRestTemplate;
         this.aiProperties = aiProperties;
         this.systemConfigService = systemConfigService;
+        this.userConfigService = userConfigService;
         this.objectMapper = objectMapper;
     }
 
@@ -317,14 +322,27 @@ public class AiGatewayService {
     }
 
     private String resolveOpenAiCompatibleModelName(PromptConfigEntity promptConfig) {
+        // 1. prompt-level model (skip dify)
         String configuredModel = promptConfig.getModelName();
-        if (configuredModel == null || configuredModel.isBlank() || "dify".equalsIgnoreCase(configuredModel)) {
-            return systemConfigService.getValueOrDefault(
-                "ai.openai-compatible.default-model",
-                aiProperties.getOpenAiCompatible().getDefaultModel()
-            );
+        if (configuredModel != null && !configuredModel.isBlank() && !"dify".equalsIgnoreCase(configuredModel)) {
+            return configuredModel;
         }
-        return configuredModel;
+        // 2. user preference
+        try {
+            com.novelanalyzer.common.context.AuthUser authUser = AuthUserHolder.get();
+            if (authUser != null) {
+                String userModel = userConfigService.getValueForUser(authUser.getUserId(), "ai.preferred-model");
+                if (userModel != null && !userModel.isBlank()) {
+                    return userModel;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        // 3. system default
+        return systemConfigService.getValueOrDefault(
+            "ai.openai-compatible.default-model",
+            aiProperties.getOpenAiCompatible().getDefaultModel()
+        );
     }
 
     private String resolveSecretValue(String refName) {
