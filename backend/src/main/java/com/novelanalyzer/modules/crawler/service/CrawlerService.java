@@ -6,24 +6,36 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.crawler.client.PythonCrawlerClient;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookDetail;
 import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
+import com.novelanalyzer.modules.crawler.client.model.ExternalRankBoard;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerRankRequest;
 import com.novelanalyzer.modules.crawler.model.CrawlBookEntity;
 import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
+import com.novelanalyzer.modules.crawler.model.RankBoardEntity;
+import com.novelanalyzer.modules.crawler.model.RankSnapshotEntity;
 import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.crawler.vo.BookDetailVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
+import com.novelanalyzer.modules.crawler.vo.RankBoardCatalogVO;
+import com.novelanalyzer.modules.crawler.vo.RankBoardOptionVO;
 import com.novelanalyzer.modules.crawler.vo.RankBookItemVO;
+import com.novelanalyzer.modules.crawler.vo.RankPageVO;
+import com.novelanalyzer.modules.crawler.vo.RankRefreshResultVO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class CrawlerService {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(CrawlerService.class);
     private static final long RANK_TTL_SECONDS = 3L * 24 * 3600;
     private static final long BOOK_TTL_SECONDS = 7L * 24 * 3600;
     private static final long CHAPTER_TTL_SECONDS = 30L * 24 * 3600;
@@ -44,9 +56,13 @@ public class CrawlerService {
     }
 
     public List<RankBookItemVO> getRank(CrawlerRankRequest request) {
+        if (!request.hasLegacyCategory()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "legacy rank endpoint requires category");
+        }
         String refreshMode = crawlerRefreshPolicyService.normalizeRankRefreshMode(request.getRefreshMode());
         String cacheKey = "rank:" + request.getPlatform() + ":" + request.getCategory();
-        List<RankBookItemVO> cached = crawlerCacheService.get(cacheKey, new TypeReference<List<RankBookItemVO>>() {});
+        List<RankBookItemVO> cached = crawlerCacheService.get(cacheKey, new TypeReference<List<RankBookItemVO>>() {
+        });
         if (CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode) && cached != null) {
             return cached;
         }
@@ -58,7 +74,64 @@ public class CrawlerService {
             return response;
         }
 
-        return fetchAndPersistRank(request, refreshMode, cacheKey, latestSnapshot);
+        return fetchAndPersistLegacyRank(request, refreshMode, cacheKey, latestSnapshot);
+    }
+
+    public List<RankBoardCatalogVO> getBoardCatalog(String platform) {
+        List<ExternalRankBoard> boards = syncBoardCatalog(platform);
+        if (!boards.isEmpty()) {
+            return toBoardCatalogVos(boards);
+        }
+        return toBoardCatalogVosFromEntities(crawlerRepository.findRankBoards(platform));
+    }
+
+    public RankRefreshResultVO refreshRankBoard(CrawlerRankRequest request) {
+        requireBoardSelection(request);
+        String refreshMode = crawlerRefreshPolicyService.normalizeRankRefreshMode(request.getRefreshMode());
+        RankBoardEntity board = ensureRankBoard(request.getPlatform(), request.getChannelCode(), request.getBoardCode());
+        RankSnapshotEntity latestSnapshot = crawlerRepository.findLatestBoardSnapshot(board.getId()).orElse(null);
+        if (latestSnapshot != null && CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)
+            && crawlerRefreshPolicyService.shouldReuseRankSnapshot(latestSnapshot.getSnapshotTime())) {
+            return toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, false);
+        }
+        if (latestSnapshot != null && CrawlerRankRequest.REFRESH_MODE_FORCE.equals(refreshMode)) {
+            int recentForceCount = crawlerRepository.countRecentSuccessfulForceRefreshes(
+                request.getPlatform(),
+                request.getChannelCode(),
+                request.getBoardCode(),
+                crawlerRefreshPolicyService.forceRefreshWindowStart()
+            );
+            if (!crawlerRefreshPolicyService.allowForceRefresh(recentForceCount)) {
+                return toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, true);
+            }
+        }
+        return fetchAndPersistBoardRank(request, board, refreshMode, latestSnapshot);
+    }
+
+    public RankPageVO getRankPage(String platform,
+                                  String channelCode,
+                                  String boardCode,
+                                  Integer page,
+                                  Integer pageSize) {
+        RankBoardEntity board = crawlerRepository.findRankBoard(platform, channelCode, boardCode)
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank board not found"));
+        RankSnapshotEntity snapshot = crawlerRepository.findLatestBoardSnapshot(board.getId())
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found"));
+        int safePage = Math.max(page, 1);
+        int safePageSize = Math.max(pageSize, 1);
+        int offset = (safePage - 1) * safePageSize;
+        List<RankBookItemVO> items = crawlerRepository.findRankPageBySnapshot(snapshot.getId(), offset, safePageSize).stream()
+            .map(this::toRankVo)
+            .toList();
+
+        RankPageVO vo = new RankPageVO();
+        vo.setSnapshotId(snapshot.getId());
+        vo.setSnapshotTime(snapshot.getSnapshotTime());
+        vo.setTotal(resolveSnapshotTotal(snapshot));
+        vo.setPage(safePage);
+        vo.setPageSize(safePageSize);
+        vo.setItems(items);
+        return vo;
     }
 
     public BookDetailVO getBookDetail(String platform, Long bookId) {
@@ -110,38 +183,10 @@ public class CrawlerService {
         return result;
     }
 
-    private BookDetailVO toBookDetailVO(CrawlBookEntity book) {
-        BookDetailVO vo = new BookDetailVO();
-        vo.setBookId(book.getId());
-        vo.setPlatform(book.getPlatform());
-        vo.setBookName(book.getBookName());
-        vo.setAuthor(book.getAuthor());
-        vo.setIntro(book.getIntro());
-        vo.setBookUrl(book.getBookUrl());
-        return vo;
-    }
-
-    private boolean shouldReuseHistoricalSnapshot(String refreshMode,
-                                                  CrawlerRankRequest request,
-                                                  List<CrawlRankEntity> latestSnapshot) {
-        if (latestSnapshot.isEmpty()) {
-            return false;
-        }
-        if (CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)) {
-            return crawlerRefreshPolicyService.shouldReuseRankSnapshot(latestSnapshot.get(0).getCrawlTime());
-        }
-        int recentForceCount = crawlerRepository.countRecentSuccessfulForceRefreshes(
-            request.getPlatform(),
-            request.getCategory(),
-            crawlerRefreshPolicyService.forceRefreshWindowStart()
-        );
-        return !crawlerRefreshPolicyService.allowForceRefresh(recentForceCount);
-    }
-
-    private List<RankBookItemVO> fetchAndPersistRank(CrawlerRankRequest request,
-                                                     String refreshMode,
-                                                     String cacheKey,
-                                                     List<CrawlRankEntity> latestSnapshot) {
+    private List<RankBookItemVO> fetchAndPersistLegacyRank(CrawlerRankRequest request,
+                                                           String refreshMode,
+                                                           String cacheKey,
+                                                           List<CrawlRankEntity> latestSnapshot) {
         LocalDateTime startTime = LocalDateTime.now();
         try {
             List<ExternalRankItem> rankItems = pythonCrawlerClient.fetchRank(request.getPlatform(), request.getCategory());
@@ -201,6 +246,197 @@ public class CrawlerService {
         }
     }
 
+    private RankRefreshResultVO fetchAndPersistBoardRank(CrawlerRankRequest request,
+                                                         RankBoardEntity board,
+                                                         String refreshMode,
+                                                         RankSnapshotEntity latestSnapshot) {
+        LocalDateTime startTime = LocalDateTime.now();
+        try {
+            List<ExternalRankItem> rankItems = pythonCrawlerClient.fetchRank(
+                request.getPlatform(),
+                request.getChannelCode(),
+                request.getBoardCode()
+            );
+            LocalDateTime snapshotTime = LocalDateTime.now();
+            RankSnapshotEntity snapshot = crawlerRepository.saveRankSnapshot(board.getId(), snapshotTime, rankItems.size());
+            for (ExternalRankItem item : rankItems) {
+                Long bookId = crawlerRepository.saveOrUpdateBook(
+                    request.getPlatform(),
+                    item.getPlatformBookId(),
+                    item.getBookName(),
+                    item.getAuthor(),
+                    item.getIntro(),
+                    item.getBookUrl()
+                );
+                crawlerRepository.saveRankItem(
+                    request.getPlatform(),
+                    resolveCategory(request),
+                    request.getChannelCode(),
+                    request.getBoardCode(),
+                    snapshot.getId(),
+                    item.getRankNo(),
+                    bookId,
+                    item.getBookName(),
+                    item.getBookUrl(),
+                    item.getAuthor(),
+                    item.getIntro(),
+                    snapshotTime
+                );
+            }
+            crawlerRepository.saveRankRefreshTask(
+                request.getPlatform(),
+                request.getChannelCode(),
+                request.getBoardCode(),
+                refreshMode,
+                request.getForceReason(),
+                2,
+                null,
+                startTime,
+                LocalDateTime.now()
+            );
+            LOGGER.info("rank.refresh platform={} channelCode={} boardCode={} reused=false limited=false total={}",
+                request.getPlatform(), request.getChannelCode(), request.getBoardCode(), rankItems.size());
+            return toRefreshResult(request.getChannelCode(), request.getBoardCode(), snapshot, false, false);
+        } catch (RuntimeException ex) {
+            crawlerRepository.saveRankRefreshTask(
+                request.getPlatform(),
+                request.getChannelCode(),
+                request.getBoardCode(),
+                refreshMode,
+                request.getForceReason(),
+                3,
+                ex.getMessage(),
+                startTime,
+                LocalDateTime.now()
+            );
+            if (latestSnapshot != null) {
+                LOGGER.warn("rank.refresh fallback platform={} channelCode={} boardCode={} reason={}",
+                    request.getPlatform(), request.getChannelCode(), request.getBoardCode(), ex.getMessage());
+                return toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, false);
+            }
+            throw ex;
+        }
+    }
+
+    private List<ExternalRankBoard> syncBoardCatalog(String platform) {
+        List<ExternalRankBoard> boards = pythonCrawlerClient.fetchBoardCatalog(platform);
+        if (boards == null || boards.isEmpty()) {
+            return List.of();
+        }
+        for (ExternalRankBoard board : boards) {
+            crawlerRepository.saveOrUpdateRankBoard(
+                platform,
+                board.getChannelCode(),
+                defaultIfBlank(board.getChannelName(), board.getChannelCode()),
+                board.getBoardCode(),
+                defaultIfBlank(board.getBoardName(), board.getBoardCode())
+            );
+        }
+        return boards;
+    }
+
+    private RankBoardEntity ensureRankBoard(String platform, String channelCode, String boardCode) {
+        RankBoardEntity existing = crawlerRepository.findRankBoard(platform, channelCode, boardCode).orElse(null);
+        if (existing != null) {
+            return existing;
+        }
+        syncBoardCatalog(platform);
+        return crawlerRepository.findRankBoard(platform, channelCode, boardCode)
+            .orElseGet(() -> crawlerRepository.saveOrUpdateRankBoard(platform, channelCode, channelCode, boardCode, boardCode));
+    }
+
+    private void requireBoardSelection(CrawlerRankRequest request) {
+        if (!request.hasBoardSelection()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "channelCode and boardCode are required");
+        }
+    }
+
+    private boolean shouldReuseHistoricalSnapshot(String refreshMode,
+                                                  CrawlerRankRequest request,
+                                                  List<CrawlRankEntity> latestSnapshot) {
+        if (latestSnapshot.isEmpty()) {
+            return false;
+        }
+        if (CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)) {
+            return crawlerRefreshPolicyService.shouldReuseRankSnapshot(latestSnapshot.get(0).getCrawlTime());
+        }
+        int recentForceCount = crawlerRepository.countRecentSuccessfulForceRefreshes(
+            request.getPlatform(),
+            request.getCategory(),
+            crawlerRefreshPolicyService.forceRefreshWindowStart()
+        );
+        return !crawlerRefreshPolicyService.allowForceRefresh(recentForceCount);
+    }
+
+    private RankRefreshResultVO toRefreshResult(String channelCode,
+                                                String boardCode,
+                                                RankSnapshotEntity snapshot,
+                                                boolean reused,
+                                                boolean refreshLimited) {
+        RankRefreshResultVO vo = new RankRefreshResultVO();
+        vo.setChannelCode(channelCode);
+        vo.setBoardCode(boardCode);
+        vo.setSnapshotId(snapshot.getId());
+        vo.setSnapshotTime(snapshot.getSnapshotTime());
+        vo.setTotal(resolveSnapshotTotal(snapshot));
+        vo.setReused(reused);
+        vo.setRefreshLimited(refreshLimited);
+        vo.setAnalysisTriggered(Boolean.FALSE);
+        return vo;
+    }
+
+    private int resolveSnapshotTotal(RankSnapshotEntity snapshot) {
+        if (snapshot.getRecordCount() != null && snapshot.getRecordCount() > 0) {
+            return snapshot.getRecordCount();
+        }
+        return crawlerRepository.countRanksBySnapshot(snapshot.getId());
+    }
+
+    private List<RankBoardCatalogVO> toBoardCatalogVos(List<ExternalRankBoard> boards) {
+        Map<String, RankBoardCatalogVO> channels = new LinkedHashMap<>();
+        for (ExternalRankBoard board : boards) {
+            RankBoardCatalogVO channel = channels.computeIfAbsent(board.getChannelCode(), key -> {
+                RankBoardCatalogVO vo = new RankBoardCatalogVO();
+                vo.setChannelCode(board.getChannelCode());
+                vo.setChannelName(defaultIfBlank(board.getChannelName(), board.getChannelCode()));
+                return vo;
+            });
+            RankBoardOptionVO boardVo = new RankBoardOptionVO();
+            boardVo.setBoardCode(board.getBoardCode());
+            boardVo.setBoardName(defaultIfBlank(board.getBoardName(), board.getBoardCode()));
+            channel.getBoards().add(boardVo);
+        }
+        return new ArrayList<>(channels.values());
+    }
+
+    private List<RankBoardCatalogVO> toBoardCatalogVosFromEntities(List<RankBoardEntity> boards) {
+        Map<String, RankBoardCatalogVO> channels = new LinkedHashMap<>();
+        for (RankBoardEntity board : boards) {
+            RankBoardCatalogVO channel = channels.computeIfAbsent(board.getChannelCode(), key -> {
+                RankBoardCatalogVO vo = new RankBoardCatalogVO();
+                vo.setChannelCode(board.getChannelCode());
+                vo.setChannelName(defaultIfBlank(board.getDescription(), board.getChannelCode()));
+                return vo;
+            });
+            RankBoardOptionVO boardVo = new RankBoardOptionVO();
+            boardVo.setBoardCode(board.getBoardCode());
+            boardVo.setBoardName(defaultIfBlank(board.getBoardName(), board.getBoardCode()));
+            channel.getBoards().add(boardVo);
+        }
+        return new ArrayList<>(channels.values());
+    }
+
+    private BookDetailVO toBookDetailVO(CrawlBookEntity book) {
+        BookDetailVO vo = new BookDetailVO();
+        vo.setBookId(book.getId());
+        vo.setPlatform(book.getPlatform());
+        vo.setBookName(book.getBookName());
+        vo.setAuthor(book.getAuthor());
+        vo.setIntro(book.getIntro());
+        vo.setBookUrl(book.getBookUrl());
+        return vo;
+    }
+
     private RankBookItemVO toRankVo(ExternalRankItem item, Long bookId, CrawlerRankRequest request) {
         RankBookItemVO vo = new RankBookItemVO();
         vo.setBookId(bookId);
@@ -214,19 +450,21 @@ public class CrawlerService {
         return vo;
     }
 
+    private RankBookItemVO toRankVo(CrawlRankEntity item) {
+        RankBookItemVO vo = new RankBookItemVO();
+        vo.setBookId(item.getBookId());
+        vo.setRankNo(item.getRankNo());
+        vo.setBookName(item.getBookName());
+        vo.setAuthor(item.getAuthor());
+        vo.setIntro(item.getIntro());
+        vo.setBookUrl(item.getBookUrl());
+        vo.setPlatform(item.getPlatform());
+        vo.setCategory(item.getCategory());
+        return vo;
+    }
+
     private List<RankBookItemVO> toRankVos(List<CrawlRankEntity> snapshot) {
-        return snapshot.stream().map(item -> {
-            RankBookItemVO vo = new RankBookItemVO();
-            vo.setBookId(item.getBookId());
-            vo.setRankNo(item.getRankNo());
-            vo.setBookName(item.getBookName());
-            vo.setAuthor(item.getAuthor());
-            vo.setIntro(item.getIntro());
-            vo.setBookUrl(item.getBookUrl());
-            vo.setPlatform(item.getPlatform());
-            vo.setCategory(item.getCategory());
-            return vo;
-        }).toList();
+        return snapshot.stream().map(this::toRankVo).toList();
     }
 
     private boolean hasBookDetail(CrawlBookEntity book) {
@@ -285,5 +523,16 @@ public class CrawlerService {
             }
         }
         return candidates;
+    }
+
+    private String resolveCategory(CrawlerRankRequest request) {
+        if (request.hasLegacyCategory()) {
+            return request.getCategory();
+        }
+        return request.getChannelCode() + ":" + request.getBoardCode();
+    }
+
+    private String defaultIfBlank(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
     }
 }

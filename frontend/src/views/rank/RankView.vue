@@ -1,18 +1,28 @@
 <script setup lang="ts">
-import { onMounted, reactive } from 'vue';
+import { computed, onMounted, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { crawlerApi } from '@/api/crawler';
 import BookDetailDrawer from '@/components/rank/BookDetailDrawer.vue';
 import ChapterPreviewDrawer from '@/components/rank/ChapterPreviewDrawer.vue';
-import { DEFAULT_PLATFORM, DEFAULT_RANK_CATEGORY } from '@/constants/crawler';
+import { CHAPTER_COUNT_OPTIONS, DEFAULT_PLATFORM, DEFAULT_RANK_PAGE_SIZE } from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
-import type { BookDetail, ChapterItem, KnownRankCategory, RankBookItem, UiChapterCount } from '@/types/crawler';
+import type {
+  BookDetail,
+  ChapterItem,
+  RankBoardCatalog,
+  RankBoardOption,
+  RankBookItem,
+  RankPageResult,
+  RankRefreshResult,
+  UiChapterCount,
+} from '@/types/crawler';
 
 const router = useRouter();
 
 const filters = reactive({
   platform: DEFAULT_PLATFORM,
-  category: DEFAULT_RANK_CATEGORY as KnownRankCategory,
+  channelCode: '',
+  boardCode: '',
   chapterCount: 3 as UiChapterCount,
 });
 
@@ -24,34 +34,145 @@ const state = reactive({
   traceId: '',
   detailTraceId: '',
   chapterTraceId: '',
+  boardCatalog: [] as RankBoardCatalog[],
   rankList: [] as RankBookItem[],
   selectedBook: null as BookDetail | null,
   chapterPreview: [] as ChapterItem[],
   detailOpen: false,
   chapterOpen: false,
   activeBookId: undefined as number | undefined,
+  page: 1,
+  pageSize: DEFAULT_RANK_PAGE_SIZE,
+  total: 0,
+  snapshotId: undefined as number | undefined,
+  snapshotTime: '',
+  refreshInfo: null as RankRefreshResult | null,
 });
 
-async function loadRank() {
+const channelOptions = computed(() => state.boardCatalog);
+
+const boardOptions = computed<RankBoardOption[]>(() => {
+  return state.boardCatalog.find((item) => item.channelCode === filters.channelCode)?.boards ?? [];
+});
+
+const selectedChannelName = computed(() => {
+  return state.boardCatalog.find((item) => item.channelCode === filters.channelCode)?.channelName ?? '未选择频道';
+});
+
+const selectedBoardName = computed(() => {
+  return boardOptions.value.find((item) => item.boardCode === filters.boardCode)?.boardName ?? '未选择榜单';
+});
+
+const refreshStatusText = computed(() => {
+  if (!state.refreshInfo) {
+    return '等待加载';
+  }
+  if (state.refreshInfo.refreshLimited) {
+    return '已命中抓取限制，复用最近快照';
+  }
+  return state.refreshInfo.reused ? '已复用缓存快照' : '已刷新最新整榜';
+});
+
+async function initializePage() {
   state.listLoading = true;
   state.errorMessage = '';
   state.traceId = '';
 
   try {
-    const response = await crawlerApi.getRank({
+    const response = await crawlerApi.getBoards({
       platform: filters.platform,
-      category: filters.category,
     });
-
-    state.rankList = response.data.data;
+    state.boardCatalog = response.data.data;
     state.traceId = response.data.traceId;
+
+    const firstChannel = state.boardCatalog[0];
+    const firstBoard = firstChannel?.boards[0];
+    if (!firstChannel || !firstBoard) {
+      state.rankList = [];
+      state.total = 0;
+      return;
+    }
+
+    filters.channelCode = firstChannel.channelCode;
+    filters.boardCode = firstBoard.boardCode;
+    await refreshCurrentBoard('AUTO');
   } catch (error) {
-    const payload = getErrorPayload(error);
-    state.errorMessage = payload.message ?? '榜单加载失败';
-    state.traceId = payload.traceId ?? '';
+    applyListError(error, '榜单目录加载失败');
   } finally {
     state.listLoading = false;
   }
+}
+
+async function refreshCurrentBoard(refreshMode: 'AUTO' | 'FORCE') {
+  if (!filters.channelCode || !filters.boardCode) {
+    return;
+  }
+
+  state.listLoading = true;
+  state.errorMessage = '';
+
+  try {
+    const refreshResponse = await crawlerApi.refreshRankBoard({
+      platform: filters.platform,
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+      refreshMode,
+    });
+    state.refreshInfo = refreshResponse.data.data;
+    state.traceId = refreshResponse.data.traceId;
+    state.page = 1;
+    await fetchRankPage(1, true);
+  } catch (error) {
+    applyListError(error, '榜单抓取失败');
+  } finally {
+    state.listLoading = false;
+  }
+}
+
+async function fetchRankPage(page: number, keepLoading = false) {
+  if (!filters.channelCode || !filters.boardCode) {
+    return;
+  }
+
+  if (!keepLoading) {
+    state.listLoading = true;
+    state.errorMessage = '';
+  }
+
+  try {
+    const response = await crawlerApi.getRankPage({
+      platform: filters.platform,
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+      page,
+      pageSize: state.pageSize,
+    });
+    applyPageResult(response.data.data);
+    state.traceId = response.data.traceId;
+  } catch (error) {
+    applyListError(error, '榜单分页加载失败');
+  } finally {
+    if (!keepLoading) {
+      state.listLoading = false;
+    }
+  }
+}
+
+async function handleChannelChange(channelCode: string) {
+  const nextChannel = state.boardCatalog.find((item) => item.channelCode === channelCode);
+  const nextBoard = nextChannel?.boards[0];
+  filters.channelCode = channelCode;
+  filters.boardCode = nextBoard?.boardCode ?? '';
+  await refreshCurrentBoard('AUTO');
+}
+
+async function handleBoardChange(boardCode: string) {
+  filters.boardCode = boardCode;
+  await refreshCurrentBoard('AUTO');
+}
+
+async function handlePageChange(page: number) {
+  await fetchRankPage(page);
 }
 
 async function openDetail(row: RankBookItem) {
@@ -111,8 +232,24 @@ async function goAnalysis() {
   });
 }
 
+function applyPageResult(pageResult: RankPageResult) {
+  state.rankList = pageResult.items;
+  state.page = pageResult.page;
+  state.pageSize = pageResult.pageSize;
+  state.total = pageResult.total;
+  state.snapshotId = pageResult.snapshotId;
+  state.snapshotTime = pageResult.snapshotTime ?? '';
+}
+
+function applyListError(error: unknown, fallbackMessage: string) {
+  const payload = getErrorPayload(error);
+  state.errorMessage = payload.message ?? fallbackMessage;
+  state.traceId = payload.traceId ?? '';
+  state.rankList = [];
+}
+
 onMounted(() => {
-  void loadRank();
+  void initializePage();
 });
 </script>
 
@@ -121,29 +258,65 @@ onMounted(() => {
     <header class="rank-page__hero">
       <div>
         <p>扫描榜单</p>
-        <h1>把榜单、书籍详情和抓章入口放到同一页里</h1>
+        <h1>按频道和榜单整榜抓取，翻页只读取数据库快照</h1>
       </div>
-      <span class="rank-page__badge">平台固定：{{ filters.platform }}</span>
+      <span class="rank-page__badge">{{ selectedChannelName }} / {{ selectedBoardName }}</span>
     </header>
 
     <section class="rank-page__card">
-      <form class="rank-page__toolbar" @submit.prevent="loadRank">
-        <el-form-item label="榜单分类">
-          <el-select v-model="filters.category" style="width: 180px">
-            <el-option label="男频热门 A" value="male-hot-a" />
-            <el-option label="男频热门 B" value="male-hot-b" />
-            <el-option label="男频新书 A" value="male-new-a" />
+      <div class="rank-page__toolbar">
+        <el-form-item label="频道">
+          <el-select
+            v-model="filters.channelCode"
+            style="width: 180px"
+            @change="handleChannelChange"
+          >
+            <el-option
+              v-for="channel in channelOptions"
+              :key="channel.channelCode"
+              :label="channel.channelName"
+              :value="channel.channelCode"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="榜单">
+          <el-select
+            v-model="filters.boardCode"
+            style="width: 200px"
+            @change="handleBoardChange"
+          >
+            <el-option
+              v-for="board in boardOptions"
+              :key="board.boardCode"
+              :label="board.boardName"
+              :value="board.boardCode"
+            />
           </el-select>
         </el-form-item>
 
         <el-form-item label="抓章数量">
-          <el-segmented v-model="filters.chapterCount" :options="[1, 3, 5, 10]" />
+          <el-segmented v-model="filters.chapterCount" :options="CHAPTER_COUNT_OPTIONS" />
         </el-form-item>
 
         <div class="rank-page__toolbar-actions">
-          <el-button :loading="state.listLoading" native-type="submit" type="primary">重新扫榜</el-button>
+          <el-button
+            data-testid="rank-force-refresh"
+            :loading="state.listLoading"
+            type="primary"
+            @click="refreshCurrentBoard('FORCE')"
+          >
+            重新抓取
+          </el-button>
         </div>
-      </form>
+      </div>
+
+      <div class="rank-page__summary">
+        <span>快照ID：{{ state.snapshotId ?? '-' }}</span>
+        <span>更新时间：{{ state.snapshotTime || '-' }}</span>
+        <span>总书数：{{ state.total }}</span>
+        <span>{{ refreshStatusText }}</span>
+      </div>
 
       <el-alert
         v-if="state.errorMessage"
@@ -191,6 +364,16 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
+
+      <el-pagination
+        v-if="state.total > 0"
+        :current-page="state.page"
+        :page-size="state.pageSize"
+        :total="state.total"
+        background
+        layout="prev, pager, next"
+        @current-change="handlePageChange"
+      />
     </section>
 
     <BookDetailDrawer
@@ -248,7 +431,7 @@ onMounted(() => {
 }
 
 .rank-page__hero h1 {
-  max-width: 18ch;
+  max-width: 16ch;
   margin-top: 0.35rem;
   font-size: clamp(1.8rem, 3vw, 2.7rem);
   line-height: 1.15;
@@ -281,6 +464,14 @@ onMounted(() => {
 
 .rank-page__toolbar-actions {
   margin-left: auto;
+}
+
+.rank-page__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  color: var(--color-text-muted);
+  font-size: 0.92rem;
 }
 
 .rank-page__alert {

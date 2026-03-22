@@ -7,15 +7,18 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.config.CrawlerProperties;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookDetail;
 import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
+import com.novelanalyzer.modules.crawler.client.model.ExternalRankBoard;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
 import com.novelanalyzer.modules.crawler.client.model.PythonResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,6 +61,51 @@ public class PythonCrawlerClient {
         } catch (Exception ex) {
             LOGGER.warn("crawler rank call failed, using fallback: {}", ex.getMessage());
             return buildFallbackRank(platform, category);
+        }
+    }
+
+    public List<ExternalRankItem> fetchRank(String platform, String channelCode, String boardCode) {
+        try {
+            Map<String, Object> request = new HashMap<>();
+            request.put("platform", platform);
+            request.put("channelCode", channelCode);
+            request.put("boardCode", boardCode);
+            PythonResult result = crawlerRestTemplate.postForEntity(
+                crawlerProperties.getBaseUrl() + "/internal/rank",
+                buildRequestEntity(request),
+                PythonResult.class
+            ).getBody();
+            if (result == null || result.getCode() == null || result.getCode() != 200) {
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "crawler rank call failed");
+            }
+            return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalRankItem>>() {
+            });
+        } catch (Exception ex) {
+            LOGGER.warn("crawler board rank call failed, using fallback: {}", ex.getMessage());
+            return buildFallbackRank(platform, channelCode + "-" + boardCode);
+        }
+    }
+
+    public List<ExternalRankBoard> fetchBoardCatalog(String platform) {
+        try {
+            String url = UriComponentsBuilder
+                .fromHttpUrl(crawlerProperties.getBaseUrl() + "/internal/board-catalog")
+                .queryParam("platform", platform)
+                .toUriString();
+            PythonResult result = crawlerRestTemplate.exchange(
+                url,
+                HttpMethod.GET,
+                buildRequestEntity(null),
+                PythonResult.class
+            ).getBody();
+            if (result == null || result.getCode() == null || result.getCode() != 200) {
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "crawler board catalog call failed");
+            }
+            return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalRankBoard>>() {
+            });
+        } catch (Exception ex) {
+            LOGGER.warn("crawler board catalog call failed, using fallback: {}", ex.getMessage());
+            return buildFallbackBoardCatalog(platform);
         }
     }
 
@@ -128,6 +176,26 @@ public class PythonCrawlerClient {
         second.setIntro("本数据为本地兜底样例，用于联调。");
         second.setBookUrl("https://fanqienovel.com/page/demo-book-b");
         second.setPlatformBookId(platform + "-" + category + "-2");
+        fallback.add(second);
+        return fallback;
+    }
+
+    private List<ExternalRankBoard> buildFallbackBoardCatalog(String platform) {
+        List<ExternalRankBoard> fallback = new ArrayList<>();
+        ExternalRankBoard first = new ExternalRankBoard();
+        first.setPlatform(platform);
+        first.setChannelCode("male-new");
+        first.setChannelName("男频新书榜");
+        first.setBoardCode("urban-brain");
+        first.setBoardName("都市脑洞");
+        fallback.add(first);
+
+        ExternalRankBoard second = new ExternalRankBoard();
+        second.setPlatform(platform);
+        second.setChannelCode("male-read");
+        second.setChannelName("男频阅读榜");
+        second.setBoardCode("urban-power");
+        second.setBoardName("都市高武");
         fallback.add(second);
         return fallback;
     }

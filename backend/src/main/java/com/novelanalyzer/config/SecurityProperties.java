@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Arrays;
 
 @ConfigurationProperties(prefix = "app.security")
 public class SecurityProperties {
@@ -11,8 +12,20 @@ public class SecurityProperties {
     private int rateLimitPerMinute = 100;
     private int autoBlacklistThreshold = 20;
     private long blacklistSeconds = 86400L;
-    private List<String> protectedPathPrefixes = new ArrayList<>();
-    private List<String> whitelistPaths = new ArrayList<>();
+    private List<String> protectedPathPrefixes = new ArrayList<>(Arrays.asList(
+        "/api/auth",
+        "/api/secure",
+        "/api/system",
+        "/api/crawler",
+        "/api/analysis",
+        "/api/config",
+        "/api/data"
+    ));
+    private List<String> whitelistPaths = new ArrayList<>(Arrays.asList(
+        "/api/system/health",
+        "/api/auth/login",
+        "/api/auth/refresh"
+    ));
     private List<String> trustedProxyIps = new ArrayList<>();
 
     public int getRateLimitPerMinute() {

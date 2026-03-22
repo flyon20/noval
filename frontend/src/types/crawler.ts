@@ -1,14 +1,27 @@
 export type Platform = 'fanqie';
 
-export type KnownRankCategory = 'male-hot-a' | 'male-hot-b' | 'male-new-a';
-
-export type RankCategory = KnownRankCategory | (string & {});
+export type RefreshMode = 'AUTO' | 'FORCE';
 
 export type UiChapterCount = 1 | 3 | 5 | 10;
 
+export interface RankBoardOption {
+  boardCode: string;
+  boardName: string;
+}
+
+export interface RankBoardCatalog {
+  channelCode: string;
+  channelName: string;
+  boards: RankBoardOption[];
+}
+
 export interface CrawlerRankRequest {
   platform: Platform;
-  category: RankCategory;
+  category?: string;
+  channelCode?: string;
+  boardCode?: string;
+  refreshMode?: RefreshMode;
+  forceReason?: string;
 }
 
 export interface RankBookItem {
@@ -20,6 +33,34 @@ export interface RankBookItem {
   bookUrl: string;
   platform: Platform;
   category: string;
+}
+
+export interface RankRefreshResult {
+  channelCode?: string;
+  boardCode?: string;
+  snapshotId: number;
+  snapshotTime?: string;
+  total: number;
+  reused: boolean;
+  refreshLimited: boolean;
+  analysisTriggered: boolean;
+}
+
+export interface RankPageRequest {
+  platform: Platform;
+  channelCode: string;
+  boardCode: string;
+  page: number;
+  pageSize: number;
+}
+
+export interface RankPageResult {
+  snapshotId: number;
+  snapshotTime?: string;
+  total: number;
+  page: number;
+  pageSize: number;
+  items: RankBookItem[];
 }
 
 export interface BookDetail {

@@ -4,6 +4,7 @@ import com.jayway.jsonpath.JsonPath;
 import com.novelanalyzer.modules.crawler.client.PythonCrawlerClient;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookDetail;
 import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
+import com.novelanalyzer.modules.crawler.client.model.ExternalRankBoard;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,6 +49,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
     scripts = {
         "classpath:sql/phase2-schema-h2.sql",
         "classpath:sql/phase3-schema-h2.sql",
+        "classpath:sql/phase4-schema-h2.sql",
+        "classpath:sql/phase5-schema-h2.sql",
         "classpath:sql/phase2-data-h2.sql"
     },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
@@ -62,6 +65,33 @@ class CrawlerPhase3IntegrationTest {
 
     @MockBean
     private PythonCrawlerClient pythonCrawlerClient;
+
+    @Test
+    void shouldSyncBoardCatalogFromCrawler() throws Exception {
+        when(pythonCrawlerClient.fetchBoardCatalog("fanqie")).thenReturn(List.of(
+            boardItem("fanqie", "male-new", "男频新书榜", "urban-brain", "都市脑洞"),
+            boardItem("fanqie", "male-read", "男频阅读榜", "urban-power", "都市高武")
+        ));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(get("/api/crawler/boards")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0].channelCode").value("male-new"))
+            .andExpect(jsonPath("$.data[0].channelName").value("男频新书榜"))
+            .andExpect(jsonPath("$.data[0].boards[0].boardCode").value("urban-brain"))
+            .andExpect(jsonPath("$.data[0].boards[0].boardName").value("都市脑洞"));
+
+        Integer boardCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM rank_board WHERE platform = ? AND deleted = 0",
+            Integer.class,
+            "fanqie"
+        );
+        assertThat(boardCount).isEqualTo(2);
+    }
 
     @Test
     void shouldCacheRankAndPersistData() throws Exception {
@@ -141,38 +171,67 @@ class CrawlerPhase3IntegrationTest {
     }
 
     @Test
-    void shouldReuseLatestRankSnapshotWhenAutoRefreshStillValid() throws Exception {
+    void shouldRefreshWholeBoardAndPageSnapshotWithoutRecrawling() throws Exception {
         insertSystemConfig("crawler.rank.refresh-days", "5");
         insertSystemConfig("crawler.rank.force-cooldown-days", "2");
         insertSystemConfig("crawler.rank.force-max-times", "2");
 
-        LocalDateTime snapshotTime = LocalDateTime.now().minusHours(12);
-        long bookId1 = insertBook("fanqie", "db-book-1", "DB Book One", "DB Author One", "DB Intro One",
-            "https://fanqienovel.com/page/db-book-1", snapshotTime);
-        long bookId2 = insertBook("fanqie", "db-book-2", "DB Book Two", "DB Author Two", "DB Intro Two",
-            "https://fanqienovel.com/page/db-book-2", snapshotTime);
-        insertRankSnapshot("fanqie", "male-hot-a", snapshotTime, bookId1, "DB Book One",
-            "https://fanqienovel.com/page/db-book-1", "DB Author One", "DB Intro One", 1);
-        insertRankSnapshot("fanqie", "male-hot-a", snapshotTime, bookId2, "DB Book Two",
-            "https://fanqienovel.com/page/db-book-2", "DB Author Two", "DB Intro Two", 2);
-
-        when(pythonCrawlerClient.fetchRank("fanqie", "male-hot-a")).thenReturn(List.of(
-            rankItem(1, "Crawler Book One", "Crawler Author", "https://fanqienovel.com/page/crawler-1")
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain")).thenReturn(List.of(
+            rankItem(1, "Book 01", "Author 01", "https://fanqienovel.com/page/board-01"),
+            rankItem(2, "Book 02", "Author 02", "https://fanqienovel.com/page/board-02"),
+            rankItem(3, "Book 03", "Author 03", "https://fanqienovel.com/page/board-03"),
+            rankItem(4, "Book 04", "Author 04", "https://fanqienovel.com/page/board-04"),
+            rankItem(5, "Book 05", "Author 05", "https://fanqienovel.com/page/board-05"),
+            rankItem(6, "Book 06", "Author 06", "https://fanqienovel.com/page/board-06"),
+            rankItem(7, "Book 07", "Author 07", "https://fanqienovel.com/page/board-07"),
+            rankItem(8, "Book 08", "Author 08", "https://fanqienovel.com/page/board-08"),
+            rankItem(9, "Book 09", "Author 09", "https://fanqienovel.com/page/board-09"),
+            rankItem(10, "Book 10", "Author 10", "https://fanqienovel.com/page/board-10"),
+            rankItem(11, "Book 11", "Author 11", "https://fanqienovel.com/page/board-11"),
+            rankItem(12, "Book 12", "Author 12", "https://fanqienovel.com/page/board-12")
         ));
 
         String token = loginAndGetToken("admin", "admin123");
-        mockMvc.perform(post("/api/crawler/rank")
+        mockMvc.perform(post("/api/crawler/rank/refresh")
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"platform":"fanqie","category":"male-hot-a","refreshMode":"AUTO"}
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","refreshMode":"FORCE"}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.length()").value(2))
-            .andExpect(jsonPath("$.data[0].bookName").value("DB Book One"));
+            .andExpect(jsonPath("$.data.snapshotId").isNumber())
+            .andExpect(jsonPath("$.data.total").value(12))
+            .andExpect(jsonPath("$.data.reused").value(false));
 
-        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-hot-a");
+        mockMvc.perform(get("/api/crawler/rank/page")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain")
+                .param("page", "2")
+                .param("pageSize", "5"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.page").value(2))
+            .andExpect(jsonPath("$.data.pageSize").value(5))
+            .andExpect(jsonPath("$.data.total").value(12))
+            .andExpect(jsonPath("$.data.items.length()").value(5))
+            .andExpect(jsonPath("$.data.items[0].rankNo").value(6))
+            .andExpect(jsonPath("$.data.items[0].bookName").value("Book 06"));
+
+        mockMvc.perform(post("/api/crawler/rank/refresh")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","refreshMode":"AUTO"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.total").value(12))
+            .andExpect(jsonPath("$.data.reused").value(true));
+
+        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-new", "urban-brain");
     }
 
     @Test
@@ -184,32 +243,36 @@ class CrawlerPhase3IntegrationTest {
         LocalDateTime snapshotTime = LocalDateTime.now().minusHours(8);
         long bookId = insertBook("fanqie", "force-db-1", "Forced DB Book", "Forced DB Author", "Forced DB Intro",
             "https://fanqienovel.com/page/force-db-1", snapshotTime);
-        insertRankSnapshot("fanqie", "male-hot-b", snapshotTime, bookId, "Forced DB Book",
-            "https://fanqienovel.com/page/force-db-1", "Forced DB Author", "Forced DB Intro", 1);
+        long boardId = insertRankBoard("fanqie", "male-read", "男频阅读榜", "urban-power", "都市高武");
+        long snapshotId = insertBoardSnapshot(boardId, snapshotTime, 1);
+        insertRankSnapshot("fanqie", "male-hot-b", "male-read", "urban-power", snapshotId, snapshotTime, bookId,
+            "Forced DB Book", "https://fanqienovel.com/page/force-db-1", "Forced DB Author", "Forced DB Intro", 1);
         insertCrawlerTask("rank_refresh", "fanqie",
-            "{\"platform\":\"fanqie\",\"category\":\"male-hot-b\",\"refreshMode\":\"FORCE\"}",
+            "{\"platform\":\"fanqie\",\"channelCode\":\"male-read\",\"boardCode\":\"urban-power\",\"refreshMode\":\"FORCE\"}",
             2, LocalDateTime.now().minusHours(10), LocalDateTime.now().minusHours(10).plusMinutes(1));
         insertCrawlerTask("rank_refresh", "fanqie",
-            "{\"platform\":\"fanqie\",\"category\":\"male-hot-b\",\"refreshMode\":\"FORCE\"}",
+            "{\"platform\":\"fanqie\",\"channelCode\":\"male-read\",\"boardCode\":\"urban-power\",\"refreshMode\":\"FORCE\"}",
             2, LocalDateTime.now().minusHours(6), LocalDateTime.now().minusHours(6).plusMinutes(1));
 
-        when(pythonCrawlerClient.fetchRank("fanqie", "male-hot-b")).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-read", "urban-power")).thenReturn(List.of(
             rankItem(1, "Crawler Forced Book", "Crawler Author", "https://fanqienovel.com/page/crawler-force")
         ));
 
         String token = loginAndGetToken("admin", "admin123");
-        mockMvc.perform(post("/api/crawler/rank")
+        mockMvc.perform(post("/api/crawler/rank/refresh")
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"platform":"fanqie","category":"male-hot-b","refreshMode":"FORCE","forceReason":"manual"}
+                    {"platform":"fanqie","channelCode":"male-read","boardCode":"urban-power","refreshMode":"FORCE","forceReason":"manual"}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.length()").value(1))
-            .andExpect(jsonPath("$.data[0].bookName").value("Forced DB Book"));
+            .andExpect(jsonPath("$.data.snapshotId").value(snapshotId))
+            .andExpect(jsonPath("$.data.total").value(1))
+            .andExpect(jsonPath("$.data.reused").value(true))
+            .andExpect(jsonPath("$.data.refreshLimited").value(true));
 
-        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-hot-b");
+        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-read", "urban-power");
     }
 
     @Test
@@ -272,6 +335,20 @@ class CrawlerPhase3IntegrationTest {
         item.setContent(title + " 内容");
         return item;
     }
+    private ExternalRankBoard boardItem(String platform,
+                                        String channelCode,
+                                        String channelName,
+                                        String boardCode,
+                                        String boardName) {
+        ExternalRankBoard item = new ExternalRankBoard();
+        item.setPlatform(platform);
+        item.setChannelCode(channelCode);
+        item.setChannelName(channelName);
+        item.setBoardCode(boardCode);
+        item.setBoardName(boardName);
+        return item;
+    }
+
     private void insertSystemConfig(String key, String value) {
         jdbcTemplate.execute("""
             CREATE TABLE IF NOT EXISTS system_config (
@@ -322,8 +399,57 @@ class CrawlerPhase3IntegrationTest {
         return id;
     }
 
+    private long insertRankBoard(String platform,
+                                 String channelCode,
+                                 String channelName,
+                                 String boardCode,
+                                 String boardName) {
+        jdbcTemplate.update(
+            "INSERT INTO rank_board(platform, channel_code, board_code, board_name, description, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            platform,
+            channelCode,
+            boardCode,
+            boardName,
+            channelName,
+            Timestamp.valueOf(LocalDateTime.now()),
+            Timestamp.valueOf(LocalDateTime.now()),
+            0
+        );
+        Long id = jdbcTemplate.queryForObject(
+            "SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ? AND deleted = 0",
+            Long.class,
+            platform,
+            channelCode,
+            boardCode
+        );
+        assertThat(id).isNotNull();
+        return id;
+    }
+
+    private long insertBoardSnapshot(long rankBoardId, LocalDateTime snapshotTime, int recordCount) {
+        jdbcTemplate.update(
+            "INSERT INTO rank_snapshot(rank_board_id, snapshot_time, record_count, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?)",
+            rankBoardId,
+            Timestamp.valueOf(snapshotTime),
+            recordCount,
+            Timestamp.valueOf(snapshotTime),
+            Timestamp.valueOf(snapshotTime),
+            0
+        );
+        Long id = jdbcTemplate.queryForObject(
+            "SELECT id FROM rank_snapshot WHERE rank_board_id = ? AND deleted = 0 ORDER BY id DESC LIMIT 1",
+            Long.class,
+            rankBoardId
+        );
+        assertThat(id).isNotNull();
+        return id;
+    }
+
     private void insertRankSnapshot(String platform,
                                     String category,
+                                    String channelCode,
+                                    String boardCode,
+                                    Long snapshotId,
                                     LocalDateTime crawlTime,
                                     long bookId,
                                     String bookName,
@@ -332,9 +458,12 @@ class CrawlerPhase3IntegrationTest {
                                     String intro,
                                     int rankNo) {
         jdbcTemplate.update(
-            "INSERT INTO crawl_rank(platform, category, rank_no, book_id, book_name, book_url, author, intro, crawl_time, create_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO crawl_rank(platform, category, channel_code, board_code, snapshot_id, rank_no, book_id, book_name, book_url, author, intro, crawl_time, create_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             platform,
             category,
+            channelCode,
+            boardCode,
+            snapshotId,
             rankNo,
             bookId,
             bookName,

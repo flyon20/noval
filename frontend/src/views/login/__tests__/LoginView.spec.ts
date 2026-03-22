@@ -14,6 +14,12 @@ vi.mock('@/api/auth', () => ({
   },
 }));
 
+vi.mock('@/api/system', () => ({
+  systemApi: {
+    loginBootstrap: vi.fn(),
+  },
+}));
+
 describe('LoginView', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -21,8 +27,9 @@ describe('LoginView', () => {
     vi.clearAllMocks();
   });
 
-  test('successful login stores session and navigates to /rank', async () => {
+  test('successful login triggers bootstrap and navigates to /rank', async () => {
     const { authApi } = await import('@/api/auth');
+    const { systemApi } = await import('@/api/system');
     vi.mocked(authApi.login).mockResolvedValue({
       data: {
         code: 200,
@@ -41,6 +48,27 @@ describe('LoginView', () => {
         },
         timestamp: 1,
         traceId: 'trace-login',
+      },
+    });
+    vi.mocked(systemApi.loginBootstrap).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          results: [
+            {
+              channelCode: 'male-new',
+              boardCode: 'urban-brain',
+              snapshotId: 6001,
+              total: 2,
+              reused: false,
+              refreshLimited: false,
+              analysisTriggered: false,
+            },
+          ],
+        },
+        timestamp: 1,
+        traceId: 'trace-bootstrap',
       },
     });
 
@@ -63,13 +91,14 @@ describe('LoginView', () => {
     await flushPromises();
 
     expect(authApi.login).toHaveBeenCalled();
+    expect(systemApi.loginBootstrap).toHaveBeenCalledWith({ platform: 'fanqie' });
     expect(push).toHaveBeenCalledWith('/rank');
   });
 
-  test('renders a single login form to avoid nested submit handlers', async () => {
+  test('renders compact project intro without JWT copy', async () => {
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/login', component: LoginView }, { path: '/rank', component: { template: '<div />' } }],
+      routes: [{ path: '/login', component: LoginView }],
     });
     await router.push('/login');
 
@@ -79,14 +108,14 @@ describe('LoginView', () => {
       },
     });
 
-    const forms = wrapper.findAll('form');
-
-    expect(forms).toHaveLength(1);
-    expect(wrapper.get('button[type="submit"]').element.closest('form')).toBe(forms[0]?.element);
+    expect(wrapper.text()).toContain('NOVAL');
+    expect(wrapper.text()).toContain('扫榜');
+    expect(wrapper.text()).not.toContain('JWT');
   });
 
   test('failed login displays backend message', async () => {
     const { authApi } = await import('@/api/auth');
+    const { systemApi } = await import('@/api/system');
     vi.mocked(authApi.login).mockRejectedValue({
       response: {
         status: 401,
@@ -114,6 +143,7 @@ describe('LoginView', () => {
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
+    expect(systemApi.loginBootstrap).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('bad credentials');
     expect(wrapper.text()).toContain('trace-failed');
   });

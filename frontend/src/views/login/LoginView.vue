@@ -2,7 +2,9 @@
 import { reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { authApi } from '@/api/auth';
+import { systemApi } from '@/api/system';
 import { HOME_ROUTE } from '@/constants/auth';
+import { DEFAULT_PLATFORM } from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
 import { useAuthStore } from '@/stores/auth';
 
@@ -38,6 +40,11 @@ async function handleSubmit() {
     });
 
     authStore.applyTokenResponse(response.data.data);
+    try {
+      await systemApi.loginBootstrap({ platform: DEFAULT_PLATFORM });
+    } catch (error) {
+      console.warn('login bootstrap failed', error);
+    }
     await router.push(HOME_ROUTE);
   } catch (error) {
     const payload = getErrorPayload(error);
@@ -52,23 +59,23 @@ async function handleSubmit() {
 <template>
   <div class="login-page">
     <section class="login-page__panel login-page__hero">
-      <p class="login-page__eyebrow">NOVAL WORKBENCH</p>
-      <h1>把扫榜、抓章和分析入口放进同一张工作台</h1>
+      <p class="login-page__eyebrow">NOVAL</p>
+      <h1>小说榜单抓取与分析工作台</h1>
       <p class="login-page__description">
-        第一阶段先把登录鉴权与扫榜入口做稳，后续再把 AI 分析和流式输出无缝接上。
+        登录后会自动同步默认榜单，进入后即可切换频道、整榜抓取、分页查看和继续做书籍分析。
       </p>
       <div class="login-page__feature-list">
         <article>
-          <strong>JWT 单 token</strong>
-          <span>前端按 claims 恢复角色与会话</span>
+          <strong>扫榜同步</strong>
+          <span>登录后自动补抓默认榜单，减少空白页等待。</span>
         </article>
         <article>
-          <strong>自动刷新一次</strong>
-          <span>401 时 refresh 后只重放一次原请求</span>
+          <strong>整榜入库</strong>
+          <span>按频道和榜单一次抓完整榜，翻页只读数据库。</span>
         </article>
         <article>
-          <strong>扫榜工作流</strong>
-          <span>榜单、详情、抓章在同一页闭环</span>
+          <strong>详情延展</strong>
+          <span>从榜单继续查看书籍详情、章节抓取和后续分析。</span>
         </article>
       </div>
     </section>
@@ -76,8 +83,8 @@ async function handleSubmit() {
     <section class="login-page__panel login-page__form-wrap">
       <div class="login-card">
         <div class="login-card__heading">
-          <p>登录后台</p>
-          <h2>进入前端控制台</h2>
+          <p>账号登录</p>
+          <h2>进入榜单控制台</h2>
         </div>
 
         <el-alert
@@ -124,7 +131,7 @@ async function handleSubmit() {
 <style scoped lang="scss">
 .login-page {
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
+  grid-template-columns: 1.05fr 0.95fr;
   gap: 1.5rem;
   min-height: 100vh;
   padding: 1.25rem;
@@ -140,10 +147,10 @@ async function handleSubmit() {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 1.25rem;
+  gap: 1.2rem;
   padding: 3rem;
   background:
-    radial-gradient(circle at top right, rgba(210, 136, 61, 0.18), transparent 30%),
+    radial-gradient(circle at top right, rgba(210, 136, 61, 0.18), transparent 32%),
     linear-gradient(180deg, rgba(255, 252, 245, 0.96), rgba(244, 239, 229, 0.92));
 }
 
@@ -160,13 +167,13 @@ async function handleSubmit() {
 }
 
 .login-page__hero h1 {
-  max-width: 12ch;
-  font-size: clamp(2.4rem, 4vw, 4.5rem);
-  line-height: 1.05;
+  max-width: 11ch;
+  font-size: clamp(2.3rem, 4vw, 4.1rem);
+  line-height: 1.08;
 }
 
 .login-page__description {
-  max-width: 48ch;
+  max-width: 46ch;
   line-height: 1.8;
 }
 

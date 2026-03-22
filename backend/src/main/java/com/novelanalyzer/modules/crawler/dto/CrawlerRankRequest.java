@@ -1,5 +1,6 @@
 package com.novelanalyzer.modules.crawler.dto;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 
 public class CrawlerRankRequest {
@@ -10,12 +11,29 @@ public class CrawlerRankRequest {
     @NotBlank(message = "platform is required")
     private String platform;
 
-    @NotBlank(message = "category is required")
     private String category;
+
+    private String channelCode;
+
+    private String boardCode;
 
     private String refreshMode;
 
     private String forceReason;
+
+    @AssertTrue(message = "category or channelCode/boardCode is required")
+    public boolean isScopeValid() {
+        return hasLegacyCategory() || hasBoardSelection();
+    }
+
+    public boolean hasLegacyCategory() {
+        return category != null && !category.isBlank();
+    }
+
+    public boolean hasBoardSelection() {
+        return channelCode != null && !channelCode.isBlank()
+            && boardCode != null && !boardCode.isBlank();
+    }
 
     public String getPlatform() {
         return platform;
@@ -31,6 +49,22 @@ public class CrawlerRankRequest {
 
     public void setCategory(String category) {
         this.category = category;
+    }
+
+    public String getChannelCode() {
+        return channelCode;
+    }
+
+    public void setChannelCode(String channelCode) {
+        this.channelCode = channelCode;
+    }
+
+    public String getBoardCode() {
+        return boardCode;
+    }
+
+    public void setBoardCode(String boardCode) {
+        this.boardCode = boardCode;
     }
 
     public String getRefreshMode() {
