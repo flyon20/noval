@@ -1,10 +1,14 @@
 package com.novelanalyzer.modules.analysis.service;
 
-import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.TokenCountEstimator;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
+import dev.langchain4j.service.AiServices;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.novelanalyzer.common.context.AuthUserHolder;
@@ -19,11 +23,16 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 @Service
 public class AiGatewayService {
@@ -39,17 +48,25 @@ public class AiGatewayService {
     private final AiProperties aiProperties;
     private final SystemConfigService systemConfigService;
     private final UserConfigService userConfigService;
+    private final TokenCountEstimator tokenCountEstimator;
     private final ObjectMapper objectMapper;
+
+    // 模型实例缓存：key = baseUrl|modelName|timeoutMillis，避免每次请求重建
+    private final ConcurrentHashMap<String, OpenAiChatModel> chatModelCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, OpenAiStreamingChatModel> streamingModelCache = new ConcurrentHashMap<>();
+    private volatile String cachedApiKey = null;
 
     public AiGatewayService(RestTemplate aiRestTemplate,
                             AiProperties aiProperties,
                             SystemConfigService systemConfigService,
                             UserConfigService userConfigService,
+                            TokenCountEstimator tokenCountEstimator,
                             ObjectMapper objectMapper) {
         this.aiRestTemplate = aiRestTemplate;
         this.aiProperties = aiProperties;
         this.systemConfigService = systemConfigService;
         this.userConfigService = userConfigService;
+        this.tokenCountEstimator = tokenCountEstimator;
         this.objectMapper = objectMapper;
     }
 
@@ -86,10 +103,14 @@ public class AiGatewayService {
     }
 
     private int estimateTokenCount(String text) {
+        return estimateTokenCountInternal(text);
+    }
+
+    private int estimateTokenCountInternal(String text) {
         if (text == null || text.isBlank()) {
             return 0;
         }
-        return Math.max(1, (int) Math.ceil(text.length() / 2.0d));
+        return Math.max(1, tokenCountEstimator.estimateTokenCountInText(text));
     }
 
     private AiInvokeResult invokePreferredProvider(PromptConfigEntity promptConfig,
@@ -125,54 +146,136 @@ public class AiGatewayService {
         }
 
         try {
-            OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
-                .baseUrl(resolveOpenAiCompatibleBaseUrl())
-                .apiKey(apiKey)
-                .modelName(modelName)
-                .timeout(Duration.ofMillis(resolveTimeoutMillis()))
-                .logRequests(false)
-                .logResponses(false);
-
-            if (promptConfig.getTemperature() != null) {
-                builder.temperature(promptConfig.getTemperature());
-            }
-            if (promptConfig.getMaxTokens() != null) {
-                builder.maxTokens(promptConfig.getMaxTokens());
-            }
-
-            ChatRequest chatRequest = ChatRequest.builder()
-                .messages(UserMessage.from(renderedPrompt))
+            OpenAiChatModel model = getOrCreateChatModel(
+                resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
+                promptConfig.getTemperature(), promptConfig.getMaxTokens()
+            );
+            // AiServices 声明式调用，替代手写 ChatRequest/ChatResponse
+            NovelAnalysisAiService svc = AiServices.builder(NovelAnalysisAiService.class)
+                .chatModel(model)
                 .build();
-            ChatResponse chatResponse = builder.build().chat(chatRequest);
-            if (chatResponse == null || chatResponse.aiMessage() == null) {
-                return null;
-            }
-
-            String content = chatResponse.aiMessage().text();
+            String content = svc.analyze(renderedPrompt);
             if (content == null || content.isBlank()) {
                 return null;
             }
 
-            String resolvedModelName = firstNonBlank(chatResponse.modelName(), modelName);
-            Integer totalTokens = Optional.ofNullable(chatResponse.tokenUsage())
-                .map(tokenUsage -> tokenUsage.totalTokenCount())
-                .orElse(null);
-            Map<String, Object> resultJson = buildStructuredResult(
-                Map.of(),
-                content,
-                analysisType,
-                resolvedModelName
-            );
-
+            Map<String, Object> resultJson = buildStructuredResult(Map.of(), content, analysisType, modelName);
             return AiInvokeResult.of(
-                resolvedModelName,
+                modelName,
                 content,
-                totalTokens == null ? Math.max(120, renderedPrompt.length() / 2) : totalTokens,
+                Math.max(120, estimateTokenCountInternal(renderedPrompt) + estimateTokenCountInternal(content)),
                 resultJson
             );
         } catch (Exception ex) {
             return null;
         }
+    }
+
+    /**
+     * 真流式调用：onPartialResponse 直接推 SSE delta token，避免等全文再切割的假流式。
+     * chunk 模式和 Dify 路径不走此方法，调用方需自行降级。
+     *
+     * @return true 表示已成功发起流式（异步完成），false 表示不支持流式需降级
+     */
+    public boolean streamToEmitter(PromptConfigEntity promptConfig,
+                                   String text,
+                                   String analysisType,
+                                   SseEmitter emitter,
+                                   BiConsumer<SseEmitter, AiInvokeResult> onDone,
+                                   Consumer<Throwable> onError) {
+        String apiKey = resolveOpenAiCompatibleApiKey();
+        String modelName = resolveOpenAiCompatibleModelName(promptConfig);
+        if (apiKey == null || apiKey.isBlank() || modelName == null || modelName.isBlank()) {
+            return false;
+        }
+
+        String renderedPrompt = renderPrompt(promptConfig.getPromptContent(), text, analysisType);
+        OpenAiStreamingChatModel streamModel = getOrCreateStreamingChatModel(
+            resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
+            promptConfig.getTemperature(), promptConfig.getMaxTokens()
+        );
+
+        StringBuilder buffer = new StringBuilder();
+        final String resolvedModel = modelName;
+
+        streamModel.chat(renderedPrompt, new StreamingChatResponseHandler() {
+            @Override
+            public void onPartialResponse(String token) {
+                buffer.append(token);
+                try {
+                    emitter.send(SseEmitter.event()
+                        .name("delta")
+                        .data(Map.of("event", "delta", "delta", token)));
+                } catch (IOException ignored) {
+                }
+            }
+
+            @Override
+            public void onCompleteResponse(ChatResponse response) {
+                String content = buffer.toString();
+                String usedModel = firstNonBlank(response.modelName(), resolvedModel);
+                Integer totalTokens = Optional.ofNullable(response.tokenUsage())
+                    .map(u -> u.totalTokenCount()).orElse(null);
+                Map<String, Object> resultJson = buildStructuredResult(Map.of(), content, analysisType, usedModel);
+                AiInvokeResult result = AiInvokeResult.of(
+                    usedModel, content,
+                    totalTokens != null ? totalTokens
+                        : Math.max(120, estimateTokenCountInternal(renderedPrompt) + estimateTokenCountInternal(content)),
+                    resultJson
+                );
+                onDone.accept(emitter, result);
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                onError.accept(error);
+            }
+        });
+        return true;
+    }
+
+    private OpenAiChatModel getOrCreateChatModel(String baseUrl, String apiKey,
+                                                  String modelName,
+                                                  Double temperature, Integer maxTokens) {
+        String key = baseUrl + "|" + modelName + "|" + resolveTimeoutMillis()
+            + "|" + temperature + "|" + maxTokens;
+        // apiKey 变化时清空缓存
+        if (!apiKey.equals(cachedApiKey)) {
+            cachedApiKey = apiKey;
+            chatModelCache.clear();
+            streamingModelCache.clear();
+        }
+        return chatModelCache.computeIfAbsent(key, k -> {
+            OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .modelName(modelName)
+                .timeout(Duration.ofMillis(resolveTimeoutMillis()))
+                .logRequests(false)
+                .logResponses(false);
+            if (temperature != null) builder.temperature(temperature);
+            if (maxTokens != null) builder.maxTokens(maxTokens);
+            return builder.build();
+        });
+    }
+
+    private OpenAiStreamingChatModel getOrCreateStreamingChatModel(String baseUrl, String apiKey,
+                                                                    String modelName,
+                                                                    Double temperature, Integer maxTokens) {
+        String key = baseUrl + "|" + modelName + "|" + resolveTimeoutMillis()
+            + "|" + temperature + "|" + maxTokens;
+        return streamingModelCache.computeIfAbsent(key, k -> {
+            OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder = OpenAiStreamingChatModel.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .modelName(modelName)
+                .timeout(Duration.ofMillis(resolveTimeoutMillis()))
+                .logRequests(false)
+                .logResponses(false);
+            if (temperature != null) builder.temperature(temperature);
+            if (maxTokens != null) builder.maxTokens(maxTokens);
+            return builder.build();
+        });
     }
 
     @SuppressWarnings("unchecked")

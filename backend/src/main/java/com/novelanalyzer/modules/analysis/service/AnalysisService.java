@@ -142,6 +142,52 @@ public class AnalysisService {
             try {
                 restoreContext(authUser, traceId);
                 sendStartEvent(emitter, traceId, analysisType);
+
+                // 尝试真流式：非 chunk 场景直接推 token，避免等全文再切割
+                PromptConfigEntity promptConfig = promptConfigRepository
+                    .findDefaultByType(analysisType)
+                    .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
+                List<ChapterVO> chapters = loadAnalysisChapters(request);
+                if (chapters.isEmpty()) {
+                    throw new BusinessException(ResultCode.BAD_REQUEST, "chapter content not found");
+                }
+                CrawlBookEntity book = crawlerRepository.findBookById(request.getBookId())
+                    .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
+                String inputText = buildBookInputText(book, chapters);
+                boolean useChunk = shouldUseChunkedAnalysis(promptConfig, analysisType, inputText, chapters);
+
+                if (!useChunk) {
+                    boolean streamed = aiGatewayService.streamToEmitter(
+                        promptConfig, inputText, analysisType, emitter,
+                        (em, aiResult) -> {
+                            try {
+                                String cacheKey = buildAnalysisCacheKey(
+                                    promptConfig, request.getBookId(), analysisType, request.getChapterCount());
+                                Long resultId = saveAnalysisResult(
+                                    request.getPlatform(), request.getBookId(), analysisType,
+                                    request.getChapterCount(), promptConfig.getId(), aiResult);
+                                AnalysisResultVO vo = new AnalysisResultVO();
+                                vo.setId(resultId);
+                                vo.setBookId(request.getBookId());
+                                vo.setAnalysisType(analysisType);
+                                vo.setModelName(aiResult.getModelName());
+                                vo.setResultContent(aiResult.getContent());
+                                vo.setResultJson(aiResult.getResultJson());
+                                vo.setTokenUsed(aiResult.getTokenUsed());
+                                crawlerCacheService.put(cacheKey, vo, ANALYSIS_TTL_SECONDS);
+                                sendDoneEvent(em, vo);
+                                em.complete();
+                            } catch (Exception e) {
+                                em.completeWithError(e);
+                            }
+                        },
+                        err -> completeWithErrorEvent(emitter, traceId,
+                            err instanceof Exception ex ? ex : new RuntimeException(err))
+                    );
+                    if (streamed) return; // 真流式已异步启动，退出当前线程
+                }
+
+                // 降级：chunk 分析或流式不可用 → 阻塞等全文再切割推送
                 AnalysisResultVO result = analyze(analysisType, request);
                 sendDeltaEvents(emitter, result.getResultContent());
                 sendDoneEvent(emitter, result);
