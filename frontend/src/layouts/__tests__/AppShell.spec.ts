@@ -1,8 +1,16 @@
+import ElementPlus from 'element-plus';
 import { mount } from '@vue/test-utils';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import AppShell from '../AppShell.vue';
 
 describe('AppShell', () => {
-  test('renders app shell slots and top actions', () => {
+  test('renders app shell slots and top actions', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: { template: '<div />' } }],
+    });
+    await router.push('/rank');
+
     const wrapper = mount(AppShell, {
       props: {
         username: 'demo',
@@ -10,6 +18,9 @@ describe('AppShell', () => {
       },
       slots: {
         default: '<div>page body</div>',
+      },
+      global: {
+        plugins: [router, ElementPlus],
       },
     });
 

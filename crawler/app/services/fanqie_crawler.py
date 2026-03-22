@@ -223,10 +223,14 @@ class FanqieCrawler(BaseCrawler):
             content = self._decoder.decode(content, css)
         if not content:
             raise ValueError(f"chapter content parse failed for itemId: {item_id}")
+        source_word_count = self._parse_positive_int(chapter_data.get("chapterWordNumber")) or len(
+            content.replace("\r", "").replace("\n", "")
+        )
         return ChapterItem(
             chapterNo=chapter_no,
             chapterTitle=title,
             content=content,
+            sourceWordCount=source_word_count,
         )
 
     def _fetch_state(self, url: str) -> dict[str, Any]:
@@ -283,3 +287,12 @@ class FanqieCrawler(BaseCrawler):
         if any(0xE000 <= ord(ch) <= 0xF8FF for ch in raw_text):
             return self._decoder.decode(raw_text, css)
         return raw_text
+
+    def _parse_positive_int(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None

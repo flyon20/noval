@@ -129,7 +129,8 @@ public class CrawlerRepository {
                                     Long bookId,
                                     Integer chapterNo,
                                     String chapterTitle,
-                                    String content) {
+                                    String content,
+                                    Integer sourceWordCount) {
         CrawlChapterEntity existing = crawlChapterMapper.selectOne(
             new LambdaQueryWrapper<CrawlChapterEntity>()
                 .eq(CrawlChapterEntity::getBookId, bookId)
@@ -138,10 +139,12 @@ public class CrawlerRepository {
                 .last("LIMIT 1")
         );
         int wordCount = content == null ? 0 : content.length();
+        int safeSourceWordCount = sourceWordCount == null || sourceWordCount <= 0 ? wordCount : sourceWordCount;
         if (existing != null) {
             existing.setChapterTitle(chapterTitle);
             existing.setContent(content);
             existing.setWordCount(wordCount);
+            existing.setSourceWordCount(safeSourceWordCount);
             existing.setCrawlTime(LocalDateTime.now());
             crawlChapterMapper.updateById(existing);
             return;
@@ -154,6 +157,7 @@ public class CrawlerRepository {
         entity.setChapterTitle(chapterTitle);
         entity.setContent(content);
         entity.setWordCount(wordCount);
+        entity.setSourceWordCount(safeSourceWordCount);
         entity.setCrawlTime(LocalDateTime.now());
         entity.setDeleted(0);
         crawlChapterMapper.insert(entity);
@@ -536,6 +540,7 @@ public class CrawlerRepository {
         vo.setChapterTitle(entity.getChapterTitle());
         vo.setContent(entity.getContent());
         vo.setWordCount(entity.getWordCount());
+        vo.setSourceWordCount(entity.getSourceWordCount());
         return vo;
     }
 

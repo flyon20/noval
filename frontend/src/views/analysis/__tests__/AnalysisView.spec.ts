@@ -14,14 +14,18 @@ vi.mock('@/api/analysis', () => ({
   },
 }));
 
-function createResult(analysisType: AnalysisType, resultContent = `${analysisType} result`): AnalysisResult {
+function createResult(
+  analysisType: AnalysisType,
+  resultContent = `${analysisType} result`,
+  resultJson: Record<string, unknown> = {},
+): AnalysisResult {
   return {
     id: 1,
     bookId: 1001,
     analysisType,
     modelName: 'dify',
     resultContent,
-    resultJson: {},
+    resultJson,
     tokenUsed: 128,
   };
 }
@@ -88,7 +92,13 @@ describe('AnalysisView', () => {
   test('auto-runs deconstruct mode from route query', async () => {
     const { analysisApi } = await import('@/api/analysis');
     vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
-      createStreamTask(createResult('deconstruct', '# 拆文结果\n第一段')),
+      createStreamTask(
+        createResult('deconstruct', '# 拆文结果\n第一段', {
+          analysisMode: 'chunk_merge',
+          segmentCount: 4,
+          inputChapterCount: 3,
+        }),
+      ),
     );
     vi.mocked(analysisApi.streamStructure).mockImplementation(
       createStreamTask(createResult('structure', '# 结构结果')),
@@ -121,6 +131,9 @@ describe('AnalysisView', () => {
     );
     expect(wrapper.text()).toContain('拆文结果');
     expect(wrapper.find('[data-role="analysis-context"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('分段汇总');
+    expect(wrapper.text()).toContain('章节数：3');
+    expect(wrapper.text()).toContain('分段数：4');
   });
 
   test('switches mode and reruns current analysis with forceReanalyze', async () => {

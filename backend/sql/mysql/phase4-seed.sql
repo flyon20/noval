@@ -5,7 +5,7 @@
 INSERT INTO prompt_config
     (prompt_type, prompt_name, prompt_content, model_name, status, is_default, dify_workflow_id, dify_api_key_ref, deleted)
 VALUES
-    ('deconstruct', 'default-deconstruct', '请从结构、人物、卖点角度拆解以下内容：{{content}}', 'dify', 1, 1, '', 'DIFY_API_KEY', 0),
+    ('deconstruct', 'default-deconstruct', '请基于以下小说正文进行拆文分析，重点输出：1. 核心卖点；2. 开篇钩子；3. 人物关系与冲突；4. 节奏与爽点；5. 可优化点。\n\n{{content}}', 'deepseek-chat', 1, 1, '', 'DIFY_API_KEY', 0),
     ('structure', 'default-structure', '请对以下内容输出结构分析：{{content}}', 'dify', 1, 1, '', 'DIFY_API_KEY', 0),
     ('plot', 'default-plot', '请对以下内容输出情节分析：{{content}}', 'dify', 1, 1, '', 'DIFY_API_KEY', 0)
 ON DUPLICATE KEY UPDATE
@@ -15,4 +15,3 @@ ON DUPLICATE KEY UPDATE
     is_default = VALUES(is_default),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
-

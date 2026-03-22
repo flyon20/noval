@@ -5,56 +5,18 @@ import { systemConfigApi } from '@/api/config';
 import type { KnownSystemConfigKey, SystemConfig } from '@/types/config';
 
 const SYSTEM_CONFIG_KEYS: Array<{ key: KnownSystemConfigKey; label: string; hint: string }> = [
-  {
-    key: 'ai.provider.type',
-    label: 'AI Provider Type',
-    hint: 'Choose the preferred AI provider used by backend analysis requests.',
-  },
-  {
-    key: 'ai.timeout.millis',
-    label: 'AI Timeout (ms)',
-    hint: 'Control the timeout used by backend AI calls.',
-  },
-  {
-    key: 'ai.openai-compatible.base-url',
-    label: 'OpenAI-Compatible Base URL',
-    hint: 'Leave blank to use the backend application default.',
-  },
-  {
-    key: 'ai.openai-compatible.default-model',
-    label: 'OpenAI-Compatible Default Model',
-    hint: 'Default model name used when prompt config does not override it.',
-  },
-  {
-    key: 'ai.openai-compatible.streaming-enabled',
-    label: 'OpenAI-Compatible Streaming',
-    hint: 'Toggle whether OpenAI-compatible streaming is enabled.',
-  },
-  {
-    key: 'crawler.default.chapter-count',
-    label: 'Default Chapter Count',
-    hint: 'Default chapter count shown on the rank page.',
-  },
-  {
-    key: 'crawler.http.timeout-seconds',
-    label: 'Crawler HTTP Timeout (s)',
-    hint: 'Timeout used by the Python crawler when requesting Fanqie pages.',
-  },
-  {
-    key: 'crawler.chapter.fetch-workers',
-    label: 'Chapter Fetch Workers',
-    hint: 'Maximum parallel workers used for multi-chapter fetching.',
-  },
-  {
-    key: 'crawler.chapter.force-refresh.user-max-times',
-    label: 'User Chapter Refresh Limit',
-    hint: 'Maximum force-refresh times for normal users in the current rank cache window (capped at 20).',
-  },
-  {
-    key: 'crawler.rank.refresh-days',
-    label: 'Rank Cache Window (days)',
-    hint: 'Chapter force-refresh usage is counted within this same cache window.',
-  },
+  { key: 'ai.provider.type', label: 'AI Provider Type', hint: '选择后端分析优先使用的 AI 提供方。' },
+  { key: 'ai.timeout.millis', label: 'AI Timeout (ms)', hint: '控制 AI 请求超时。' },
+  { key: 'ai.openai-compatible.base-url', label: 'OpenAI-Compatible Base URL', hint: '留空则使用后端默认地址。' },
+  { key: 'ai.openai-compatible.default-model', label: 'OpenAI-Compatible Default Model', hint: '默认模型名称。' },
+  { key: 'ai.openai-compatible.streaming-enabled', label: 'OpenAI-Compatible Streaming', hint: '控制是否启用流式调用。' },
+  { key: 'analysis.chunk.max-input-tokens', label: 'Analysis Chunk Max Tokens', hint: '单次分析允许的估算输入 Token 上限；超过后会自动切换为 LangChain4j 分段汇总。推荐值：6000。' },
+  { key: 'analysis.chunk.target-input-tokens', label: 'Analysis Chunk Target Tokens', hint: '分段分析时每段的目标输入 Token 大小；数值越小分段越多。推荐值：3500。' },
+  { key: 'crawler.default.chapter-count', label: 'Default Chapter Count', hint: '扫榜页默认抓章数量。' },
+  { key: 'crawler.http.timeout-seconds', label: 'Crawler HTTP Timeout (s)', hint: 'Python crawler 请求页面时的超时。' },
+  { key: 'crawler.chapter.fetch-workers', label: 'Chapter Fetch Workers', hint: '多章节抓取时的最大并发数。' },
+  { key: 'crawler.chapter.force-refresh.user-max-times', label: 'User Chapter Refresh Limit', hint: '普通用户在当前窗口内的章节重抓上限。' },
+  { key: 'crawler.rank.refresh-days', label: 'Rank Cache Window (days)', hint: '榜单缓存期与章节重抓统计窗口。' },
 ];
 
 type SystemConfigFormItem = SystemConfig & {
@@ -74,7 +36,6 @@ async function loadConfigs() {
       SYSTEM_CONFIG_KEYS.map(async (item) => {
         const response = await systemConfigApi.getByKey(item.key);
         const config = response.data.data;
-
         return {
           ...config,
           draftValue: config.configValue,
@@ -84,7 +45,7 @@ async function loadConfigs() {
 
     items.value = responses;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Failed to load system config.';
+    errorMessage.value = error instanceof Error ? error.message : '系统配置加载失败。';
   } finally {
     loading.value = false;
   }
@@ -109,9 +70,9 @@ async function saveItem(item: SystemConfigFormItem) {
     item.configType = updated.configType ?? undefined;
     item.description = updated.description ?? undefined;
     item.editable = updated.editable;
-    ElMessage.success(`${item.configKey} updated`);
+    ElMessage.success(`${item.configKey} 已更新`);
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : 'Failed to save system config.');
+    ElMessage.error(error instanceof Error ? error.message : '系统配置保存失败。');
   }
 }
 
@@ -123,11 +84,9 @@ onMounted(() => {
 <template>
   <section class="system-config-page">
     <header class="system-config-page__hero">
-      <p class="system-config-page__eyebrow">System Config</p>
+      <p class="system-config-page__eyebrow">Current Page</p>
       <h2 class="system-config-page__title">系统配置</h2>
-      <p class="system-config-page__subtitle">
-        当前前端固定管理 10 个系统配置 key，并对齐后端 `/api/config/system`。
-      </p>
+      <p class="system-config-page__subtitle">管理系统参数与运行限制。</p>
     </header>
 
     <el-alert

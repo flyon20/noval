@@ -1,16 +1,23 @@
 :root {
-  --color-bg: #f5efe4;
-  --color-bg-secondary: #efe8db;
-  --color-surface: rgba(255, 253, 249, 0.86);
-  --color-border: rgba(56, 78, 68, 0.12);
-  --color-border-strong: rgba(56, 78, 68, 0.22);
-  --color-text: #20322c;
-  --color-text-muted: #68746d;
-  --color-accent: #d2883d;
-  --color-accent-strong: #a5601d;
-  --color-primary: #23413a;
-  --color-danger: #a14935;
-  --shadow-soft: 0 22px 60px rgba(62, 49, 27, 0.08);
+  --color-bg: #f4eee5;
+  --color-bg-secondary: #ebe0d2;
+  --color-surface: rgba(255, 250, 244, 0.9);
+  --color-surface-strong: rgba(255, 255, 255, 0.96);
+  --color-border: rgba(52, 67, 61, 0.12);
+  --color-border-strong: rgba(52, 67, 61, 0.24);
+  --color-text: #1e2b27;
+  --color-text-muted: #67716a;
+  --color-accent: #c7925c;
+  --color-accent-strong: #9d6230;
+  --color-primary: #243d36;
+  --color-primary-soft: rgba(36, 61, 54, 0.08);
+  --color-danger: #9e4a34;
+  --shadow-soft: 0 24px 60px rgba(69, 49, 22, 0.08);
+  --shadow-card: 0 14px 28px rgba(69, 49, 22, 0.08);
+  --shadow-glow: 0 0 0 1px rgba(199, 146, 92, 0.08), 0 24px 48px rgba(199, 146, 92, 0.12);
+  --radius-xl: 1.6rem;
+  --radius-lg: 1.2rem;
+  --radius-md: 0.95rem;
   --font-heading: "Source Han Serif SC", "Noto Serif SC", "STSong", serif;
   --font-body: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }

@@ -23,6 +23,8 @@ public class CrawlChapterEntity {
     private String content;
     @TableField("word_count")
     private Integer wordCount;
+    @TableField("source_word_count")
+    private Integer sourceWordCount;
     @TableField("crawl_time")
     private LocalDateTime crawlTime;
     @TableField("create_time")
@@ -84,6 +86,14 @@ public class CrawlChapterEntity {
 
     public void setWordCount(Integer wordCount) {
         this.wordCount = wordCount;
+    }
+
+    public Integer getSourceWordCount() {
+        return sourceWordCount;
+    }
+
+    public void setSourceWordCount(Integer sourceWordCount) {
+        this.sourceWordCount = sourceWordCount;
     }
 
     public LocalDateTime getCrawlTime() {

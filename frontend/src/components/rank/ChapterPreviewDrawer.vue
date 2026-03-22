@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { ChapterItem, ChapterRefreshResult, Platform } from '@/types/crawler';
+
+const SUMMARY_LENGTH = 160;
 
 const props = defineProps<{
   modelValue: boolean;
@@ -20,10 +22,41 @@ const emit = defineEmits<{
   refreshChapters: [];
 }>();
 
+const selectedChapterNo = ref<number | null>(null);
+
 const visible = computed({
   get: () => props.modelValue,
   set: (value: boolean) => emit('update:modelValue', value),
 });
+
+const selectedChapter = computed(() =>
+  props.chapters.find((chapter) => chapter.chapterNo === selectedChapterNo.value) ?? null,
+);
+
+watch(
+  () => props.modelValue,
+  (next) => {
+    if (!next) {
+      selectedChapterNo.value = null;
+    }
+  },
+);
+
+function getExcerpt(content: string) {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= SUMMARY_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, SUMMARY_LENGTH)}...`;
+}
+
+function openChapter(chapterNo: number) {
+  selectedChapterNo.value = chapterNo;
+}
+
+function closeChapterDetail() {
+  selectedChapterNo.value = null;
+}
 </script>
 
 <template>
@@ -39,16 +72,26 @@ const visible = computed({
       <div class="chapter-drawer__header">
         <div>
           <p>章节预览</p>
-          <h3>当前已加载 {{ chapters.length }} 章</h3>
+          <h3>{{ selectedChapter ? selectedChapter.chapterTitle : `当前已加载 ${chapters.length} 章` }}</h3>
         </div>
-        <el-button
-          data-testid="go-analysis"
-          type="primary"
-          :disabled="!bookId || !platform || chapters.length === 0"
-          @click="emit('goAnalysis')"
-        >
-          进入分析页
-        </el-button>
+        <div class="chapter-drawer__header-actions">
+          <el-button
+            v-if="selectedChapter"
+            data-testid="chapter-back"
+            plain
+            @click="closeChapterDetail"
+          >
+            返回列表
+          </el-button>
+          <el-button
+            data-testid="go-analysis"
+            type="primary"
+            :disabled="!bookId || !platform || chapters.length === 0"
+            @click="emit('goAnalysis')"
+          >
+            进入分析页
+          </el-button>
+        </div>
       </div>
 
       <div class="chapter-drawer__actions">
@@ -67,13 +110,29 @@ const visible = computed({
 
       <el-skeleton v-if="loading" animated :rows="8" />
 
+      <template v-else-if="selectedChapter">
+        <section class="chapter-detail">
+          <div class="chapter-detail__meta">
+            <span>第 {{ selectedChapter.chapterNo }} 章</span>
+            <span>{{ selectedChapter.wordCount }} 字</span>
+          </div>
+          <p class="chapter-detail__content">{{ selectedChapter.content }}</p>
+        </section>
+      </template>
+
       <div v-else class="chapter-drawer__list">
-        <article v-for="chapter in chapters" :key="chapter.chapterNo" class="chapter-card">
+        <article
+          v-for="chapter in chapters"
+          :key="chapter.chapterNo"
+          class="chapter-card"
+          :data-testid="`chapter-item-${chapter.chapterNo}`"
+          @click="openChapter(chapter.chapterNo)"
+        >
           <div class="chapter-card__heading">
             <strong>{{ chapter.chapterNo }}. {{ chapter.chapterTitle }}</strong>
             <span>{{ chapter.wordCount }} 字</span>
           </div>
-          <p>{{ chapter.content }}</p>
+          <p>{{ getExcerpt(chapter.content) }}</p>
         </article>
       </div>
 
@@ -89,13 +148,16 @@ const visible = computed({
   gap: 1rem;
 }
 
-.chapter-drawer__header {
+.chapter-drawer__header,
+.chapter-card__heading,
+.chapter-detail__meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
 }
 
+.chapter-drawer__header-actions,
 .chapter-drawer__actions {
   display: flex;
   align-items: center;
@@ -108,13 +170,19 @@ const visible = computed({
 .chapter-drawer__trace,
 .chapter-drawer__hint,
 .chapter-drawer__quota,
-.chapter-card p {
+.chapter-card p,
+.chapter-detail__content {
   margin: 0;
 }
 
 .chapter-drawer__header p {
   color: var(--color-text-muted);
   font-size: 0.8rem;
+}
+
+.chapter-drawer__header h3 {
+  font-size: 1.3rem;
+  line-height: 1.3;
 }
 
 .chapter-drawer__list {
@@ -125,23 +193,34 @@ const visible = computed({
   padding-right: 0.5rem;
 }
 
-.chapter-card {
+.chapter-card,
+.chapter-detail {
   display: grid;
   gap: 0.75rem;
-  padding: 1rem;
+  padding: 1rem 1.1rem;
   border: 1px solid var(--color-border);
-  border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.65);
+  border-radius: 1.1rem;
+  background: rgba(255, 255, 255, 0.72);
 }
 
-.chapter-card__heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
+.chapter-card {
+  cursor: pointer;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.chapter-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(35, 65, 58, 0.22);
+  box-shadow: var(--shadow-soft);
+}
+
+.chapter-card__heading,
+.chapter-detail__meta {
   color: var(--color-text-muted);
 }
 
-.chapter-card p {
+.chapter-card p,
+.chapter-detail__content {
   line-height: 1.8;
   white-space: pre-wrap;
 }
@@ -151,5 +230,13 @@ const visible = computed({
 .chapter-drawer__quota {
   color: var(--color-text-muted);
   font-size: 0.85rem;
+}
+
+@media (max-width: 920px) {
+  .chapter-drawer__header,
+  .chapter-card__heading,
+  .chapter-detail__meta {
+    align-items: flex-start;
+  }
 }
 </style>

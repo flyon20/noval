@@ -29,6 +29,8 @@ public class SystemConfigService {
         Map.entry("crawler.rank.force-max-times", new DefaultSystemConfig("2", "crawler", "Rank force refresh max times", true)),
         Map.entry("crawler.book.refresh-days", new DefaultSystemConfig("7", "crawler", "Book refresh days", true)),
         Map.entry("analysis.reanalyze.cooldown-hours", new DefaultSystemConfig("0", "analysis", "Analysis reanalyze cooldown hours", true)),
+        Map.entry("analysis.chunk.max-input-tokens", new DefaultSystemConfig("6000", "analysis", "Approximate max input tokens before analysis switches to chunk mode", true)),
+        Map.entry("analysis.chunk.target-input-tokens", new DefaultSystemConfig("3500", "analysis", "Approximate target input tokens for each chunked analysis request", true)),
         Map.entry("security.audit.enabled", new DefaultSystemConfig("true", "security", "Whether audit logging is enabled", true))
     );
 

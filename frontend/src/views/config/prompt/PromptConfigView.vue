@@ -43,7 +43,7 @@ async function loadPromptConfig(promptType = activeType.value) {
     traceId.value = response.data.traceId;
     applyPromptConfig(response.data.data);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '提示词配置加载失败';
+    errorMessage.value = error instanceof Error ? error.message : '提示词配置加载失败。';
   } finally {
     loading.value = false;
   }
@@ -105,11 +105,9 @@ onMounted(() => {
   <section class="prompt-config-page">
     <header class="prompt-config-page__hero">
       <div>
-        <p class="prompt-config-page__eyebrow">Prompt Config</p>
+        <p class="prompt-config-page__eyebrow">Current Page</p>
         <h2 class="prompt-config-page__title">提示词配置</h2>
-        <p class="prompt-config-page__subtitle">
-          按分析类型维护提示词模板。保存时会直接对齐当前后端 `/api/config/prompt`。
-        </p>
+        <p class="prompt-config-page__subtitle">管理提示词内容与模型参数。</p>
       </div>
       <div class="prompt-config-page__meta">
         <span>当前类型：{{ activeType }}</span>
@@ -196,7 +194,7 @@ onMounted(() => {
       </el-form-item>
 
       <div class="prompt-config-page__hint">
-        规则：保存前必须保留 <code v-pre>{{content}}</code> 占位符，否则后端也会拒绝更新。
+        保存前必须保留 <code v-pre>{{content}}</code> 占位符。
       </div>
 
       <div class="prompt-config-page__preview">

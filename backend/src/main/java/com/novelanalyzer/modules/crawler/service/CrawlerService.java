@@ -225,7 +225,8 @@ public class CrawlerService {
                 request.getBookId(),
                 chapter.getChapterNo(),
                 chapter.getChapterTitle(),
-                chapter.getContent()
+                chapter.getContent(),
+                chapter.getSourceWordCount()
             );
         }
         List<ChapterVO> result = crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
@@ -264,7 +265,8 @@ public class CrawlerService {
                     request.getBookId(),
                     chapter.getChapterNo(),
                     chapter.getChapterTitle(),
-                    chapter.getContent()
+                    chapter.getContent(),
+                    chapter.getSourceWordCount()
                 );
             }
             evictChapterCaches(request.getBookId());
@@ -315,9 +317,30 @@ public class CrawlerService {
             if (parsedChapterNumber != null && !Objects.equals(parsedChapterNumber, expectedChapterNo)) {
                 return expectedChapterNo - 1;
             }
+            if (!isChapterContentComplete(chapter)) {
+                return expectedChapterNo - 1;
+            }
             expectedChapterNo++;
         }
         return expectedChapterNo - 1;
+    }
+
+    private boolean isChapterContentComplete(ChapterVO chapter) {
+        if (chapter == null || chapter.getContent() == null || chapter.getContent().isBlank()) {
+            return false;
+        }
+        Integer sourceWordCount = chapter.getSourceWordCount();
+        if (sourceWordCount == null || sourceWordCount <= 0) {
+            return false;
+        }
+        return normalizeChapterLength(chapter.getContent()) >= Math.floor(sourceWordCount * 0.9d);
+    }
+
+    private int normalizeChapterLength(String content) {
+        if (content == null || content.isBlank()) {
+            return 0;
+        }
+        return content.replace("\r", "").replace("\n", "").trim().length();
     }
 
     private Integer parseChapterNumber(String chapterTitle) {

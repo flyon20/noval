@@ -15,6 +15,8 @@ const emit = defineEmits<{
 
 <template>
   <div class="app-shell">
+    <div class="app-shell__backdrop"></div>
+
     <div class="app-shell__sidebar">
       <AppSidebar :roles="roles" />
     </div>
@@ -31,26 +33,43 @@ const emit = defineEmits<{
 
 <style scoped lang="scss">
 .app-shell {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(280px, 320px) 1fr;
+  grid-template-columns: minmax(290px, 330px) 1fr;
   gap: 1.5rem;
   min-height: 100vh;
-  padding: 1.25rem;
+  padding: 1.35rem;
+  background:
+    radial-gradient(circle at top left, rgba(199, 146, 92, 0.15), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(36, 61, 54, 0.1), transparent 20%),
+    linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
+}
+
+.app-shell__backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(130deg, rgba(255, 255, 255, 0.3), transparent 42%),
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.32), transparent 26%);
 }
 
 .app-shell__sidebar,
 .app-shell__surface {
+  position: relative;
   min-width: 0;
-  background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 1.5rem;
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
   box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(10px);
 }
 
 .app-shell__sidebar {
   position: sticky;
-  top: 1.25rem;
+  top: 1.35rem;
   align-self: start;
+  overflow: hidden;
 }
 
 .app-shell__surface {

@@ -109,7 +109,7 @@ describe('LoginView', () => {
     });
 
     expect(wrapper.text()).toContain('NOVAL');
-    expect(wrapper.text()).toContain('扫榜');
+    expect(wrapper.text()).toContain('登录页');
     expect(wrapper.text()).not.toContain('JWT');
   });
 

@@ -60,31 +60,17 @@ async function handleSubmit() {
   <div class="login-page">
     <section class="login-page__panel login-page__hero">
       <p class="login-page__eyebrow">NOVAL</p>
-      <h1>小说榜单抓取与分析工作台</h1>
+      <h1>登录页</h1>
       <p class="login-page__description">
-        登录后会自动同步默认榜单，进入后即可切换频道、整榜抓取、分页查看和继续做书籍分析。
+        登录后进入控制台。
       </p>
-      <div class="login-page__feature-list">
-        <article>
-          <strong>扫榜同步</strong>
-          <span>登录后自动补抓默认榜单，减少空白页等待。</span>
-        </article>
-        <article>
-          <strong>整榜入库</strong>
-          <span>按频道和榜单一次抓完整榜，翻页只读数据库。</span>
-        </article>
-        <article>
-          <strong>详情延展</strong>
-          <span>从榜单继续查看书籍详情、章节抓取和后续分析。</span>
-        </article>
-      </div>
     </section>
 
     <section class="login-page__panel login-page__form-wrap">
       <div class="login-card">
         <div class="login-card__heading">
           <p>账号登录</p>
-          <h2>进入榜单控制台</h2>
+          <h2>进入控制台</h2>
         </div>
 
         <el-alert
@@ -147,7 +133,7 @@ async function handleSubmit() {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 1.2rem;
+  gap: 1.1rem;
   padding: 3rem;
   background:
     radial-gradient(circle at top right, rgba(210, 136, 61, 0.18), transparent 32%),
@@ -167,32 +153,14 @@ async function handleSubmit() {
 }
 
 .login-page__hero h1 {
-  max-width: 11ch;
-  font-size: clamp(2.3rem, 4vw, 4.1rem);
+  max-width: 10ch;
+  font-size: clamp(2.3rem, 4vw, 4rem);
   line-height: 1.08;
 }
 
 .login-page__description {
-  max-width: 46ch;
+  max-width: 34ch;
   line-height: 1.8;
-}
-
-.login-page__feature-list {
-  display: grid;
-  gap: 1rem;
-}
-
-.login-page__feature-list article {
-  display: grid;
-  gap: 0.35rem;
-  padding: 1rem 1.1rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
-  border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.55);
-}
-
-.login-page__feature-list span {
-  color: var(--color-text-muted);
 }
 
 .login-page__form-wrap {

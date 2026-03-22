@@ -10,6 +10,8 @@ const props = defineProps<{
     traceId?: string;
     modelName?: string;
     tokenUsed?: number;
+    analysisModeLabel?: string;
+    analysisDetailLabel?: string;
   };
   errorMessage?: string;
 }>();
@@ -54,8 +56,10 @@ watch(
     <template v-else-if="props.phase === 'done'">
       <div ref="contentRef" class="analysis-result__done" v-html="finalHtml" />
       <div class="analysis-result__meta">
+        <span v-if="props.resultMeta?.analysisModeLabel">{{ props.resultMeta.analysisModeLabel }}</span>
+        <span v-if="props.resultMeta?.analysisDetailLabel">{{ props.resultMeta.analysisDetailLabel }}</span>
         <span v-if="props.resultMeta?.modelName">模型：{{ props.resultMeta.modelName }}</span>
-        <span v-if="props.resultMeta?.tokenUsed !== undefined">Token：{{ props.resultMeta.tokenUsed }}</span>
+        <span v-if="props.resultMeta?.tokenUsed !== undefined">总 Token：{{ props.resultMeta.tokenUsed }}</span>
         <span v-if="props.resultMeta?.traceId" class="analysis-result__trace">traceId: {{ props.resultMeta.traceId }}</span>
       </div>
     </template>

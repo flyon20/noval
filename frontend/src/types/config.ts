@@ -25,6 +25,8 @@ export type KnownSystemConfigKey =
   | 'ai.openai-compatible.base-url'
   | 'ai.openai-compatible.default-model'
   | 'ai.openai-compatible.streaming-enabled'
+  | 'analysis.chunk.max-input-tokens'
+  | 'analysis.chunk.target-input-tokens'
   | 'crawler.default.chapter-count'
   | 'crawler.http.timeout-seconds'
   | 'crawler.chapter.fetch-workers'

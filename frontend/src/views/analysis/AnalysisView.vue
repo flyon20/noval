@@ -78,6 +78,38 @@ const analysis = useAnalysisRun({
 });
 
 const currentResult = computed(() => analysis.state.results[analysis.state.activeMode]);
+const currentAnalysisModeLabel = computed(() => {
+  const resultJson = currentResult.value?.resultJson;
+  const analysisMode = typeof resultJson?.analysisMode === 'string' ? resultJson.analysisMode : '';
+  const segmentCount = typeof resultJson?.segmentCount === 'number' ? resultJson.segmentCount : null;
+
+  if (analysis.state.phase !== 'done' || !currentResult.value) {
+    return undefined;
+  }
+
+  if (analysisMode === 'chunk_merge') {
+    return segmentCount && segmentCount > 1 ? `分析方式：分段汇总 · ${segmentCount} 段` : '分析方式：分段汇总';
+  }
+
+  return '分析方式：单次分析';
+});
+const currentAnalysisDetailLabel = computed(() => {
+  const resultJson = currentResult.value?.resultJson;
+  const segmentCount = typeof resultJson?.segmentCount === 'number' ? resultJson.segmentCount : null;
+  const inputChapterCount =
+    typeof resultJson?.inputChapterCount === 'number' ? resultJson.inputChapterCount : pageContext.value?.chapterCount;
+
+  if (analysis.state.phase !== 'done' || !currentResult.value) {
+    return undefined;
+  }
+
+  const parts = [
+    typeof inputChapterCount === 'number' ? `章节数：${inputChapterCount}` : '',
+    segmentCount && segmentCount > 1 ? `分段数：${segmentCount}` : '',
+  ].filter(Boolean);
+
+  return parts.length ? parts.join(' · ') : undefined;
+});
 const isRunning = computed(() =>
   ['preparing', 'streaming', 'fallback-blocking'].includes(analysis.state.phase),
 );
@@ -149,15 +181,6 @@ async function goBack() {
           :chapter-count="pageContext.chapterCount"
           :platform="pageContext.platform"
         />
-
-        <aside class="analysis-page__glance">
-          <p class="analysis-page__glance-title">本页策略</p>
-          <ul>
-            <li>SSE 流式优先，失败时自动回退阻塞接口。</li>
-            <li>鉴权沿用 JWT 单 token 与 Bearer 头。</li>
-            <li>支持停止、重跑、复制和模式切换。</li>
-          </ul>
-        </aside>
       </header>
 
       <section class="analysis-page__panel">
@@ -180,6 +203,8 @@ async function goBack() {
           :phase="analysis.state.phase"
           :result-content="currentResult?.resultContent"
           :result-meta="{
+            analysisModeLabel: currentAnalysisModeLabel,
+            analysisDetailLabel: currentAnalysisDetailLabel,
             traceId: currentResult?.traceId ?? analysis.state.traceId,
             modelName: currentResult?.modelName,
             tokenUsed: currentResult?.tokenUsed,
@@ -210,30 +235,11 @@ async function goBack() {
 }
 
 .analysis-page__hero {
-  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+  grid-template-columns: 1fr;
   padding: 1.25rem;
   background:
     radial-gradient(circle at top right, rgba(210, 136, 61, 0.16), transparent 26%),
     linear-gradient(180deg, rgba(255, 251, 245, 0.96), rgba(248, 244, 236, 0.92));
-}
-
-.analysis-page__glance {
-  padding: 1rem 1.1rem;
-  border-radius: 1.15rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
-  background: rgba(255, 255, 255, 0.72);
-}
-
-.analysis-page__glance-title {
-  margin: 0 0 0.5rem;
-  font-weight: 700;
-}
-
-.analysis-page__glance ul {
-  margin: 0;
-  padding-left: 1.1rem;
-  color: var(--color-text-muted);
-  line-height: 1.8;
 }
 
 .analysis-page__panel {

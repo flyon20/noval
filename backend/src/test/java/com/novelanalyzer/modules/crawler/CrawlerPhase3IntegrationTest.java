@@ -439,6 +439,66 @@ class CrawlerPhase3IntegrationTest {
     }
 
     @Test
+    void shouldRepairLegacyChaptersWithoutSourceWordCount() throws Exception {
+        LocalDateTime crawlTime = LocalDateTime.now().minusHours(1);
+        long bookId = insertBook(
+            "fanqie",
+            "legacy-chapter-1",
+            "Legacy Chapter Book",
+            "Legacy Author",
+            "Legacy Intro",
+            "https://fanqienovel.com/page/legacy-chapter-1",
+            crawlTime
+        );
+        insertChapter(bookId, 1, "Chapter 1", "legacy truncated chapter", crawlTime, null);
+
+        when(pythonCrawlerClient.fetchChapters("fanqie", "https://fanqienovel.com/page/legacy-chapter-1", 1, 1, 20, 3))
+            .thenReturn(List.of(chapterItem(1, "Chapter 1 repaired", 2452)));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/chapters")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":1}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data[0].chapterTitle").value("Chapter 1 repaired"));
+
+        verify(pythonCrawlerClient, times(1))
+            .fetchChapters("fanqie", "https://fanqienovel.com/page/legacy-chapter-1", 1, 1, 20, 3);
+    }
+
+    @Test
+    void shouldRepairPersistedChaptersWhenStoredContentIsShorterThanSourceWordCount() throws Exception {
+        LocalDateTime crawlTime = LocalDateTime.now().minusHours(1);
+        long bookId = insertBook(
+            "fanqie",
+            "short-chapter-1",
+            "Short Chapter Book",
+            "Short Author",
+            "Short Intro",
+            "https://fanqienovel.com/page/short-chapter-1",
+            crawlTime
+        );
+        insertChapter(bookId, 1, "Chapter 1", "short content", crawlTime, 2452);
+
+        when(pythonCrawlerClient.fetchChapters("fanqie", "https://fanqienovel.com/page/short-chapter-1", 1, 1, 20, 3))
+            .thenReturn(List.of(chapterItem(1, "Chapter 1 repaired", 2452)));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/chapters")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"platform\":\"fanqie\",\"bookId\":" + bookId + ",\"chapterCount\":1}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data[0].chapterTitle").value("Chapter 1 repaired"));
+
+        verify(pythonCrawlerClient, times(1))
+            .fetchChapters("fanqie", "https://fanqienovel.com/page/short-chapter-1", 1, 1, 20, 3);
+    }
+
+    @Test
     void shouldForceRefreshChaptersAndReturnUsageStatsForNormalUser() throws Exception {
         insertSystemConfig("crawler.chapter.force-refresh.user-max-times", "3");
         insertSystemConfig("crawler.rank.refresh-days", "5");
@@ -579,10 +639,15 @@ class CrawlerPhase3IntegrationTest {
     }
 
     private ExternalChapterItem chapterItem(int no, String title) {
+        return chapterItem(no, title, null);
+    }
+
+    private ExternalChapterItem chapterItem(int no, String title, Integer sourceWordCount) {
         ExternalChapterItem item = new ExternalChapterItem();
         item.setChapterNo(no);
         item.setChapterTitle(title);
         item.setContent(title + " 内容");
+        item.setSourceWordCount(sourceWordCount);
         return item;
     }
     private ExternalRankBoard boardItem(String platform,
@@ -750,14 +815,24 @@ class CrawlerPhase3IntegrationTest {
                                String chapterTitle,
                                String content,
                                LocalDateTime crawlTime) {
+        insertChapter(bookId, chapterNo, chapterTitle, content, crawlTime, content.length());
+    }
+
+    private void insertChapter(long bookId,
+                               int chapterNo,
+                               String chapterTitle,
+                               String content,
+                               LocalDateTime crawlTime,
+                               Integer sourceWordCount) {
         jdbcTemplate.update(
-            "INSERT INTO crawl_chapter(platform, book_id, chapter_no, chapter_title, content, word_count, crawl_time, create_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO crawl_chapter(platform, book_id, chapter_no, chapter_title, content, word_count, source_word_count, crawl_time, create_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             "fanqie",
             bookId,
             chapterNo,
             chapterTitle,
             content,
             content.length(),
+            sourceWordCount,
             Timestamp.valueOf(crawlTime),
             Timestamp.valueOf(crawlTime),
             0

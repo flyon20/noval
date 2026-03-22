@@ -1,6 +1,6 @@
 INSERT INTO prompt_config (id, prompt_type, prompt_name, prompt_content, model_name, status, is_default, deleted)
 VALUES
-    (1, 'deconstruct', 'default-deconstruct', '请对文本进行拆文分析：{{content}}', 'dify', 1, 1, 0),
+    (1, 'deconstruct', 'default-deconstruct', '请基于以下小说正文进行拆文分析，重点输出：1. 核心卖点；2. 开篇钩子；3. 人物关系与冲突；4. 节奏与爽点；5. 可优化点。\n\n{{content}}', 'deepseek-chat', 1, 1, 0),
     (2, 'structure', 'default-structure', '请对文本进行结构分析：{{content}}', 'dify', 1, 1, 0),
     (3, 'plot', 'default-plot', '请对文本进行情节分析：{{content}}', 'dify', 1, 1, 0);
 

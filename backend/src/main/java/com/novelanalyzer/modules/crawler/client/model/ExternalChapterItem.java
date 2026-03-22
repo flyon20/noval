@@ -5,6 +5,7 @@ public class ExternalChapterItem {
     private Integer chapterNo;
     private String chapterTitle;
     private String content;
+    private Integer sourceWordCount;
 
     public Integer getChapterNo() {
         return chapterNo;
@@ -29,5 +30,12 @@ public class ExternalChapterItem {
     public void setContent(String content) {
         this.content = content;
     }
-}
 
+    public Integer getSourceWordCount() {
+        return sourceWordCount;
+    }
+
+    public void setSourceWordCount(Integer sourceWordCount) {
+        this.sourceWordCount = sourceWordCount;
+    }
+}

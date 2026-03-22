@@ -36,6 +36,8 @@ describe('AnalysisResultCard', () => {
         phase: 'done',
         resultContent: result,
         resultMeta: {
+          analysisModeLabel: '分析方式：分段汇总 · 4 段',
+          analysisDetailLabel: '章节数：10 · 分段数：4',
           traceId: 'trace-result',
           modelName: 'dify',
           tokenUsed: 120,
@@ -45,6 +47,9 @@ describe('AnalysisResultCard', () => {
 
     expect(wrapper.html()).toContain('<h1');
     expect(wrapper.text()).toContain('trace-result');
+    expect(wrapper.text()).toContain('分段汇总');
+    expect(wrapper.text()).toContain('章节数：10');
+    expect(wrapper.text()).toContain('总 Token：120');
   });
 });
 

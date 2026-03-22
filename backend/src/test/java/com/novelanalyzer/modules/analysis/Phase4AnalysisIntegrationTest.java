@@ -4,11 +4,13 @@ import com.jayway.jsonpath.JsonPath;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.jdbc.Sql;
@@ -21,6 +23,9 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -60,6 +65,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class Phase4AnalysisIntegrationTest {
 
     private static final HttpServer MOCK_OPENAI_SERVER = startMockOpenAiServer();
+    private static final AtomicReference<String> LAST_OPENAI_REQUEST_BODY = new AtomicReference<>("");
+    private static final AtomicInteger OPENAI_REQUEST_COUNT = new AtomicInteger();
 
     static {
         System.setProperty("TEST_DEEPSEEK_API_KEY", "test-key");
@@ -71,6 +78,9 @@ class Phase4AnalysisIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private com.novelanalyzer.modules.crawler.service.CrawlerCacheService crawlerCacheService;
+
     @DynamicPropertySource
     static void registerAiProperties(DynamicPropertyRegistry registry) {
         registry.add("app.ai.openai-compatible.base-url", () -> "http://127.0.0.1:" + MOCK_OPENAI_SERVER.getAddress().getPort() + "/v1");
@@ -80,6 +90,12 @@ class Phase4AnalysisIntegrationTest {
     static void shutdownMockServer() {
         MOCK_OPENAI_SERVER.stop(0);
         System.clearProperty("TEST_DEEPSEEK_API_KEY");
+    }
+
+    @BeforeEach
+    void resetMockOpenAiCapture() {
+        LAST_OPENAI_REQUEST_BODY.set("");
+        OPENAI_REQUEST_COUNT.set(0);
     }
 
     @Test
@@ -264,6 +280,74 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldReusePersistedAnalysisResultWithinCacheWindowWhenLocalCacheIsCleared() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        updatePromptConfig(token, "JSON ONLY {{content}}");
+
+        MvcResult firstResult = mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        Number firstId = JsonPath.read(firstResult.getResponse().getContentAsString(), "$.data.id");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isEqualTo(1);
+
+        clearCrawlerLocalCache();
+
+        MvcResult secondResult = mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        Number secondId = JsonPath.read(secondResult.getResponse().getContentAsString(), "$.data.id");
+        Integer resultCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM analysis_result WHERE book_id = 1001 AND analysis_type = 'deconstruct' AND chapter_count = 2",
+            Integer.class
+        );
+
+        assertThat(secondId.longValue()).isEqualTo(firstId.longValue());
+        assertThat(resultCount).isEqualTo(1);
+        assertThat(OPENAI_REQUEST_COUNT.get()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldFallbackToBuiltInPromptAndCarrySelectedChapterContentWhenPromptConfigIsBroken() throws Exception {
+        long bookId = insertBook("fanqie", "analysis-broken-1", "Broken Prompt Book", "Author A",
+            "Intro A", "https://fanqienovel.com/page/analysis-broken-1");
+        insertChapter(bookId, 1, "Chapter 1", "ALPHA chapter one");
+        insertChapter(bookId, 2, "Chapter 2", "BETA chapter two");
+        insertChapter(bookId, 3, "Chapter 3", "GAMMA chapter three");
+        updatePromptConfigDirectly(1L, "联调更新提示词", "deepseek-chat");
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":%d,"chapterCount":2,"forceReanalyze":true}
+                    """.formatted(bookId)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.modelName").value("deepseek-chat"));
+
+        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
+        assertThat(requestBody).contains("ALPHA chapter one");
+        assertThat(requestBody).contains("BETA chapter two");
+        assertThat(requestBody).doesNotContain("GAMMA chapter three");
+        assertThat(requestBody).doesNotContain("联调更新提示词");
+    }
+
+    @Test
     void shouldStreamDeconstructAnalysisWithSseProtocol() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
 
@@ -404,6 +488,8 @@ class Phase4AnalysisIntegrationTest {
             HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
             server.createContext("/v1/chat/completions", exchange -> {
                 String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                LAST_OPENAI_REQUEST_BODY.set(requestBody);
+                OPENAI_REQUEST_COUNT.incrementAndGet();
                 String marker = extractPromptMarker(requestBody);
                 byte[] response = """
                     {
@@ -455,5 +541,69 @@ class Phase4AnalysisIntegrationTest {
             return "JSON ONLY";
         }
         return "DEFAULT";
+    }
+
+    @SuppressWarnings("unchecked")
+    private void clearCrawlerLocalCache() {
+        Map<String, Object> localCache = (Map<String, Object>) ReflectionTestUtils.getField(crawlerCacheService, "localCache");
+        if (localCache != null) {
+            localCache.clear();
+        }
+    }
+
+    private long insertBook(String platform,
+                            String platformBookId,
+                            String bookName,
+                            String author,
+                            String intro,
+                            String bookUrl) {
+        jdbcTemplate.update(
+            """
+                INSERT INTO crawl_book(platform, platform_book_id, book_name, author, intro, book_url, deleted)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+                """,
+            platform,
+            platformBookId,
+            bookName,
+            author,
+            intro,
+            bookUrl
+        );
+        Long id = jdbcTemplate.queryForObject(
+            "SELECT id FROM crawl_book WHERE platform = ? AND platform_book_id = ? AND deleted = 0 LIMIT 1",
+            Long.class,
+            platform,
+            platformBookId
+        );
+        assertThat(id).isNotNull();
+        return id;
+    }
+
+    private void insertChapter(long bookId, int chapterNo, String chapterTitle, String content) {
+        jdbcTemplate.update(
+            """
+                INSERT INTO crawl_chapter(platform, book_id, chapter_no, chapter_title, content, word_count, deleted)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+                """,
+            "fanqie",
+            bookId,
+            chapterNo,
+            chapterTitle,
+            content,
+            content.length()
+        );
+    }
+
+    private void updatePromptConfigDirectly(Long id, String promptContent, String modelName) {
+        jdbcTemplate.update(
+            """
+                UPDATE prompt_config
+                SET prompt_content = ?, model_name = ?, update_time = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+            promptContent,
+            modelName,
+            id
+        );
     }
 }

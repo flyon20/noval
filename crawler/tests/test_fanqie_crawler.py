@@ -312,6 +312,26 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertEqual("Decoded chapter content", chapters[0].content)
         self.assertFalse(any(0xE000 <= ord(ch) <= 0xF8FF for ch in chapters[0].content))
 
+    def test_fetch_chapters_should_capture_source_word_count_from_reader_metadata(self) -> None:
+        crawler = FanqieCrawler(
+            StubHttpClient(
+                {
+                    "https://fanqienovel.com/page/101": (
+                        '<script>(function(){window.__INITIAL_STATE__={"page":{"bookId":"101","bookName":"Book A",'
+                        '"author":"Author A","abstract":"Intro A","itemIds":["c1"]}};})()</script>'
+                    ),
+                    "https://fanqienovel.com/reader/c1": (
+                        '<script>(function(){window.__INITIAL_STATE__={"reader":{"chapterData":{'
+                        '"title":"Chapter 1","chapterWordNumber":"2452","content":"<p>Line 1</p><p>Line 2</p>"}}};})()</script>'
+                    ),
+                }
+            )
+        )
+
+        chapters = crawler.fetch_chapters("https://fanqienovel.com/page/101", 1)
+
+        self.assertEqual(2452, chapters[0].sourceWordCount)
+
     def test_fetch_chapters_should_follow_catalog_order_instead_of_unsorted_item_ids(self) -> None:
         http_client = StubHttpClient(
             {

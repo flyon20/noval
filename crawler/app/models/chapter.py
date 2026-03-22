@@ -14,3 +14,4 @@ class ChapterItem(BaseModel):
     chapterNo: int
     chapterTitle: str
     content: str
+    sourceWordCount: int | None = None

@@ -25,7 +25,7 @@ function buildPageItems() {
     rankNo: index + 1,
     bookName: `Book ${index + 1}`,
     author: `Author ${index + 1}`,
-    intro: `Intro ${index + 1}`,
+    intro: `Intro ${index + 1} `.repeat(20),
     bookUrl: `https://book.test/${index + 1}`,
     platform: 'fanqie' as const,
     category: 'male-new:urban-brain',
@@ -86,7 +86,7 @@ describe('RankView', () => {
           snapshotTime: '2026-03-22T10:00:00',
           total: 12,
           page: 1,
-          pageSize: 5,
+          pageSize: 10,
           items: buildPageItems(),
         },
         timestamp: 1,
@@ -136,10 +136,11 @@ describe('RankView', () => {
       channelCode: 'male-new',
       boardCode: 'urban-power',
       page: 1,
-      pageSize: 5,
+      pageSize: 10,
     });
     expect(wrapper.text()).toContain('Urban Power');
     expect(wrapper.text()).toContain('Book 1');
+    expect(wrapper.text()).toContain('Intr...');
   });
 
   test('manual refresh uses force mode and pagination only requests page data', async () => {
@@ -186,7 +187,7 @@ describe('RankView', () => {
           snapshotTime: '2026-03-22T10:00:00',
           total: 12,
           page: 1,
-          pageSize: 5,
+          pageSize: 10,
           items: buildPageItems(),
         },
         timestamp: 1,
@@ -247,7 +248,52 @@ describe('RankView', () => {
       channelCode: 'male-new',
       boardCode: 'urban-brain',
       page: 1,
+      pageSize: 10,
+    });
+
+    vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+          page: 1,
+          pageSize: 5,
+          items: buildPageItems(),
+        },
+        timestamp: 1,
+        traceId: 'trace-page-size-5',
+      },
+    });
+
+    await wrapper.get('[data-testid="rank-page-size-5"]').trigger('click');
+    await flushPromises();
+
+    expect(crawlerApi.getRankPage).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+      page: 1,
       pageSize: 5,
+    });
+
+    vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+          page: 2,
+          pageSize: 5,
+          items: buildPageItems(),
+        },
+        timestamp: 1,
+        traceId: 'trace-page-2',
+      },
     });
 
     vi.mocked(crawlerApi.getRankPage).mockClear();

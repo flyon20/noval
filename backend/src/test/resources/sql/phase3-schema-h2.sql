@@ -41,6 +41,7 @@ CREATE TABLE crawl_chapter (
     chapter_title VARCHAR(255) NOT NULL,
     content CLOB,
     word_count INT DEFAULT 0,
+    source_word_count INT,
     crawl_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0
@@ -59,4 +60,3 @@ CREATE TABLE crawler_task (
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-

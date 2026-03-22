@@ -10,15 +10,18 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.analysis.dto.AnalysisRequest;
 import com.novelanalyzer.modules.analysis.dto.TrendAnalysisRequest;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
+import com.novelanalyzer.modules.analysis.model.AnalysisResultEntity;
 import com.novelanalyzer.modules.analysis.repository.AnalysisRepository;
 import com.novelanalyzer.modules.analysis.vo.AnalysisResultVO;
 import com.novelanalyzer.modules.analysis.vo.TrendAnalysisVO;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
+import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.model.CrawlBookEntity;
 import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
 import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
+import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
@@ -30,6 +33,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +45,8 @@ public class AnalysisService {
     private static final long ANALYSIS_TTL_SECONDS = 30L * 24 * 3600;
     private static final long STREAM_TIMEOUT_MILLIS = 0L;
     private static final int STREAM_CHUNK_SIZE = 120;
+    private static final int DEFAULT_CHUNK_MAX_INPUT_TOKENS = 6000;
+    private static final int DEFAULT_CHUNK_TARGET_INPUT_TOKENS = 3500;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final PromptConfigRepository promptConfigRepository;
@@ -48,6 +54,8 @@ public class AnalysisService {
     private final AiGatewayService aiGatewayService;
     private final AnalysisRepository analysisRepository;
     private final CrawlerCacheService crawlerCacheService;
+    private final CrawlerService crawlerService;
+    private final com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService;
     private final ObjectMapper objectMapper;
     private final AsyncTaskExecutor streamTaskExecutor = new SimpleAsyncTaskExecutor("analysis-stream-");
 
@@ -56,12 +64,16 @@ public class AnalysisService {
                            AiGatewayService aiGatewayService,
                            AnalysisRepository analysisRepository,
                            CrawlerCacheService crawlerCacheService,
+                           CrawlerService crawlerService,
+                           com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService,
                            ObjectMapper objectMapper) {
         this.promptConfigRepository = promptConfigRepository;
         this.crawlerRepository = crawlerRepository;
         this.aiGatewayService = aiGatewayService;
         this.analysisRepository = analysisRepository;
         this.crawlerCacheService = crawlerCacheService;
+        this.crawlerService = crawlerService;
+        this.systemConfigService = systemConfigService;
         this.objectMapper = objectMapper;
     }
 
@@ -74,15 +86,33 @@ public class AnalysisService {
         if (!forceReanalyze && cached != null) {
             return cached;
         }
+        if (!forceReanalyze) {
+            AnalysisResultVO persisted = analysisRepository.findLatestReusable(
+                    request.getPlatform(),
+                    request.getBookId(),
+                    analysisType,
+                    request.getChapterCount(),
+                    promptConfig.getId(),
+                    resolveAnalysisReuseTime(promptConfig)
+                )
+                .map(this::toAnalysisResultVO)
+                .orElse(null);
+            if (persisted != null) {
+                crawlerCacheService.put(cacheKey, persisted, ANALYSIS_TTL_SECONDS);
+                return persisted;
+            }
+        }
         CrawlBookEntity book = crawlerRepository.findBookById(request.getBookId())
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
-        List<ChapterVO> chapters = crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
+        List<ChapterVO> chapters = loadAnalysisChapters(request);
         if (chapters.isEmpty()) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "chapter content not found");
         }
 
         String inputText = buildBookInputText(book, chapters);
-        AiInvokeResult aiResult = invokeAi(promptConfig, inputText, analysisType);
+        AiInvokeResult aiResult = shouldUseChunkedAnalysis(promptConfig, analysisType, inputText, chapters)
+            ? invokeChunkedAnalysis(promptConfig, book, chapters, analysisType)
+            : invokeAi(promptConfig, inputText, analysisType);
         Long resultId = saveAnalysisResult(
             request.getPlatform(),
             request.getBookId(),
@@ -191,6 +221,45 @@ public class AnalysisService {
 
     private String buildTrendCacheKey(PromptConfigEntity promptConfig, String platform, String category) {
         return "analysis:trend:" + platform + ":" + category + ":" + buildPromptSignature(promptConfig);
+    }
+
+    private boolean shouldUseChunkedAnalysis(PromptConfigEntity promptConfig,
+                                             String analysisType,
+                                             String inputText,
+                                             List<ChapterVO> chapters) {
+        if (!supportsChunkedAnalysis(analysisType) || chapters == null || chapters.size() <= 1) {
+            return false;
+        }
+        return aiGatewayService.estimatePromptTokens(promptConfig, inputText, analysisType) > resolveChunkMaxInputTokens();
+    }
+
+    private boolean supportsChunkedAnalysis(String analysisType) {
+        return "deconstruct".equals(analysisType)
+            || "structure".equals(analysisType)
+            || "plot".equals(analysisType);
+    }
+
+    private int resolveChunkMaxInputTokens() {
+        return Math.max(
+            1000,
+            systemConfigService.getIntValueOrDefault("analysis.chunk.max-input-tokens", DEFAULT_CHUNK_MAX_INPUT_TOKENS)
+        );
+    }
+
+    private int resolveChunkTargetInputTokens() {
+        return Math.max(
+            1000,
+            systemConfigService.getIntValueOrDefault("analysis.chunk.target-input-tokens", DEFAULT_CHUNK_TARGET_INPUT_TOKENS)
+        );
+    }
+
+    private LocalDateTime resolveAnalysisReuseTime(PromptConfigEntity promptConfig) {
+        LocalDateTime ttlStart = LocalDateTime.now().minusSeconds(ANALYSIS_TTL_SECONDS);
+        LocalDateTime promptUpdatedAt = promptConfig.getUpdateTime();
+        if (promptUpdatedAt == null || promptUpdatedAt.isBefore(ttlStart)) {
+            return ttlStart;
+        }
+        return promptUpdatedAt;
     }
 
     private AuthUser copyAuthUser(AuthUser authUser) {
@@ -307,6 +376,140 @@ public class AnalysisService {
         return builder.toString();
     }
 
+    private AiInvokeResult invokeChunkedAnalysis(PromptConfigEntity promptConfig,
+                                                 CrawlBookEntity book,
+                                                 List<ChapterVO> chapters,
+                                                 String analysisType) {
+        List<List<ChapterVO>> chunks = splitChaptersForChunkedAnalysis(promptConfig, book, chapters, analysisType);
+        if (chunks.size() <= 1) {
+            return invokeAi(promptConfig, buildBookInputText(book, chapters), analysisType);
+        }
+
+        List<String> chunkOutputs = new ArrayList<>();
+        int tokenUsed = 0;
+        for (int index = 0; index < chunks.size(); index++) {
+            List<ChapterVO> chunk = chunks.get(index);
+            String chunkInput = buildBookInputText(book, chunk);
+            PromptConfigEntity chunkPrompt = copyPromptConfig(
+                promptConfig,
+                buildChunkPromptTemplate(promptConfig, analysisType, index + 1, chunks.size())
+            );
+            AiInvokeResult chunkResult = aiGatewayService.analyze(chunkPrompt, chunkInput, analysisType);
+            tokenUsed += Math.max(0, chunkResult.getTokenUsed());
+            chunkOutputs.add(buildChunkResultText(index + 1, chunk, chunkResult));
+        }
+
+        PromptConfigEntity mergePrompt = copyPromptConfig(
+            promptConfig,
+            buildChunkMergePromptTemplate(promptConfig, analysisType)
+        );
+        AiInvokeResult mergedResult = aiGatewayService.analyze(
+            mergePrompt,
+            buildChunkMergeInput(book, chunkOutputs),
+            analysisType
+        );
+        tokenUsed += Math.max(0, mergedResult.getTokenUsed());
+
+        Map<String, Object> resultJson = new HashMap<>(mergedResult.getResultJson() == null ? Map.of() : mergedResult.getResultJson());
+        resultJson.put("analysisMode", "chunk_merge");
+        resultJson.put("segmentCount", chunks.size());
+        resultJson.put("inputChapterCount", chapters.size());
+        mergedResult.setResultJson(resultJson);
+        mergedResult.setTokenUsed(tokenUsed);
+        return mergedResult;
+    }
+
+    private List<List<ChapterVO>> splitChaptersForChunkedAnalysis(PromptConfigEntity promptConfig,
+                                                                  CrawlBookEntity book,
+                                                                  List<ChapterVO> chapters,
+                                                                  String analysisType) {
+        List<List<ChapterVO>> result = new ArrayList<>();
+        List<ChapterVO> current = new ArrayList<>();
+        int targetTokens = resolveChunkTargetInputTokens();
+        for (ChapterVO chapter : chapters) {
+            if (chapter == null) {
+                continue;
+            }
+            List<ChapterVO> candidate = new ArrayList<>(current);
+            candidate.add(chapter);
+            String candidateInput = buildBookInputText(book, candidate);
+            int estimatedTokens = aiGatewayService.estimatePromptTokens(promptConfig, candidateInput, analysisType);
+            if (!current.isEmpty() && estimatedTokens > targetTokens) {
+                result.add(List.copyOf(current));
+                current = new ArrayList<>();
+            }
+            current.add(chapter);
+        }
+        if (!current.isEmpty()) {
+            result.add(List.copyOf(current));
+        }
+        return result;
+    }
+
+    private PromptConfigEntity copyPromptConfig(PromptConfigEntity source, String promptContent) {
+        PromptConfigEntity target = new PromptConfigEntity();
+        target.setId(source.getId());
+        target.setPromptType(source.getPromptType());
+        target.setPromptName(source.getPromptName());
+        target.setPromptContent(promptContent);
+        target.setModelName(source.getModelName());
+        target.setTemperature(source.getTemperature());
+        target.setMaxTokens(source.getMaxTokens());
+        target.setDifyWorkflowId(source.getDifyWorkflowId());
+        target.setDifyApiKeyRef(source.getDifyApiKeyRef());
+        target.setUpdateTime(source.getUpdateTime());
+        return target;
+    }
+
+    private String buildChunkPromptTemplate(PromptConfigEntity promptConfig,
+                                            String analysisType,
+                                            int chunkIndex,
+                                            int chunkCount) {
+        String promptInstruction = aiGatewayService.resolvePromptTemplate(promptConfig, analysisType).replace("{{content}}", "").trim();
+        return "你正在进行长篇小说分段分析。\n"
+            + "当前是第 " + chunkIndex + "/" + chunkCount + " 段，请只基于当前分段正文输出局部分析，保留关键人物、冲突、伏笔、节奏与重要细节。\n"
+            + "原始分析要求：\n"
+            + promptInstruction
+            + "\n\n{{content}}";
+    }
+
+    private String buildChunkMergePromptTemplate(PromptConfigEntity promptConfig, String analysisType) {
+        String promptInstruction = aiGatewayService.resolvePromptTemplate(promptConfig, analysisType).replace("{{content}}", "").trim();
+        return "你正在整合同一本小说的多段局部分析结果。\n"
+            + "请去重、补全跨章节关系，保持与原始分析要求一致的输出风格，输出一份最终结论。\n"
+            + "不要遗漏人物关系、冲突升级、章节节奏和关键卖点。\n"
+            + "原始分析要求：\n"
+            + promptInstruction
+            + "\n\n{{content}}";
+    }
+
+    private String buildChunkResultText(int chunkIndex, List<ChapterVO> chunk, AiInvokeResult chunkResult) {
+        String firstTitle = chunk.isEmpty() ? "unknown" : chunk.get(0).getChapterTitle();
+        String lastTitle = chunk.isEmpty() ? "unknown" : chunk.get(chunk.size() - 1).getChapterTitle();
+        return "## 分段 " + chunkIndex + "\n"
+            + "范围：" + firstTitle + " -> " + lastTitle + "\n"
+            + chunkResult.getContent();
+    }
+
+    private String buildChunkMergeInput(CrawlBookEntity book, List<String> chunkOutputs) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("Book: ").append(book.getBookName()).append("\n");
+        builder.append("Author: ").append(book.getAuthor()).append("\n");
+        builder.append("Intro: ").append(book.getIntro()).append("\n\n");
+        for (String chunkOutput : chunkOutputs) {
+            builder.append(chunkOutput).append("\n\n");
+        }
+        return builder.toString();
+    }
+
+    private List<ChapterVO> loadAnalysisChapters(AnalysisRequest request) {
+        CrawlerChapterRequest chapterRequest = new CrawlerChapterRequest();
+        chapterRequest.setPlatform(request.getPlatform());
+        chapterRequest.setBookId(request.getBookId());
+        chapterRequest.setChapterCount(request.getChapterCount());
+        return crawlerService.getChapters(chapterRequest);
+    }
+
     private Map<LocalDateTime, List<CrawlRankEntity>> takeLatestSnapshots(List<CrawlRankEntity> ranks, int snapshotCount) {
         Map<LocalDateTime, List<CrawlRankEntity>> snapshots = new LinkedHashMap<>();
         for (CrawlRankEntity rank : ranks) {
@@ -377,6 +580,33 @@ public class AnalysisService {
             aiResult.getTokenUsed(),
             costTime
         );
+    }
+
+    private AnalysisResultVO toAnalysisResultVO(AnalysisResultEntity entity) {
+        AnalysisResultVO vo = new AnalysisResultVO();
+        vo.setId(entity.getId());
+        vo.setBookId(entity.getBookId());
+        vo.setAnalysisType(entity.getAnalysisType());
+        vo.setModelName(entity.getModelName());
+        vo.setResultContent(entity.getResultContent());
+        vo.setResultJson(readResultJson(entity.getResultJson(), entity.getAnalysisType()));
+        vo.setTokenUsed(entity.getTokenUsed());
+        return vo;
+    }
+
+    private Map<String, Object> readResultJson(String resultJson, String analysisType) {
+        if (resultJson == null || resultJson.isBlank()) {
+            return Map.of("analysisType", analysisType);
+        }
+        try {
+            return objectMapper.readValue(resultJson, new TypeReference<Map<String, Object>>() {
+            });
+        } catch (Exception ex) {
+            return Map.of(
+                "analysisType", analysisType,
+                "raw", resultJson
+            );
+        }
     }
 
     private String writeResultJson(AiInvokeResult aiResult) {

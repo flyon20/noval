@@ -155,8 +155,8 @@ onBeforeUnmount(() => {
       <section class="trend-page__result">
         <div class="trend-page__toolbar">
           <div class="trend-page__toolbar-copy">
-            <p class="trend-page__toolbar-title">实时分析结果</p>
-            <p class="trend-page__toolbar-subtitle">优先走流式输出，必要时自动回退到阻塞接口。</p>
+            <p class="trend-page__toolbar-title">趋势页</p>
+            <p class="trend-page__toolbar-subtitle">查看趋势结果与图表。</p>
           </div>
           <AnalysisToolbar
             :disabling="false"
@@ -199,8 +199,8 @@ onBeforeUnmount(() => {
     <section class="trend-page__visual" data-test="trend-visual-section">
       <header class="trend-page__visual-header">
         <div>
-          <p class="trend-page__visual-eyebrow">Visual Snapshot</p>
-          <h3 class="trend-page__visual-title">趋势图表与快照</h3>
+          <p class="trend-page__visual-eyebrow">Charts</p>
+          <h3 class="trend-page__visual-title">趋势图表</h3>
         </div>
         <p class="trend-page__visual-summary">
           {{ visualData?.comparisonSummary || '图表区域会汇总最近快照的主题变化。' }}

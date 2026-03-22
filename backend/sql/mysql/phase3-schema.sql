@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS crawl_chapter (
     chapter_title VARCHAR(255) NOT NULL COMMENT '章节标题',
     content MEDIUMTEXT COMMENT '章节内容',
     word_count INT DEFAULT 0 COMMENT '字数',
+    source_word_count INT DEFAULT NULL COMMENT '源站章节字数',
     crawl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '抓取时间',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     deleted TINYINT DEFAULT 0 COMMENT '逻辑删除 0未删除 1已删除',
@@ -69,4 +70,3 @@ CREATE TABLE IF NOT EXISTS crawler_task (
     INDEX idx_status (status),
     INDEX idx_create_time (create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='爬虫任务表';
-

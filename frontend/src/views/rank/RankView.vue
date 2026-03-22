@@ -5,7 +5,12 @@ import { useRouter } from 'vue-router';
 import { crawlerApi } from '@/api/crawler';
 import BookDetailDrawer from '@/components/rank/BookDetailDrawer.vue';
 import ChapterPreviewDrawer from '@/components/rank/ChapterPreviewDrawer.vue';
-import { CHAPTER_COUNT_OPTIONS, DEFAULT_PLATFORM, DEFAULT_RANK_PAGE_SIZE } from '@/constants/crawler';
+import {
+  CHAPTER_COUNT_OPTIONS,
+  DEFAULT_PLATFORM,
+  DEFAULT_RANK_PAGE_SIZE,
+  RANK_PAGE_SIZE_OPTIONS,
+} from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
 import type {
   BookDetail,
@@ -18,6 +23,8 @@ import type {
   RankRefreshResult,
   UiChapterCount,
 } from '@/types/crawler';
+
+const INTRO_PREVIEW_LENGTH = 100;
 
 const router = useRouter();
 
@@ -59,6 +66,13 @@ const boardOptions = computed<RankBoardOption[]>(() => {
   return state.boardCatalog.find((item) => item.channelCode === filters.channelCode)?.boards ?? [];
 });
 
+const totalPages = computed(() => {
+  if (!state.total || !state.pageSize) {
+    return 0;
+  }
+  return Math.ceil(state.total / state.pageSize);
+});
+
 const selectedChannelName = computed(() => {
   return state.boardCatalog.find((item) => item.channelCode === filters.channelCode)?.channelName ?? '未选择频道';
 });
@@ -72,10 +86,22 @@ const refreshStatusText = computed(() => {
     return '等待加载';
   }
   if (state.refreshInfo.refreshLimited) {
-    return '已命中抓取限制，复用最近快照';
+    return '命中刷新限制，已复用最近快照';
   }
-  return state.refreshInfo.reused ? '已复用缓存快照' : '已刷新最新整榜';
+  return state.refreshInfo.reused ? '当前展示缓存快照' : '当前展示最新整榜';
 });
+
+function truncateText(content: string, maxLength: number) {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function getIntroPreview(content: string) {
+  return truncateText(content || '', INTRO_PREVIEW_LENGTH);
+}
 
 async function initializePage() {
   state.listLoading = true;
@@ -188,6 +214,15 @@ async function handlePageChange(page: number) {
   await fetchRankPage(page);
 }
 
+async function handlePageSizeChange(pageSize: number) {
+  if (state.pageSize === pageSize) {
+    return;
+  }
+  state.pageSize = pageSize;
+  state.page = 1;
+  await fetchRankPage(1);
+}
+
 async function openDetail(row: RankBookItem) {
   state.detailOpen = true;
   state.detailLoading = true;
@@ -219,7 +254,6 @@ async function openChapters(row: RankBookItem) {
       bookId: row.bookId,
       chapterCount: filters.chapterCount,
     });
-
     state.chapterPreview = response.data.data;
     state.chapterTraceId = response.data.traceId;
   } catch (error) {
@@ -321,19 +355,26 @@ onMounted(() => {
 <template>
   <section class="rank-page">
     <header class="rank-page__hero">
-      <div>
-        <p>扫描榜单</p>
-        <h1>按频道和榜单整榜抓取，翻页只读取数据库快照</h1>
+      <div class="rank-page__hero-copy">
+        <p class="rank-page__eyebrow">Rank Workspace</p>
+        <h1>扫榜页</h1>
+        <p class="rank-page__summary-copy">
+          查看当前榜单、分页浏览并进入详情。
+        </p>
       </div>
-      <span class="rank-page__badge">{{ selectedChannelName }} / {{ selectedBoardName }}</span>
+      <div class="rank-page__hero-badge">
+        <span>{{ selectedChannelName }}</span>
+        <strong>{{ selectedBoardName }}</strong>
+      </div>
     </header>
 
-    <section class="rank-page__card">
+    <section class="rank-page__panel">
       <div class="rank-page__toolbar">
-        <el-form-item label="频道">
+        <div class="rank-page__toolbar-group">
+          <label class="rank-page__label">频道</label>
           <el-select
             v-model="filters.channelCode"
-            style="width: 180px"
+            class="rank-page__select"
             @change="handleChannelChange"
           >
             <el-option
@@ -343,12 +384,13 @@ onMounted(() => {
               :value="channel.channelCode"
             />
           </el-select>
-        </el-form-item>
+        </div>
 
-        <el-form-item label="榜单">
+        <div class="rank-page__toolbar-group">
+          <label class="rank-page__label">榜单</label>
           <el-select
             v-model="filters.boardCode"
-            style="width: 200px"
+            class="rank-page__select rank-page__select--wide"
             @change="handleBoardChange"
           >
             <el-option
@@ -358,11 +400,29 @@ onMounted(() => {
               :value="board.boardCode"
             />
           </el-select>
-        </el-form-item>
+        </div>
 
-        <el-form-item label="抓章数量">
+        <div class="rank-page__toolbar-group">
+          <label class="rank-page__label">抓章数量</label>
           <el-segmented v-model="filters.chapterCount" :options="CHAPTER_COUNT_OPTIONS" />
-        </el-form-item>
+        </div>
+
+        <div class="rank-page__toolbar-group">
+          <label class="rank-page__label">每页显示</label>
+          <div class="rank-page__page-size" data-testid="rank-page-size">
+            <button
+              v-for="option in RANK_PAGE_SIZE_OPTIONS"
+              :key="option"
+              class="rank-page__page-size-button"
+              :class="{ 'is-active': state.pageSize === option }"
+              :data-testid="`rank-page-size-${option}`"
+              type="button"
+              @click="handlePageSizeChange(option)"
+            >
+              {{ option }}
+            </button>
+          </div>
+        </div>
 
         <div class="rank-page__toolbar-actions">
           <el-button
@@ -376,11 +436,23 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="rank-page__summary">
-        <span>快照ID：{{ state.snapshotId ?? '-' }}</span>
-        <span>更新时间：{{ state.snapshotTime || '-' }}</span>
-        <span>总书数：{{ state.total }}</span>
-        <span>{{ refreshStatusText }}</span>
+      <div class="rank-page__snapshot">
+        <article class="rank-page__snapshot-card">
+          <span>快照 ID</span>
+          <strong>{{ state.snapshotId ?? '-' }}</strong>
+        </article>
+        <article class="rank-page__snapshot-card">
+          <span>更新时间</span>
+          <strong>{{ state.snapshotTime || '-' }}</strong>
+        </article>
+        <article class="rank-page__snapshot-card">
+          <span>总书数</span>
+          <strong>{{ state.total }}</strong>
+        </article>
+        <article class="rank-page__snapshot-card">
+          <span>当前状态</span>
+          <strong>{{ refreshStatusText }}</strong>
+        </article>
       </div>
 
       <el-alert
@@ -392,53 +464,61 @@ onMounted(() => {
         type="error"
       />
 
-      <el-table
-        :data="state.rankList"
-        :empty-text="state.listLoading ? '加载中...' : '暂无榜单数据'"
-        :loading="state.listLoading"
-        stripe
-      >
-        <el-table-column label="#" prop="rankNo" width="72" />
-        <el-table-column label="书名" min-width="220" prop="bookName" />
-        <el-table-column label="作者" min-width="140" prop="author" />
-        <el-table-column label="简介" min-width="320">
-          <template #default="{ row }">
-            <div class="rank-page__intro">{{ row.intro }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column align="right" label="操作" width="220">
-          <template #default="{ row }">
-            <div class="rank-page__actions">
-              <el-button
-                :data-testid="`rank-detail-${row.bookId}`"
-                link
-                type="primary"
-                @click="openDetail(row)"
-              >
-                详情
-              </el-button>
-              <el-button
-                :data-testid="`rank-chapters-${row.bookId}`"
-                link
-                type="primary"
-                @click="openChapters(row)"
-              >
-                抓章
-              </el-button>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div v-if="state.listLoading" class="rank-page__skeletons">
+        <el-skeleton v-for="item in state.pageSize" :key="item" animated :rows="3" />
+      </div>
 
-      <el-pagination
-        v-if="state.total > 0"
-        :current-page="state.page"
-        :page-size="state.pageSize"
-        :total="state.total"
-        background
-        layout="prev, pager, next"
-        @current-change="handlePageChange"
-      />
+      <div v-else class="rank-page__list">
+        <article
+          v-for="row in state.rankList"
+          :key="row.bookId"
+          class="rank-page__item"
+        >
+          <div class="rank-page__item-rank">
+            <span>#{{ row.rankNo }}</span>
+          </div>
+
+          <div class="rank-page__item-main">
+            <div class="rank-page__item-title">
+              <h3>{{ row.bookName }}</h3>
+              <p>{{ row.author }}</p>
+            </div>
+            <p class="rank-page__item-intro">
+              {{ getIntroPreview(row.intro) }}
+            </p>
+          </div>
+
+          <div class="rank-page__item-actions">
+            <el-button
+              :data-testid="`rank-detail-${row.bookId}`"
+              plain
+              type="primary"
+              @click="openDetail(row)"
+            >
+              详情
+            </el-button>
+            <el-button
+              :data-testid="`rank-chapters-${row.bookId}`"
+              type="primary"
+              @click="openChapters(row)"
+            >
+              抓章
+            </el-button>
+          </div>
+        </article>
+      </div>
+
+      <div v-if="state.total > 0" class="rank-page__pagination">
+        <span class="rank-page__pagination-meta">第 {{ state.page }} / {{ totalPages || 1 }} 页</span>
+        <el-pagination
+          :current-page="state.page"
+          :page-size="state.pageSize"
+          :total="state.total"
+          background
+          layout="prev, pager, next"
+          @current-change="handlePageChange"
+        />
+      </div>
     </section>
 
     <BookDetailDrawer
@@ -471,96 +551,258 @@ onMounted(() => {
 }
 
 .rank-page__hero,
-.rank-page__card {
+.rank-page__panel {
   border: 1px solid var(--color-border);
-  border-radius: 1.35rem;
-  background: rgba(255, 255, 255, 0.74);
+  border-radius: 1.5rem;
+  background: rgba(255, 252, 247, 0.9);
   box-shadow: var(--shadow-soft);
 }
 
 .rank-page__hero {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr);
   gap: 1rem;
-  padding: 1.5rem 1.75rem;
+  padding: 1.65rem 1.8rem;
   background:
-    radial-gradient(circle at top right, rgba(210, 136, 61, 0.15), transparent 25%),
-    linear-gradient(180deg, rgba(255, 251, 245, 0.96), rgba(248, 244, 236, 0.92));
+    radial-gradient(circle at top right, rgba(183, 135, 87, 0.18), transparent 24%),
+    linear-gradient(135deg, rgba(255, 252, 247, 0.98), rgba(244, 236, 225, 0.92));
 }
 
-.rank-page__hero p,
-.rank-page__hero h1 {
+.rank-page__hero-copy,
+.rank-page__hero-badge {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.rank-page__eyebrow,
+.rank-page__hero-copy h1,
+.rank-page__summary-copy {
   margin: 0;
 }
 
-.rank-page__hero p {
-  color: var(--color-text-muted);
+.rank-page__eyebrow {
+  color: var(--color-accent-strong);
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
-.rank-page__hero h1 {
-  max-width: 16ch;
-  margin-top: 0.35rem;
-  font-size: clamp(1.8rem, 3vw, 2.7rem);
+.rank-page__hero-copy h1 {
+  font-size: clamp(2rem, 3vw, 2.8rem);
   line-height: 1.15;
 }
 
-.rank-page__badge {
-  padding: 0.55rem 0.85rem;
-  border: 1px solid rgba(35, 65, 58, 0.16);
-  border-radius: 999px;
+.rank-page__summary-copy {
+  max-width: 46rem;
   color: var(--color-text-muted);
-  font-size: 0.9rem;
+  line-height: 1.8;
 }
 
-.rank-page__card {
+.rank-page__hero-badge {
+  align-content: start;
+  justify-items: end;
+  padding: 1rem 1.15rem;
+  border: 1px solid rgba(35, 65, 58, 0.12);
+  border-radius: 1.2rem;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.rank-page__hero-badge span {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.rank-page__hero-badge strong {
+  font-size: 1.15rem;
+  text-align: right;
+}
+
+.rank-page__panel {
   display: grid;
-  gap: 1rem;
-  padding: 1.25rem;
+  gap: 1.25rem;
+  padding: 1.4rem;
 }
 
 .rank-page__toolbar {
   display: flex;
-  align-items: flex-end;
-  gap: 1rem;
   flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
 }
 
-.rank-page__toolbar :deep(.el-form-item) {
-  margin-bottom: 0;
+.rank-page__toolbar-group {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.rank-page__label {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.rank-page__select {
+  width: 180px;
+}
+
+.rank-page__select--wide {
+  width: 220px;
+}
+
+.rank-page__page-size {
+  display: inline-flex;
+  gap: 0.4rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.rank-page__page-size-button {
+  min-width: 46px;
+  padding: 0.55rem 0.9rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: 160ms ease;
+}
+
+.rank-page__page-size-button.is-active {
+  background: rgba(35, 65, 58, 0.92);
+  color: #fff;
 }
 
 .rank-page__toolbar-actions {
   margin-left: auto;
 }
 
-.rank-page__summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1rem;
+.rank-page__snapshot {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.rank-page__snapshot-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(35, 65, 58, 0.1);
+  border-radius: 1.15rem;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.rank-page__snapshot-card span {
   color: var(--color-text-muted);
-  font-size: 0.92rem;
+  font-size: 0.82rem;
+}
+
+.rank-page__snapshot-card strong {
+  font-size: 1rem;
+}
+
+.rank-page__list,
+.rank-page__skeletons {
+  display: grid;
+  gap: 1rem;
+}
+
+.rank-page__item {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+  padding: 1.15rem 1.2rem;
+  border: 1px solid rgba(35, 65, 58, 0.12);
+  border-radius: 1.25rem;
+  background: rgba(255, 255, 255, 0.72);
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.rank-page__item:hover {
+  transform: translateY(-2px);
+  border-color: rgba(35, 65, 58, 0.2);
+  box-shadow: var(--shadow-soft);
+}
+
+.rank-page__item-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  border-radius: 1rem;
+  background: rgba(35, 65, 58, 0.08);
+  color: var(--color-accent-strong);
+  font-weight: 700;
+}
+
+.rank-page__item-main {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.rank-page__item-title h3,
+.rank-page__item-title p,
+.rank-page__item-intro {
+  margin: 0;
+}
+
+.rank-page__item-title h3 {
+  font-size: 1.08rem;
+  line-height: 1.35;
+}
+
+.rank-page__item-title p {
+  margin-top: 0.2rem;
+  color: var(--color-text-muted);
+}
+
+.rank-page__item-intro {
+  color: var(--color-text-muted);
+  line-height: 1.75;
+}
+
+.rank-page__item-actions {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.rank-page__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.rank-page__pagination-meta {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
 }
 
 .rank-page__alert {
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.2rem;
 }
 
-.rank-page__intro {
-  color: var(--color-text-muted);
-  line-height: 1.7;
-}
-
-.rank-page__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.25rem;
-}
-
-@media (max-width: 920px) {
+@media (max-width: 1100px) {
   .rank-page__hero {
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+
+  .rank-page__snapshot {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .rank-page__item {
+    grid-template-columns: 1fr;
+  }
+
+  .rank-page__item-actions,
+  .rank-page__pagination {
+    grid-auto-flow: row;
   }
 
   .rank-page__toolbar-actions {

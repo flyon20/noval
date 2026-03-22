@@ -7,6 +7,7 @@ public class ChapterVO {
     private String chapterTitle;
     private String content;
     private Integer wordCount;
+    private Integer sourceWordCount;
 
     public Long getBookId() {
         return bookId;
@@ -47,5 +48,12 @@ public class ChapterVO {
     public void setWordCount(Integer wordCount) {
         this.wordCount = wordCount;
     }
-}
 
+    public Integer getSourceWordCount() {
+        return sourceWordCount;
+    }
+
+    public void setSourceWordCount(Integer sourceWordCount) {
+        this.sourceWordCount = sourceWordCount;
+    }
+}

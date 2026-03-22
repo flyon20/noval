@@ -32,6 +32,21 @@ class ConfuseFontDecoder:
             0xE42D: "1",
             0xE436: "了",
             0xE4DE: "一",
+            0xE4E2: "光",
+            0xE44B: "少",
+            0xE485: "位",
+            0xE48C: "马",
+            0xE4B0: "或",
+            0xE503: "属",
+            0xE510: "口",
+            0xE511: "再",
+            0xE512: "妈",
+            0xE513: "望",
+            0xE424: "爱",
+            0xE479: "第",
+            0xE551: "两",
+            0xE552: "数",
+            0xE559: "海",
             0xE534: "己",
             0xE535: "老",
             0xE536: "2",
@@ -58,6 +73,8 @@ class ConfuseFontDecoder:
 
         font_signature, font_path = self._ensure_font_path(css)
         mapping = self._mapping_cache.setdefault(font_signature, self._load_cached_mapping(font_signature))
+        if self._apply_known_overrides(font_signature, mapping):
+            self._save_cached_mapping(font_signature, mapping)
         missing = [ch for ch in obfuscated_chars if ch not in mapping]
         if missing:
             mapping.update(self._build_mapping(font_signature, missing, font_path))
@@ -86,6 +103,16 @@ class ConfuseFontDecoder:
             if target:
                 mapping[ch] = target
         return mapping
+
+    def _apply_known_overrides(self, font_signature: str, mapping: dict[str, str]) -> bool:
+        changed = False
+        for codepoint, target in self.KNOWN_OVERRIDES.get(font_signature, {}).items():
+            source = chr(codepoint)
+            if mapping.get(source) == target:
+                continue
+            mapping[source] = target
+            changed = True
+        return changed
 
     def _ensure_font_path(self, css: str) -> tuple[str, str]:
         match = self.FONT_URL_PATTERN.search(css or "")

@@ -26,6 +26,13 @@ import java.time.Duration;
 @Service
 public class AiGatewayService {
 
+    private static final Map<String, String> DEFAULT_PROMPT_TEMPLATES = Map.of(
+        "deconstruct", "请基于以下小说正文进行拆文分析，重点输出：核心卖点、开篇钩子、人物关系、冲突设计、节奏爽点与可优化点。\n\n{{content}}",
+        "structure", "请基于以下小说正文进行结构分析，重点关注开篇铺垫、冲突推进、转折设置、悬念设计与章节结构。\n\n{{content}}",
+        "plot", "请基于以下小说正文进行情节分析，概括关键事件、人物动机、冲突升级与后续看点。\n\n{{content}}",
+        "theme", "Please analyze the following trend data and summarize core themes, changes, and representative books.\n\n{{content}}"
+    );
+
     private final RestTemplate aiRestTemplate;
     private final AiProperties aiProperties;
     private final SystemConfigService systemConfigService;
@@ -50,11 +57,34 @@ public class AiGatewayService {
         return buildFallbackResult(promptConfig, analysisType, renderedPrompt);
     }
 
+    public int estimatePromptTokens(PromptConfigEntity promptConfig, String text, String analysisType) {
+        String renderedPrompt = renderPrompt(promptConfig == null ? null : promptConfig.getPromptContent(), text, analysisType);
+        return estimateTokenCount(renderedPrompt);
+    }
+
+    public String resolvePromptTemplate(PromptConfigEntity promptConfig, String analysisType) {
+        return normalizePromptTemplate(promptConfig == null ? null : promptConfig.getPromptContent(), analysisType);
+    }
+
     private String renderPrompt(String template, String text, String analysisType) {
-        String safeTemplate = template == null || template.isBlank() ? "{{content}}" : template;
+        String safeTemplate = normalizePromptTemplate(template, analysisType);
         return PromptTemplate.from(safeTemplate)
             .apply(Map.of("content", text, "analysisType", analysisType))
             .text();
+    }
+
+    private String normalizePromptTemplate(String template, String analysisType) {
+        if (template != null && !template.isBlank() && template.contains("{{content}}")) {
+            return template;
+        }
+        return DEFAULT_PROMPT_TEMPLATES.getOrDefault(analysisType, "{{content}}");
+    }
+
+    private int estimateTokenCount(String text) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        return Math.max(1, (int) Math.ceil(text.length() / 2.0d));
     }
 
     private AiInvokeResult invokePreferredProvider(PromptConfigEntity promptConfig,
