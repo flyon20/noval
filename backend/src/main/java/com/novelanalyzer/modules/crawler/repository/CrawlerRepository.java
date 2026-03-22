@@ -209,21 +209,28 @@ public class CrawlerRepository {
                                                  String boardName) {
         RankBoardEntity existing = findRankBoard(platform, channelCode, boardCode).orElse(null);
         LocalDateTime now = LocalDateTime.now();
-        RankBoardEntity entity = existing == null ? new RankBoardEntity() : existing;
-        entity.setPlatform(platform);
-        entity.setChannelCode(channelCode);
-        entity.setBoardCode(boardCode);
-        entity.setBoardName(boardName);
-        entity.setDescription(channelName);
-        entity.setUpdateTime(now);
         if (existing == null) {
-            entity.setCreateTime(now);
-            entity.setDeleted(0);
-            rankBoardMapper.insert(entity);
-        } else {
-            rankBoardMapper.updateById(entity);
+            jdbcTemplate.update(
+                """
+                    INSERT INTO rank_board(platform, channel_code, board_code, board_name, description, create_time, update_time, deleted)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                    """,
+                platform,
+                channelCode,
+                boardCode,
+                boardName,
+                channelName,
+                Timestamp.valueOf(now),
+                Timestamp.valueOf(now)
+            );
+            return findRankBoard(platform, channelCode, boardCode)
+                .orElseThrow(() -> new IllegalStateException("failed to create rank_board"));
         }
-        return entity;
+        existing.setBoardName(boardName);
+        existing.setDescription(channelName);
+        existing.setUpdateTime(now);
+        rankBoardMapper.updateById(existing);
+        return existing;
     }
 
     public Optional<RankBoardEntity> findRankBoard(String platform, String channelCode, String boardCode) {

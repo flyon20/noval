@@ -2,18 +2,18 @@ package com.novelanalyzer.modules.crawler.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.novelanalyzer.config.CrawlerProperties;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withBadRequest;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 class PythonCrawlerClientTest {
@@ -50,6 +50,75 @@ class PythonCrawlerClientTest {
                 """, MediaType.APPLICATION_JSON));
 
         assertThat(client.fetchRank("fanqie", "male-hot-a")).hasSize(1);
+        server.verify();
+    }
+
+    @Test
+    void shouldThrowWhenCrawlerReturnsClientErrorInsteadOfUsingFakeFallback() {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        CrawlerProperties properties = new CrawlerProperties();
+        properties.setBaseUrl("http://crawler:5000");
+        properties.setConnectTimeoutMillis(5000);
+        properties.setReadTimeoutMillis(15000);
+        properties.setInternalApiKey("crawler-internal-api-key-with-enough-length-1234567890");
+        PythonCrawlerClient client = new PythonCrawlerClient(restTemplate, properties, new ObjectMapper());
+
+        server.expect(requestTo("http://crawler:5000/internal/board-catalog?platform=fanqie"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("X-Internal-Service-Token", properties.getInternalApiKey()))
+            .andRespond(withBadRequest().contentType(MediaType.APPLICATION_JSON).body("""
+                {
+                  "detail": "board catalog parse failed"
+                }
+                """));
+
+        Assertions.assertThrows(RuntimeException.class, () -> client.fetchBoardCatalog("fanqie"));
+        server.verify();
+    }
+
+    @Test
+    void shouldFlattenGroupedBoardCatalogPayload() {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        CrawlerProperties properties = new CrawlerProperties();
+        properties.setBaseUrl("http://crawler:5000");
+        properties.setConnectTimeoutMillis(5000);
+        properties.setReadTimeoutMillis(15000);
+        properties.setInternalApiKey("crawler-internal-api-key-with-enough-length-1234567890");
+        PythonCrawlerClient client = new PythonCrawlerClient(restTemplate, properties, new ObjectMapper());
+
+        server.expect(requestTo("http://crawler:5000/internal/board-catalog?platform=fanqie"))
+            .andExpect(method(HttpMethod.GET))
+            .andRespond(withSuccess("""
+                {
+                  "code": 200,
+                  "message": "success",
+                  "data": [
+                    {
+                      "channelCode": "male-new",
+                      "channelName": "男频新书榜",
+                      "boards": [
+                        {
+                          "boardCode": "262",
+                          "boardName": "都市脑洞"
+                        },
+                        {
+                          "boardCode": "1014",
+                          "boardName": "都市高武"
+                        }
+                      ]
+                    }
+                  ]
+                }
+                """, MediaType.APPLICATION_JSON));
+
+        assertThat(client.fetchBoardCatalog("fanqie"))
+            .extracting("channelCode", "boardCode", "boardName")
+            .containsExactly(
+                org.assertj.core.groups.Tuple.tuple("male-new", "262", "都市脑洞"),
+                org.assertj.core.groups.Tuple.tuple("male-new", "1014", "都市高武")
+            );
         server.verify();
     }
 }

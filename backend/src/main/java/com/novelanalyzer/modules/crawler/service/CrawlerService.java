@@ -78,9 +78,13 @@ public class CrawlerService {
     }
 
     public List<RankBoardCatalogVO> getBoardCatalog(String platform) {
-        List<ExternalRankBoard> boards = syncBoardCatalog(platform);
-        if (!boards.isEmpty()) {
-            return toBoardCatalogVos(boards);
+        try {
+            List<ExternalRankBoard> boards = syncBoardCatalog(platform);
+            if (!boards.isEmpty()) {
+                return toBoardCatalogVos(boards);
+            }
+        } catch (RuntimeException ex) {
+            LOGGER.warn("rank.boardCatalog fallback-db platform={} reason={}", platform, ex.getMessage());
         }
         return toBoardCatalogVosFromEntities(crawlerRepository.findRankBoards(platform));
     }

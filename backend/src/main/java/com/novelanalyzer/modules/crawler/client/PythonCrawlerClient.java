@@ -20,7 +20,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,8 +58,7 @@ public class PythonCrawlerClient {
             return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalRankItem>>() {
             });
         } catch (Exception ex) {
-            LOGGER.warn("crawler rank call failed, using fallback: {}", ex.getMessage());
-            return buildFallbackRank(platform, category);
+            throw propagateCrawlerFailure("crawler rank call failed", ex);
         }
     }
 
@@ -81,8 +79,7 @@ public class PythonCrawlerClient {
             return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalRankItem>>() {
             });
         } catch (Exception ex) {
-            LOGGER.warn("crawler board rank call failed, using fallback: {}", ex.getMessage());
-            return buildFallbackRank(platform, channelCode + "-" + boardCode);
+            throw propagateCrawlerFailure("crawler board rank call failed", ex);
         }
     }
 
@@ -101,11 +98,9 @@ public class PythonCrawlerClient {
             if (result == null || result.getCode() == null || result.getCode() != 200) {
                 throw new BusinessException(ResultCode.INTERNAL_ERROR, "crawler board catalog call failed");
             }
-            return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalRankBoard>>() {
-            });
+            return flattenBoardCatalog(platform, result.getData());
         } catch (Exception ex) {
-            LOGGER.warn("crawler board catalog call failed, using fallback: {}", ex.getMessage());
-            return buildFallbackBoardCatalog(platform);
+            throw propagateCrawlerFailure("crawler board catalog call failed", ex);
         }
     }
 
@@ -124,8 +119,7 @@ public class PythonCrawlerClient {
             }
             return objectMapper.convertValue(result.getData(), ExternalBookDetail.class);
         } catch (Exception ex) {
-            LOGGER.warn("crawler book call failed, using fallback: {}", ex.getMessage());
-            return buildFallbackBook(bookUrl);
+            throw propagateCrawlerFailure("crawler book call failed", ex);
         }
     }
 
@@ -146,8 +140,7 @@ public class PythonCrawlerClient {
             return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalChapterItem>>() {
             });
         } catch (Exception ex) {
-            LOGGER.warn("crawler chapter call failed, using fallback: {}", ex.getMessage());
-            return buildFallbackChapters(chapterCount);
+            throw propagateCrawlerFailure("crawler chapter call failed", ex);
         }
     }
 
@@ -158,68 +151,40 @@ public class PythonCrawlerClient {
         return new HttpEntity<>(request, headers);
     }
 
-    private List<ExternalRankItem> buildFallbackRank(String platform, String category) {
-        List<ExternalRankItem> fallback = new ArrayList<>();
-        ExternalRankItem first = new ExternalRankItem();
-        first.setRankNo(1);
-        first.setBookName("示例热榜小说A");
-        first.setAuthor("示例作者A");
-        first.setIntro("本数据为本地兜底样例，用于联调。");
-        first.setBookUrl("https://fanqienovel.com/page/demo-book-a");
-        first.setPlatformBookId(platform + "-" + category + "-1");
-        fallback.add(first);
-
-        ExternalRankItem second = new ExternalRankItem();
-        second.setRankNo(2);
-        second.setBookName("示例热榜小说B");
-        second.setAuthor("示例作者B");
-        second.setIntro("本数据为本地兜底样例，用于联调。");
-        second.setBookUrl("https://fanqienovel.com/page/demo-book-b");
-        second.setPlatformBookId(platform + "-" + category + "-2");
-        fallback.add(second);
-        return fallback;
-    }
-
-    private List<ExternalRankBoard> buildFallbackBoardCatalog(String platform) {
-        List<ExternalRankBoard> fallback = new ArrayList<>();
-        ExternalRankBoard first = new ExternalRankBoard();
-        first.setPlatform(platform);
-        first.setChannelCode("male-new");
-        first.setChannelName("男频新书榜");
-        first.setBoardCode("urban-brain");
-        first.setBoardName("都市脑洞");
-        fallback.add(first);
-
-        ExternalRankBoard second = new ExternalRankBoard();
-        second.setPlatform(platform);
-        second.setChannelCode("male-read");
-        second.setChannelName("男频阅读榜");
-        second.setBoardCode("urban-power");
-        second.setBoardName("都市高武");
-        fallback.add(second);
-        return fallback;
-    }
-
-    private ExternalBookDetail buildFallbackBook(String bookUrl) {
-        ExternalBookDetail detail = new ExternalBookDetail();
-        detail.setBookName("示例书籍详情");
-        detail.setAuthor("示例作者");
-        detail.setIntro("当前为本地兜底书籍详情，待Python爬虫联通后会被真实数据替换。");
-        detail.setBookUrl(bookUrl);
-        detail.setPlatformBookId("fallback-book-id");
-        return detail;
-    }
-
-    private List<ExternalChapterItem> buildFallbackChapters(Integer chapterCount) {
-        List<ExternalChapterItem> chapters = new ArrayList<>();
-        int size = chapterCount == null ? 1 : chapterCount;
-        for (int i = 1; i <= size; i++) {
-            ExternalChapterItem item = new ExternalChapterItem();
-            item.setChapterNo(i);
-            item.setChapterTitle("第" + i + "章 示例章节");
-            item.setContent("这是第" + i + "章的本地兜底内容，用于联调和流程验证。");
-            chapters.add(item);
+    private List<ExternalRankBoard> flattenBoardCatalog(String platform, Object payload) {
+        List<Map<String, Object>> channels = objectMapper.convertValue(payload, new TypeReference<List<Map<String, Object>>>() {
+        });
+        List<ExternalRankBoard> boards = new java.util.ArrayList<>();
+        for (Map<String, Object> channel : channels) {
+            String channelCode = asString(channel.get("channelCode"));
+            String channelName = asString(channel.get("channelName"));
+            List<Map<String, Object>> boardItems = objectMapper.convertValue(
+                channel.get("boards"),
+                new TypeReference<List<Map<String, Object>>>() {
+                }
+            );
+            for (Map<String, Object> boardItem : boardItems) {
+                ExternalRankBoard board = new ExternalRankBoard();
+                board.setPlatform(platform);
+                board.setChannelCode(channelCode);
+                board.setChannelName(channelName);
+                board.setBoardCode(asString(boardItem.get("boardCode")));
+                board.setBoardName(asString(boardItem.get("boardName")));
+                boards.add(board);
+            }
         }
-        return chapters;
+        return boards;
+    }
+
+    private RuntimeException propagateCrawlerFailure(String message, Exception ex) {
+        LOGGER.warn("{}: {}", message, ex.getMessage());
+        if (ex instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        return new BusinessException(ResultCode.INTERNAL_ERROR, message);
+    }
+
+    private String asString(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 }

@@ -63,20 +63,15 @@ class FanqieCrawlerTest(unittest.TestCase):
         content = html_to_text("<p>Hello</p><p>World</p>")
         self.assertEqual("Hello\nWorld", content)
 
-    def test_fetch_board_catalog_returns_channels_and_boards(self) -> None:
+    def test_fetch_board_catalog_returns_rank_category_channels_and_boards(self) -> None:
         crawler = FanqieCrawler(
             StubHttpClient(
                 {
                     "https://fanqienovel.com/rank?enter_from=menu": (
-                        '<script>(function(){window.__INITIAL_STATE__={"rank":{"channelList":['
-                        '{"channelName":"Male","channelCode":"2","boardList":['
-                        '{"boardName":"Hot","boardCode":"1141"},'
-                        '{"boardName":"New","boardCode":"1140"}'
-                        "]},"
-                        '{"channelName":"Female","channelCode":"1","boardList":['
-                        '{"boardName":"Rising","boardCode":"2141"}'
-                        "]}"
-                        ']}};})()</script>'
+                        '<script>(function(){window.__INITIAL_STATE__={"rank":{"rankCategoryTypeList":{'
+                        '"male":[{"id":"262","name":"都市脑洞"},{"id":"1014","name":"都市高武"}],'
+                        '"female":[{"id":"267","name":"现言脑洞"}]'
+                        '}}};})()</script>'
                     )
                 }
             )
@@ -84,12 +79,15 @@ class FanqieCrawlerTest(unittest.TestCase):
 
         result = crawler.fetch_board_catalog()
 
-        self.assertEqual(2, len(result))
-        self.assertEqual("2", result[0].channelCode)
-        self.assertEqual("Male", result[0].channelName)
+        self.assertEqual(4, len(result))
+        self.assertEqual("male-new", result[0].channelCode)
+        self.assertEqual("男频新书榜", result[0].channelName)
         self.assertEqual(2, len(result[0].boards))
-        self.assertEqual("1141", result[0].boards[0].boardCode)
-        self.assertEqual("Hot", result[0].boards[0].boardName)
+        self.assertEqual("262", result[0].boards[0].boardCode)
+        self.assertEqual("都市脑洞", result[0].boards[0].boardName)
+        self.assertEqual("male-read", result[1].channelCode)
+        self.assertEqual("女频新书榜", result[2].channelName)
+        self.assertEqual("267", result[2].boards[0].boardCode)
 
     def test_rank_request_accepts_legacy_category_payload(self) -> None:
         request = RankRequest.model_validate({"platform": "fanqie", "category": "male-hot-a"})
@@ -130,7 +128,7 @@ class FanqieCrawlerTest(unittest.TestCase):
         crawler = FanqieCrawler(
             StubHttpClient(
                 {
-                    "https://fanqienovel.com/rank/1_2_1141": (
+                    "https://fanqienovel.com/rank/1_1_262": (
                         '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
                         '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"},'
                         '{"currentPos":2,"bookId":"102","bookName":"Book B","author":"Author B","abstract":"Intro B"}'
@@ -140,7 +138,7 @@ class FanqieCrawlerTest(unittest.TestCase):
             )
         )
 
-        result = crawler.fetch_rank("2", "1141")
+        result = crawler.fetch_rank("male-new", "262")
 
         self.assertEqual(2, len(result))
         self.assertEqual(1, result[0].rankNo)

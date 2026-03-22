@@ -19,6 +19,20 @@ class FanqieCrawler(BaseCrawler):
         "male-hot-b": "1_2_1140",
         "male-new-a": "1_1_1141",
     }
+    CHANNEL_ALIAS = {
+        "male-new": ("1", "1", "男频新书榜"),
+        "male-read": ("1", "2", "男频阅读榜"),
+        "female-new": ("0", "1", "女频新书榜"),
+        "female-read": ("0", "2", "女频阅读榜"),
+        "1": ("1", "1", "男频新书榜"),
+        "2": ("1", "2", "男频阅读榜"),
+    }
+    CHANNEL_GROUPS = [
+        ("male", "male-new"),
+        ("male", "male-read"),
+        ("female", "female-new"),
+        ("female", "female-read"),
+    ]
 
     def __init__(self,
                  http_client: HttpClient | None = None,
@@ -29,20 +43,15 @@ class FanqieCrawler(BaseCrawler):
     def fetch_board_catalog(self) -> List[BoardCatalogChannel]:
         state = self._fetch_state(settings.fanqie_rank_url)
         rank_state = state.get("rank", {})
-        channel_list = rank_state.get("channelList") or rank_state.get("channel_list") or []
         channels: List[BoardCatalogChannel] = []
-        for channel in channel_list:
-            channel_code = str(channel.get("channelCode") or channel.get("channel_code") or "")
-            channel_name = str(channel.get("channelName") or channel.get("channel_name") or "")
-            board_list = channel.get("boardList") or channel.get("boards") or []
-            boards: List[BoardCatalogBoard] = []
-            for board in board_list:
-                board_code = str(board.get("boardCode") or board.get("board_code") or "")
-                board_name = str(board.get("boardName") or board.get("board_name") or "")
-                if not board_code or not board_name:
-                    continue
-                boards.append(BoardCatalogBoard(boardName=board_name, boardCode=board_code))
-            if not channel_code or not channel_name or not boards:
+        rank_category_type_list = rank_state.get("rankCategoryTypeList") or {}
+        for group_key, channel_code in self.CHANNEL_GROUPS:
+            channel_alias = self.CHANNEL_ALIAS.get(channel_code)
+            if channel_alias is None:
+                continue
+            _, _, channel_name = channel_alias
+            boards = self._extract_rank_category_boards(rank_category_type_list.get(group_key))
+            if not boards:
                 continue
             channels.append(
                 BoardCatalogChannel(
@@ -151,7 +160,8 @@ class FanqieCrawler(BaseCrawler):
         normalized_board = (board_code or "").strip()
         if not normalized_value or not normalized_board:
             raise ValueError("channelCode and boardCode are required")
-        return f"{settings.fanqie_base_url}/rank/1_{normalized_value}_{normalized_board}"
+        gender_code, rank_type_code, _ = self._resolve_channel_alias(normalized_value)
+        return f"{settings.fanqie_base_url}/rank/{gender_code}_{rank_type_code}_{normalized_board}"
 
     def _normalize_book_url(self, book_url: str) -> str:
         normalized = (book_url or "").strip()
@@ -194,6 +204,27 @@ class FanqieCrawler(BaseCrawler):
                 if book_list:
                     return book_list
         return []
+
+    def _extract_rank_category_boards(self, board_list: Any) -> list[BoardCatalogBoard]:
+        if not isinstance(board_list, list):
+            return []
+
+        boards: list[BoardCatalogBoard] = []
+        for board in board_list:
+            if not isinstance(board, dict):
+                continue
+            board_code = str(board.get("boardCode") or board.get("board_code") or board.get("id") or "").strip()
+            board_name = str(board.get("boardName") or board.get("board_name") or board.get("name") or "").strip()
+            if not board_code or not board_name:
+                continue
+            boards.append(BoardCatalogBoard(boardName=board_name, boardCode=board_code))
+        return boards
+
+    def _resolve_channel_alias(self, channel_code: str) -> tuple[str, str, str]:
+        channel = self.CHANNEL_ALIAS.get(channel_code)
+        if channel is None:
+            raise ValueError(f"unsupported channelCode: {channel_code}")
+        return channel
 
     def _format_rank_locator(self, category_or_channel_code: str, board_code: str | None = None) -> str:
         if board_code is None:
