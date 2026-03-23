@@ -22,7 +22,7 @@ public class SystemConfigService {
         Map.entry("ai.openai-compatible.base-url", new DefaultSystemConfig("", "ai", "OpenAI compatible base URL, blank means fallback to application config", true)),
         Map.entry("ai.openai-compatible.default-model", new DefaultSystemConfig("deepseek-chat", "ai", "Default OpenAI compatible model name", true)),
         Map.entry("ai.openai-compatible.api-key", new DefaultSystemConfig("", "ai", "OpenAI compatible API key (stored in DB, takes precedence over env var)", true)),
-        Map.entry("ai.openai-compatible.streaming-enabled", new DefaultSystemConfig("false", "ai", "Whether OpenAI compatible streaming is enabled", true)),
+        Map.entry("ai.openai-compatible.streaming-enabled", new DefaultSystemConfig("true", "ai", "Whether OpenAI compatible streaming is enabled", true)),
         Map.entry("ai.available-models", new DefaultSystemConfig("deepseek-chat", "ai", "Comma-separated list of available AI models for user selection", true)),
         Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "Default crawler chapter count", true)),
         Map.entry("crawler.http.timeout-seconds", new DefaultSystemConfig("20", "crawler", "Python crawler page fetch timeout in seconds", true)),
@@ -33,8 +33,9 @@ public class SystemConfigService {
         Map.entry("crawler.rank.force-max-times", new DefaultSystemConfig("2", "crawler", "Rank force refresh max times", true)),
         Map.entry("crawler.book.refresh-days", new DefaultSystemConfig("7", "crawler", "Book refresh days", true)),
         Map.entry("analysis.reanalyze.cooldown-hours", new DefaultSystemConfig("0", "analysis", "Analysis reanalyze cooldown hours", true)),
-        Map.entry("analysis.chunk.max-input-tokens", new DefaultSystemConfig("6000", "analysis", "Approximate max input tokens before analysis switches to chunk mode", true)),
-        Map.entry("analysis.chunk.target-input-tokens", new DefaultSystemConfig("3500", "analysis", "Approximate target input tokens for each chunked analysis request", true)),
+        Map.entry("analysis.chunk.max-input-tokens", new DefaultSystemConfig("32000", "analysis", "Approximate max input tokens before analysis switches to chunk mode", true)),
+        Map.entry("analysis.chunk.target-input-tokens", new DefaultSystemConfig("24000", "analysis", "Approximate target input tokens for each chunked analysis request", true)),
+        Map.entry("analysis.chunk.parallelism", new DefaultSystemConfig("3", "analysis", "Maximum parallel chunk analysis requests", true)),
         Map.entry("security.audit.enabled", new DefaultSystemConfig("true", "security", "Whether audit logging is enabled", true))
     );
 

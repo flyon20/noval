@@ -33,11 +33,18 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Service
 public class AnalysisService {
@@ -47,6 +54,9 @@ public class AnalysisService {
     private static final int STREAM_CHUNK_SIZE = 120;
     private static final int DEFAULT_CHUNK_MAX_INPUT_TOKENS = 6000;
     private static final int DEFAULT_CHUNK_TARGET_INPUT_TOKENS = 3500;
+    private static final int DEEPSEEK_CHUNK_MAX_INPUT_TOKENS = 32000;
+    private static final int DEEPSEEK_CHUNK_TARGET_INPUT_TOKENS = 24000;
+    private static final int DEFAULT_CHUNK_PARALLELISM = 3;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final PromptConfigRepository promptConfigRepository;
@@ -290,7 +300,8 @@ public class AnalysisService {
         if (!supportsChunkedAnalysis(analysisType) || chapters == null || chapters.size() <= 1) {
             return false;
         }
-        return aiGatewayService.estimatePromptTokens(promptConfig, inputText, analysisType) > resolveChunkMaxInputTokens();
+        return aiGatewayService.estimatePromptTokens(promptConfig, inputText, analysisType)
+            > resolveChunkMaxInputTokens(promptConfig);
     }
 
     private boolean supportsChunkedAnalysis(String analysisType) {
@@ -299,18 +310,47 @@ public class AnalysisService {
             || "plot".equals(analysisType);
     }
 
-    private int resolveChunkMaxInputTokens() {
-        return Math.max(
+    private int resolveChunkMaxInputTokens(PromptConfigEntity promptConfig) {
+        int configured = Math.max(
             1000,
             systemConfigService.getIntValueOrDefault("analysis.chunk.max-input-tokens", DEFAULT_CHUNK_MAX_INPUT_TOKENS)
         );
+        if (shouldUseDeepSeekChunkDefaults(promptConfig) && configured == DEFAULT_CHUNK_MAX_INPUT_TOKENS) {
+            return DEEPSEEK_CHUNK_MAX_INPUT_TOKENS;
+        }
+        return configured;
     }
 
-    private int resolveChunkTargetInputTokens() {
-        return Math.max(
+    private int resolveChunkTargetInputTokens(PromptConfigEntity promptConfig) {
+        int configured = Math.max(
             1000,
             systemConfigService.getIntValueOrDefault("analysis.chunk.target-input-tokens", DEFAULT_CHUNK_TARGET_INPUT_TOKENS)
         );
+        int effective = shouldUseDeepSeekChunkDefaults(promptConfig) && configured == DEFAULT_CHUNK_TARGET_INPUT_TOKENS
+            ? DEEPSEEK_CHUNK_TARGET_INPUT_TOKENS
+            : configured;
+        return Math.min(effective, resolveChunkMaxInputTokens(promptConfig));
+    }
+
+    private int resolveChunkParallelism() {
+        return Math.max(
+            1,
+            Math.min(
+                6,
+                systemConfigService.getIntValueOrDefault("analysis.chunk.parallelism", DEFAULT_CHUNK_PARALLELISM)
+            )
+        );
+    }
+
+    private boolean shouldUseDeepSeekChunkDefaults(PromptConfigEntity promptConfig) {
+        String modelName = promptConfig == null ? null : promptConfig.getModelName();
+        if (modelName == null || modelName.isBlank() || "dify".equalsIgnoreCase(modelName)) {
+            modelName = systemConfigService.getValueOrDefault(
+                "ai.openai-compatible.default-model",
+                "deepseek-chat"
+            );
+        }
+        return modelName != null && modelName.toLowerCase(Locale.ROOT).contains("deepseek");
     }
 
     private LocalDateTime resolveAnalysisReuseTime(PromptConfigEntity promptConfig) {
@@ -459,20 +499,12 @@ public class AnalysisService {
             return invokeAi(promptConfig, buildBookInputText(book, chapters), analysisType);
         }
 
+        List<ChunkAnalysisOutcome> outcomes = analyzeChunks(promptConfig, book, chunks, analysisType, progressListener);
         List<String> chunkOutputs = new ArrayList<>();
         int tokenUsed = 0;
-        for (int index = 0; index < chunks.size(); index++) {
-            List<ChapterVO> chunk = chunks.get(index);
-            emitChunkProgress(progressListener, buildChunkProgressMessage(index + 1, chunks.size(), chunk, "正在分析"));
-            String chunkInput = buildBookInputText(book, chunk);
-            PromptConfigEntity chunkPrompt = copyPromptConfig(
-                promptConfig,
-                buildChunkPromptTemplate(promptConfig, analysisType, index + 1, chunks.size())
-            );
-            AiInvokeResult chunkResult = aiGatewayService.analyze(chunkPrompt, chunkInput, analysisType);
-            tokenUsed += Math.max(0, chunkResult.getTokenUsed());
-            chunkOutputs.add(buildChunkResultText(index + 1, chunk, chunkResult));
-            emitChunkProgress(progressListener, buildChunkProgressMessage(index + 1, chunks.size(), chunk, "已完成"));
+        for (ChunkAnalysisOutcome outcome : outcomes) {
+            tokenUsed += Math.max(0, outcome.result().getTokenUsed());
+            chunkOutputs.add(buildChunkResultText(outcome.index() + 1, outcome.chunk(), outcome.result()));
         }
 
         emitChunkProgress(progressListener, "\n[chunk-progress] 分段分析已完成，正在汇总最终结果...\n");
@@ -497,13 +529,75 @@ public class AnalysisService {
         return mergedResult;
     }
 
+    private List<ChunkAnalysisOutcome> analyzeChunks(PromptConfigEntity promptConfig,
+                                                     CrawlBookEntity book,
+                                                     List<List<ChapterVO>> chunks,
+                                                     String analysisType,
+                                                     java.util.function.Consumer<String> progressListener) {
+        if (chunks.isEmpty()) {
+            return List.of();
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(resolveChunkParallelism());
+        ExecutorCompletionService<ChunkAnalysisOutcome> completionService = new ExecutorCompletionService<>(executor);
+        List<ChunkAnalysisOutcome> outcomes = new ArrayList<>(Collections.nCopies(chunks.size(), null));
+        try {
+            for (int index = 0; index < chunks.size(); index++) {
+                final int chunkIndex = index;
+                final List<ChapterVO> chunk = chunks.get(index);
+                emitChunkProgress(progressListener, buildChunkProgressMessage(chunkIndex + 1, chunks.size(), chunk, "正在分析"));
+                completionService.submit(() -> analyzeSingleChunk(promptConfig, book, chunks.size(), analysisType, chunkIndex, chunk));
+            }
+
+            for (int completed = 0; completed < chunks.size(); completed++) {
+                ChunkAnalysisOutcome outcome = completionService.take().get();
+                outcomes.set(outcome.index(), outcome);
+                emitChunkProgress(
+                    progressListener,
+                    buildChunkProgressMessage(outcome.index() + 1, chunks.size(), outcome.chunk(), "已完成")
+                );
+            }
+            return outcomes;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("chunk analysis interrupted", ex);
+        } catch (ExecutionException ex) {
+            throw unwrapChunkExecutionException(ex);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private ChunkAnalysisOutcome analyzeSingleChunk(PromptConfigEntity promptConfig,
+                                                    CrawlBookEntity book,
+                                                    int chunkCount,
+                                                    String analysisType,
+                                                    int chunkIndex,
+                                                    List<ChapterVO> chunk) {
+        String chunkInput = buildBookInputText(book, chunk);
+        PromptConfigEntity chunkPrompt = copyPromptConfig(
+            promptConfig,
+            buildChunkPromptTemplate(promptConfig, analysisType, chunkIndex + 1, chunkCount)
+        );
+        AiInvokeResult chunkResult = aiGatewayService.analyze(chunkPrompt, chunkInput, analysisType);
+        return new ChunkAnalysisOutcome(chunkIndex, chunk, chunkResult);
+    }
+
+    private RuntimeException unwrapChunkExecutionException(ExecutionException ex) {
+        Throwable cause = ex.getCause();
+        if (cause instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        return new RuntimeException("chunk analysis failed", cause == null ? ex : cause);
+    }
+
     private List<List<ChapterVO>> splitChaptersForChunkedAnalysis(PromptConfigEntity promptConfig,
                                                                   CrawlBookEntity book,
                                                                   List<ChapterVO> chapters,
                                                                   String analysisType) {
         List<List<ChapterVO>> result = new ArrayList<>();
         List<ChapterVO> current = new ArrayList<>();
-        int targetTokens = resolveChunkTargetInputTokens();
+        int targetTokens = resolveChunkTargetInputTokens(promptConfig);
         for (ChapterVO chapter : chapters) {
             if (chapter == null) {
                 continue;
@@ -755,5 +849,8 @@ public class AnalysisService {
         } catch (Exception ex) {
             return "{\"analysisType\":\"" + aiResult.getResultJson().getOrDefault("analysisType", "unknown") + "\"}";
         }
+    }
+
+    private record ChunkAnalysisOutcome(int index, List<ChapterVO> chunk, AiInvokeResult result) {
     }
 }

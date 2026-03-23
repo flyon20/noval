@@ -86,7 +86,12 @@ function createStreamTask(result: TrendAnalysisResult) {
 }
 
 describe('TrendView', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   test('loads visual data and starts trend streaming on mount', async () => {
+    vi.useFakeTimers();
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
 
@@ -114,6 +119,7 @@ describe('TrendView', () => {
     });
 
     await flushPromises();
+    await vi.advanceTimersByTimeAsync(500);
 
     expect(dataApi.getVisual).toHaveBeenCalledWith('fanqie');
     expect(analysisApi.streamTrend).toHaveBeenCalledWith(

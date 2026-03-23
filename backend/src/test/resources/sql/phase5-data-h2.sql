@@ -8,7 +8,7 @@ VALUES
     (2, 'ai.timeout.millis', '15000', 'ai', 'AI request timeout in milliseconds', 1, 0),
     (3, 'ai.openai-compatible.base-url', '', 'ai', 'OpenAI compatible base URL, blank means fallback to application config', 1, 0),
     (4, 'ai.openai-compatible.default-model', 'deepseek-chat', 'ai', 'Default OpenAI compatible model name', 1, 0),
-    (5, 'ai.openai-compatible.streaming-enabled', 'false', 'ai', 'Whether OpenAI compatible streaming is enabled', 1, 0),
+    (5, 'ai.openai-compatible.streaming-enabled', 'true', 'ai', 'Whether OpenAI compatible streaming is enabled', 1, 0),
     (6, 'crawler.default.chapter-count', '3', 'crawler', 'Default crawler chapter count', 1, 0),
     (7, 'crawler.http.timeout-seconds', '20', 'crawler', 'Python crawler page fetch timeout in seconds', 1, 0),
     (8, 'crawler.chapter.fetch-workers', '3', 'crawler', 'Python crawler chapter fetch workers', 1, 0),
@@ -18,6 +18,11 @@ VALUES
     (12, 'crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
     (13, 'crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
     (14, 'analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0);
+INSERT INTO system_config (id, config_key, config_value, config_type, description, is_editable, deleted)
+VALUES
+    (15, 'analysis.chunk.max-input-tokens', '32000', 'analysis', 'Approximate max input tokens before analysis switches to chunk mode', 1, 0),
+    (16, 'analysis.chunk.target-input-tokens', '24000', 'analysis', 'Approximate target input tokens for each chunked analysis request', 1, 0),
+    (17, 'analysis.chunk.parallelism', '3', 'analysis', 'Maximum parallel chunk analysis requests', 1, 0);
 
 INSERT INTO crawl_book (id, platform, platform_book_id, book_name, author, intro, book_url, deleted)
 VALUES

@@ -353,6 +353,7 @@ class Phase4AnalysisIntegrationTest {
 
     @Test
     void shouldStreamDeconstructAnalysisWithSseProtocol() throws Exception {
+        updateSystemConfig("ai.openai-compatible.streaming-enabled", "false");
         String token = loginAndGetToken("admin", "admin123");
 
         MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
@@ -407,6 +408,33 @@ class Phase4AnalysisIntegrationTest {
 
         assertThat(body).contains("[chunk-progress]");
         assertThat(body).contains("1/3");
+    }
+
+    @Test
+    void shouldAvoidChunkMergeForDeepSeekWhenLegacyThresholdWouldBeTooConservative() throws Exception {
+        long bookId = insertBook("fanqie", "deepseek-long-1", "DeepSeek Long Book", "Author Long",
+            "Long intro", "https://fanqienovel.com/page/deepseek-long-1");
+        insertChapter(bookId, 1, "Chapter 1", "A".repeat(20000));
+        insertChapter(bookId, 2, "Chapter 2", "B".repeat(20000));
+        insertChapter(bookId, 3, "Chapter 3", "C".repeat(20000));
+        insertChapter(bookId, 4, "Chapter 4", "D".repeat(20000));
+        insertChapter(bookId, 5, "Chapter 5", "E".repeat(20000));
+        insertChapter(bookId, 6, "Chapter 6", "F".repeat(20000));
+        insertChapter(bookId, 7, "Chapter 7", "G".repeat(20000));
+        insertChapter(bookId, 8, "Chapter 8", "H".repeat(20000));
+        insertChapter(bookId, 9, "Chapter 9", "I".repeat(20000));
+        insertChapter(bookId, 10, "Chapter 10", "J".repeat(20000));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":%d,"chapterCount":10,"forceReanalyze":true}
+                    """.formatted(bookId)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.resultJson.analysisMode").doesNotExist());
     }
 
     @Test

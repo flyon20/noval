@@ -6,6 +6,10 @@ import AnalysisResultCard from '@/components/analysis/AnalysisResultCard.vue';
 import AnalysisToolbar from '@/components/analysis/AnalysisToolbar.vue';
 
 describe('AnalysisResultCard', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   test('renders skeleton during preparing phase', () => {
     const wrapper = mount(AnalysisResultCard, {
       props: {
@@ -27,6 +31,24 @@ describe('AnalysisResultCard', () => {
 
     expect(wrapper.text()).toContain('第一段输出');
     expect(wrapper.find('.analysis-result__cursor').exists()).toBe(true);
+  });
+
+  test('animates streaming text instead of flushing the whole payload at once', async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(AnalysisResultCard, {
+      props: {
+        phase: 'streaming',
+        streamingText: '',
+      },
+    });
+
+    await wrapper.setProps({
+      streamingText: 'abcdefghijklmnopqrstuvwxyz',
+    });
+    expect(wrapper.text()).not.toContain('abcdefghijklmnopqrstuvwxyz');
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(wrapper.text()).toContain('abcdefghijklmnopqrstuvwxyz');
   });
 
   test('displays markdown result when done', () => {

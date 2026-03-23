@@ -29,6 +29,7 @@ export type KnownSystemConfigKey =
   | 'ai.available-models'
   | 'analysis.chunk.max-input-tokens'
   | 'analysis.chunk.target-input-tokens'
+  | 'analysis.chunk.parallelism'
   | 'crawler.default.chapter-count'
   | 'crawler.http.timeout-seconds'
   | 'crawler.chapter.fetch-workers'

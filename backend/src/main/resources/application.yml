@@ -68,4 +68,4 @@ app:
       base-url: ${AI_OPENAI_COMPATIBLE_BASE_URL:https://api.deepseek.com/v1}
       api-key-ref: ${AI_OPENAI_COMPATIBLE_API_KEY_REF:DEEPSEEK_API_KEY}
       default-model: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:deepseek-chat}
-      streaming-enabled: ${AI_OPENAI_COMPATIBLE_STREAMING_ENABLED:false}
+      streaming-enabled: ${AI_OPENAI_COMPATIBLE_STREAMING_ENABLED:true}
