@@ -20,6 +20,9 @@ public class RequireRoleInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        if (request.getDispatcherType() == jakarta.servlet.DispatcherType.ASYNC) {
+            return true;
+        }
         if (!(handler instanceof HandlerMethod handlerMethod)) {
             return true;
         }
@@ -49,4 +52,3 @@ public class RequireRoleInterceptor implements HandlerInterceptor {
         return handlerMethod.getBeanType().getAnnotation(RequireRole.class);
     }
 }
-
