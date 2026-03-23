@@ -1,55 +1,73 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { RankBoardCatalog } from '@/types/crawler';
 
 const props = defineProps<{
   platform: 'fanqie';
-  activeCategory: string;
-  categories: Array<{
-    label: string;
-    value: string;
-  }>;
+  channels: RankBoardCatalog[];
+  activeChannelCode: string;
+  activeBoardCode: string;
   running?: boolean;
+  loading?: boolean;
 }>();
 
 const emit = defineEmits<{
-  select: [category: string];
+  select: [payload: { channelCode: string; boardCode: string }];
 }>();
 
 const platformLabel = computed(() => (props.platform === 'fanqie' ? '番茄小说' : props.platform));
-const activeCategoryLabel = computed(
-  () => props.categories.find((item) => item.value === props.activeCategory)?.label ?? '全部榜单',
-);
+const activeChannel = computed(() => props.channels.find((item) => item.channelCode === props.activeChannelCode));
+const activeBoard = computed(() => activeChannel.value?.boards.find((item) => item.boardCode === props.activeBoardCode));
+const activeBoardName = computed(() => activeBoard.value?.boardName ?? '未选择榜单');
 </script>
 
 <template>
   <section class="trend-context">
     <div class="trend-context__copy">
       <p class="trend-context__eyebrow">趋势情报</p>
-      <h2 class="trend-context__title">榜单趋势流式分析</h2>
+      <h2 class="trend-context__title">榜单趋势分析</h2>
       <p class="trend-context__description">
-        结合最新快照和历史分析结果，持续输出当前榜单的主题、节奏和结构变化，并把可视化数据同步整理成中文视图。
+        这里固定围绕你当前选中的榜单做趋势判断，不会自动发起分析。先展示已存的榜单可视化与历史摘要，只有点击按钮时才开始新的流式分析。
       </p>
       <div class="trend-context__chips">
         <span class="trend-context__chip">平台：{{ platformLabel }}</span>
-        <span class="trend-context__chip">当前分类：{{ activeCategoryLabel }}</span>
-        <span class="trend-context__chip">{{ running ? '状态：分析中' : '状态：待命' }}</span>
+        <span class="trend-context__chip">榜单：{{ activeBoardName }}</span>
+        <span class="trend-context__chip">{{ running ? '状态：分析中' : loading ? '状态：加载中' : '状态：待命' }}</span>
       </div>
     </div>
 
-    <div class="trend-context__categories">
-      <p class="trend-context__categories-title">榜单分类</p>
-      <div class="trend-context__category-list">
-        <button
-          v-for="item in categories"
-          :key="item.value"
-          class="trend-context__category"
-          :class="{ 'is-active': item.value === activeCategory }"
-          type="button"
-          :data-test="`trend-category-${item.value}`"
-          @click="emit('select', item.value)"
-        >
-          {{ item.label }}
-        </button>
+    <div class="trend-context__selectors">
+      <div class="trend-context__group">
+        <p class="trend-context__group-title">频道</p>
+        <div class="trend-context__pill-list">
+          <button
+            v-for="channel in channels"
+            :key="channel.channelCode"
+            class="trend-context__pill"
+            :class="{ 'is-active': channel.channelCode === activeChannelCode }"
+            type="button"
+            @click="emit('select', { channelCode: channel.channelCode, boardCode: channel.boards[0]?.boardCode ?? '' })"
+          >
+            {{ channel.channelName }}
+          </button>
+        </div>
+      </div>
+
+      <div class="trend-context__group">
+        <p class="trend-context__group-title">榜单</p>
+        <div class="trend-context__pill-list trend-context__pill-list--boards">
+          <button
+            v-for="board in activeChannel?.boards ?? []"
+            :key="board.boardCode"
+            class="trend-context__pill trend-context__pill--board"
+            :class="{ 'is-active': board.boardCode === activeBoardCode }"
+            type="button"
+            :data-test="`trend-category-${board.boardCode}`"
+            @click="emit('select', { channelCode: activeChannelCode, boardCode: board.boardCode })"
+          >
+            {{ board.boardName }}
+          </button>
+        </div>
       </div>
     </div>
   </section>
@@ -58,63 +76,67 @@ const activeCategoryLabel = computed(
 <style scoped lang="scss">
 .trend-context {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
   gap: 1rem;
   padding: 1.25rem;
-  border: 1px solid var(--color-border);
-  border-radius: 1.4rem;
+  border: 1px solid rgba(35, 65, 58, 0.12);
+  border-radius: 1.5rem;
   background:
-    radial-gradient(circle at top right, rgba(210, 136, 61, 0.16), transparent 28%),
-    linear-gradient(135deg, rgba(252, 247, 238, 0.98), rgba(239, 243, 233, 0.92));
+    radial-gradient(circle at top right, rgba(204, 121, 36, 0.18), transparent 28%),
+    linear-gradient(135deg, rgba(251, 246, 237, 0.98), rgba(240, 246, 239, 0.94));
   box-shadow: var(--shadow-soft);
 }
 
-.trend-context__copy {
+.trend-context__copy,
+.trend-context__selectors,
+.trend-context__group {
   display: grid;
   gap: 0.75rem;
 }
 
 .trend-context__eyebrow,
-.trend-context__categories-title {
+.trend-context__group-title {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.8rem;
-  letter-spacing: 0.16em;
+  font-size: 0.82rem;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
-.trend-context__title {
+.trend-context__title,
+.trend-context__description {
   margin: 0;
-  font-size: clamp(1.75rem, 3vw, 2.7rem);
+}
+
+.trend-context__title {
+  font-size: clamp(1.55rem, 3vw, 2.4rem);
   line-height: 1.08;
 }
 
 .trend-context__description {
-  margin: 0;
-  max-width: 44rem;
   color: var(--color-text-muted);
-  line-height: 1.75;
+  line-height: 1.8;
 }
 
 .trend-context__chips,
-.trend-context__category-list {
+.trend-context__pill-list {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
 }
 
 .trend-context__chip,
-.trend-context__category {
+.trend-context__pill {
   min-height: 44px;
-  padding: 0.65rem 1rem;
+  padding: 0.68rem 1rem;
   border-radius: 999px;
-  border: 1px solid rgba(35, 65, 58, 0.16);
-  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(35, 65, 58, 0.12);
+  background: rgba(255, 255, 255, 0.9);
   color: var(--color-text);
   font: inherit;
 }
 
-.trend-context__category {
+.trend-context__pill {
   cursor: pointer;
   font-weight: 600;
   transition:
@@ -123,26 +145,38 @@ const activeCategoryLabel = computed(
     background 160ms ease;
 }
 
-.trend-context__category:hover,
-.trend-context__category.is-active {
-  border-color: rgba(185, 104, 31, 0.45);
-  background: rgba(185, 104, 31, 0.12);
+.trend-context__pill:hover,
+.trend-context__pill.is-active {
+  border-color: rgba(190, 108, 28, 0.4);
+  background: rgba(190, 108, 28, 0.14);
   transform: translateY(-1px);
 }
 
-.trend-context__categories {
-  display: grid;
-  gap: 0.75rem;
-  align-content: start;
-  padding: 1rem;
-  border-radius: 1.2rem;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(35, 65, 58, 0.1);
+.trend-context__pill-list--boards {
+  max-height: 11rem;
+  overflow: auto;
+  padding-right: 0.25rem;
 }
 
 @media (max-width: 980px) {
   .trend-context {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .trend-context {
+    padding: 1rem;
+  }
+
+  .trend-context__pill-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.2rem;
+  }
+
+  .trend-context__pill {
+    white-space: nowrap;
   }
 }
 </style>

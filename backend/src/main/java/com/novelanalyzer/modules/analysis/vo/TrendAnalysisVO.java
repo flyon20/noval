@@ -6,7 +6,9 @@ public class TrendAnalysisVO {
 
     private String analysisType;
     private String platform;
-    private String category;
+    private String channelCode;
+    private String boardCode;
+    private String boardName;
     private String modelName;
     private String resultContent;
     private Map<String, Object> resultJson;
@@ -28,12 +30,28 @@ public class TrendAnalysisVO {
         this.platform = platform;
     }
 
-    public String getCategory() {
-        return category;
+    public String getChannelCode() {
+        return channelCode;
     }
 
-    public void setCategory(String category) {
-        this.category = category;
+    public void setChannelCode(String channelCode) {
+        this.channelCode = channelCode;
+    }
+
+    public String getBoardCode() {
+        return boardCode;
+    }
+
+    public void setBoardCode(String boardCode) {
+        this.boardCode = boardCode;
+    }
+
+    public String getBoardName() {
+        return boardName;
+    }
+
+    public void setBoardName(String boardName) {
+        this.boardName = boardName;
     }
 
     public String getModelName() {

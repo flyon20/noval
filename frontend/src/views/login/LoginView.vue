@@ -11,6 +11,16 @@ import { useAuthStore } from '@/stores/auth';
 
 type AuthMode = 'login' | 'register';
 
+const PASSWORD_RULE_TEXT = '密码需至少 8 位，且包含大写字母、小写字母和数字';
+const PASSWORD_RULE_ITEMS = ['至少 8 位', '包含大写字母', '包含小写字母', '包含数字'];
+const AUTH_MESSAGE_MAP: Record<string, string> = {
+  'username already exists': '用户名已存在，请更换后重试',
+  'username or password is incorrect': '登录失败，请检查用户名和密码',
+  'bad credentials': '登录失败，请检查用户名和密码',
+  'password is required': '请输入密码',
+  'username is required': '请输入用户名',
+};
+
 const router = useRouter();
 const authStore = useAuthStore();
 
@@ -51,9 +61,22 @@ function switchMode(mode: AuthMode) {
   form.confirmPassword = '';
 }
 
+function matchesPasswordRule(password: string) {
+  return password.length >= 8
+    && /[A-Z]/.test(password)
+    && /[a-z]/.test(password)
+    && /\d/.test(password);
+}
+
 function validateForm() {
-  if (!form.username.trim() || !form.password.trim()) {
+  if (!form.username.trim() || !form.password) {
     state.errorMessage = '请输入用户名和密码';
+    state.traceId = '';
+    return false;
+  }
+
+  if (isRegisterMode.value && !matchesPasswordRule(form.password)) {
+    state.errorMessage = PASSWORD_RULE_TEXT;
     state.traceId = '';
     return false;
   }
@@ -65,6 +88,28 @@ function validateForm() {
   }
 
   return true;
+}
+
+function resolveAuthErrorMessage(message: string | undefined, mode: AuthMode) {
+  const normalized = (message ?? '').trim();
+
+  if (!normalized) {
+    return mode === 'register' ? '注册失败，请检查输入信息后重试' : '登录失败，请检查用户名和密码';
+  }
+
+  if (AUTH_MESSAGE_MAP[normalized]) {
+    return AUTH_MESSAGE_MAP[normalized];
+  }
+
+  if (/[\u4e00-\u9fa5]/.test(normalized)) {
+    return normalized;
+  }
+
+  if (/^[\dA-Za-z_-]+$/.test(normalized)) {
+    return mode === 'register' ? '注册失败，请检查输入信息后重试' : '登录失败，请检查用户名和密码';
+  }
+
+  return mode === 'register' ? '注册失败，请检查输入信息后重试' : '登录失败，请检查用户名和密码';
 }
 
 async function handleSubmit() {
@@ -90,7 +135,7 @@ async function handleSubmit() {
     await router.push(HOME_ROUTE);
   } catch (error) {
     const payload = getErrorPayload(error);
-    state.errorMessage = payload.message ?? `${isRegisterMode.value ? '注册' : '登录'}失败，请稍后重试`;
+    state.errorMessage = resolveAuthErrorMessage(payload.message, state.mode);
     state.traceId = payload.traceId ?? '';
   } finally {
     state.submitting = false;
@@ -153,6 +198,20 @@ async function handleSubmit() {
           <p class="login-card__subtitle">
             {{ isRegisterMode ? '当前为免验证码注册，注册成功后将自动进入系统。' : '使用已有账号直接进入工作台。' }}
           </p>
+        </div>
+
+        <div v-if="isRegisterMode" class="login-card__password-rules">
+          <p class="login-card__password-rules-title">密码设置要求</p>
+          <p class="login-card__password-rules-copy">{{ PASSWORD_RULE_TEXT }}</p>
+          <div class="login-card__password-rule-list">
+            <span
+              v-for="item in PASSWORD_RULE_ITEMS"
+              :key="item"
+              class="login-card__password-rule"
+            >
+              {{ item }}
+            </span>
+          </div>
         </div>
 
         <el-alert
@@ -397,6 +456,43 @@ async function handleSubmit() {
   font-size: 0.92rem;
 }
 
+.login-card__password-rules {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  background: rgba(199, 146, 92, 0.08);
+  border: 1px solid rgba(199, 146, 92, 0.18);
+}
+
+.login-card__password-rules-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.login-card__password-rules-copy {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.84rem;
+  line-height: 1.65;
+}
+
+.login-card__password-rule-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.login-card__password-rule {
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
 .login-card__form {
   display: grid;
   gap: 0.5rem;
@@ -447,6 +543,10 @@ async function handleSubmit() {
     width: 100%;
     padding: 1.5rem;
     border-radius: 1.25rem;
+  }
+
+  .login-card__password-rule-list {
+    gap: 0.45rem;
   }
 }
 

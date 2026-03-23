@@ -4,37 +4,68 @@ import java.util.List;
 
 public class VisualDataVO {
 
-    private List<ChartItemVO> analysisTypeDistribution;
-    private List<DailyCountVO> analysisDailyTrend;
-    private List<ChartItemVO> rankCategoryDistribution;
+    private String platform;
+    private String channelCode;
+    private String boardCode;
+    private String boardName;
+    private Integer sourceSnapshotCount;
+    private Integer historyAnalysisCount;
     private List<RankSnapshotVO> latestSnapshots;
-    private List<ThemeWordCloudItemVO> wordCloud;
+    private List<ThemeWordCloudItemVO> historicalWordCloud;
     private List<ThemeTableItemVO> themeTable;
+    private List<HotBookVO> hotBooks;
+    private List<InsightCardVO> insightCards;
     private String comparisonSummary;
     private List<SnapshotThemeComparisonVO> snapshotComparisons;
+    private String trendPreview;
+    private String detailContent;
 
-    public List<ChartItemVO> getAnalysisTypeDistribution() {
-        return analysisTypeDistribution;
+    public String getPlatform() {
+        return platform;
     }
 
-    public void setAnalysisTypeDistribution(List<ChartItemVO> analysisTypeDistribution) {
-        this.analysisTypeDistribution = analysisTypeDistribution;
+    public void setPlatform(String platform) {
+        this.platform = platform;
     }
 
-    public List<DailyCountVO> getAnalysisDailyTrend() {
-        return analysisDailyTrend;
+    public String getChannelCode() {
+        return channelCode;
     }
 
-    public void setAnalysisDailyTrend(List<DailyCountVO> analysisDailyTrend) {
-        this.analysisDailyTrend = analysisDailyTrend;
+    public void setChannelCode(String channelCode) {
+        this.channelCode = channelCode;
     }
 
-    public List<ChartItemVO> getRankCategoryDistribution() {
-        return rankCategoryDistribution;
+    public String getBoardCode() {
+        return boardCode;
     }
 
-    public void setRankCategoryDistribution(List<ChartItemVO> rankCategoryDistribution) {
-        this.rankCategoryDistribution = rankCategoryDistribution;
+    public void setBoardCode(String boardCode) {
+        this.boardCode = boardCode;
+    }
+
+    public String getBoardName() {
+        return boardName;
+    }
+
+    public void setBoardName(String boardName) {
+        this.boardName = boardName;
+    }
+
+    public Integer getSourceSnapshotCount() {
+        return sourceSnapshotCount;
+    }
+
+    public void setSourceSnapshotCount(Integer sourceSnapshotCount) {
+        this.sourceSnapshotCount = sourceSnapshotCount;
+    }
+
+    public Integer getHistoryAnalysisCount() {
+        return historyAnalysisCount;
+    }
+
+    public void setHistoryAnalysisCount(Integer historyAnalysisCount) {
+        this.historyAnalysisCount = historyAnalysisCount;
     }
 
     public List<RankSnapshotVO> getLatestSnapshots() {
@@ -45,12 +76,12 @@ public class VisualDataVO {
         this.latestSnapshots = latestSnapshots;
     }
 
-    public List<ThemeWordCloudItemVO> getWordCloud() {
-        return wordCloud;
+    public List<ThemeWordCloudItemVO> getHistoricalWordCloud() {
+        return historicalWordCloud;
     }
 
-    public void setWordCloud(List<ThemeWordCloudItemVO> wordCloud) {
-        this.wordCloud = wordCloud;
+    public void setHistoricalWordCloud(List<ThemeWordCloudItemVO> historicalWordCloud) {
+        this.historicalWordCloud = historicalWordCloud;
     }
 
     public List<ThemeTableItemVO> getThemeTable() {
@@ -59,6 +90,22 @@ public class VisualDataVO {
 
     public void setThemeTable(List<ThemeTableItemVO> themeTable) {
         this.themeTable = themeTable;
+    }
+
+    public List<HotBookVO> getHotBooks() {
+        return hotBooks;
+    }
+
+    public void setHotBooks(List<HotBookVO> hotBooks) {
+        this.hotBooks = hotBooks;
+    }
+
+    public List<InsightCardVO> getInsightCards() {
+        return insightCards;
+    }
+
+    public void setInsightCards(List<InsightCardVO> insightCards) {
+        this.insightCards = insightCards;
     }
 
     public String getComparisonSummary() {
@@ -75,5 +122,21 @@ public class VisualDataVO {
 
     public void setSnapshotComparisons(List<SnapshotThemeComparisonVO> snapshotComparisons) {
         this.snapshotComparisons = snapshotComparisons;
+    }
+
+    public String getTrendPreview() {
+        return trendPreview;
+    }
+
+    public void setTrendPreview(String trendPreview) {
+        this.trendPreview = trendPreview;
+    }
+
+    public String getDetailContent() {
+        return detailContent;
+    }
+
+    public void setDetailContent(String detailContent) {
+        this.detailContent = detailContent;
     }
 }

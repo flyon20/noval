@@ -28,11 +28,16 @@ type TrendRunPhase =
   | 'error'
   | 'aborted';
 
+interface TrendContext {
+  platform: 'fanqie';
+  channelCode: string;
+  boardCode: string;
+}
+
 interface UseTrendRunOptions {
   runTrend: TrendRunFn;
   copyText(text: string): void | Promise<void>;
-  platform?: 'fanqie';
-  initialCategory?: string;
+  initialContext?: Partial<TrendContext>;
 }
 
 function normalizeTask(
@@ -50,8 +55,9 @@ function normalizeTask(
 
 export function useTrendRun(options: UseTrendRunOptions) {
   const state = reactive({
-    platform: options.platform ?? ('fanqie' as const),
-    category: options.initialCategory ?? 'male-hot-a',
+    platform: options.initialContext?.platform ?? ('fanqie' as const),
+    channelCode: options.initialContext?.channelCode ?? '',
+    boardCode: options.initialContext?.boardCode ?? '',
     phase: 'idle' as TrendRunPhase,
     streamingText: '',
     errorMessage: '',
@@ -63,10 +69,11 @@ export function useTrendRun(options: UseTrendRunOptions) {
   let currentTask: AnalysisStreamTask<TrendAnalysisResult> | null = null;
   let currentRunId = 0;
 
-  function buildPayload(category = state.category): TrendRequest {
+  function buildPayload(): TrendRequest {
     return {
       platform: state.platform,
-      category,
+      channelCode: state.channelCode,
+      boardCode: state.boardCode,
     };
   }
 
@@ -80,21 +87,50 @@ export function useTrendRun(options: UseTrendRunOptions) {
     currentTask = null;
   }
 
-  async function runTrend(category = state.category) {
-    abortCurrent();
-
-    currentRunId += 1;
-    const runId = currentRunId;
-
-    state.category = category;
-    state.phase = 'preparing';
+  function resetState(phase: TrendRunPhase = 'idle') {
+    state.phase = phase;
     state.streamingText = '';
     state.errorMessage = '';
     state.traceId = '';
     state.isFallback = false;
+    state.result = null;
+  }
+
+  function setContext(context: TrendContext, reset = true) {
+    const changed = state.channelCode !== context.channelCode || state.boardCode !== context.boardCode;
+
+    state.platform = context.platform;
+    state.channelCode = context.channelCode;
+    state.boardCode = context.boardCode;
+
+    if (!changed && !reset) {
+      return;
+    }
+
+    abortCurrent();
+    currentRunId += 1;
+    if (reset) {
+      resetState('idle');
+    }
+  }
+
+  async function runTrend(context?: TrendContext) {
+    if (context) {
+      setContext(context);
+    }
+
+    if (!state.channelCode || !state.boardCode) {
+      throw new Error('请先选择榜单');
+    }
+
+    abortCurrent();
+    currentRunId += 1;
+    const runId = currentRunId;
+
+    resetState('preparing');
 
     const task = normalizeTask(
-      options.runTrend(buildPayload(category), {
+      options.runTrend(buildPayload(), {
         onStart(event) {
           if (runId !== currentRunId) {
             return;
@@ -175,21 +211,22 @@ export function useTrendRun(options: UseTrendRunOptions) {
   }
 
   function rerunTrend() {
-    return runTrend(state.category);
+    return runTrend();
   }
 
-  async function copyResult() {
-    const text = state.result?.resultContent ?? state.streamingText;
+  async function copyResult(text?: string) {
+    const targetText = text || state.result?.resultContent || state.streamingText;
 
-    if (!text) {
+    if (!targetText) {
       return;
     }
 
-    await options.copyText(text);
+    await options.copyText(targetText);
   }
 
   return {
     state,
+    setContext,
     runTrend,
     stopTrend,
     rerunTrend,

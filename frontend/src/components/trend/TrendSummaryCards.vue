@@ -4,9 +4,9 @@ import { computed } from 'vue';
 const props = defineProps<{
   sourceSnapshotCount?: number;
   historyAnalysisCount?: number;
-  coveredCategoryCount?: number;
   latestSnapshotTime?: string | null;
-  currentCategoryLabel?: string;
+  boardName?: string | null;
+  representativeBook?: string | null;
   summary?: string | null;
   phaseLabel?: string;
 }>();
@@ -15,23 +15,23 @@ const stats = computed(() => [
   {
     label: '来源快照数',
     value: String(props.sourceSnapshotCount ?? 0),
-    note: '用于本次趋势判断的快照样本数量',
+    note: '用于当前榜单趋势判断的最近快照样本',
     dataTest: 'trend-summary-snapshot-count',
   },
   {
     label: '历史分析数',
     value: String(props.historyAnalysisCount ?? 0),
-    note: '当前可视化结果中累计可用的分析记录数',
-  },
-  {
-    label: '覆盖分类数',
-    value: String(props.coveredCategoryCount ?? 0),
-    note: '已抓到并参与趋势统计的榜单分类数',
+    note: '当前榜单可直接复用的历史趋势结果',
   },
   {
     label: '最近快照',
     value: props.latestSnapshotTime || '--',
-    note: '最新一次成功抓取到的榜单快照时间',
+    note: '最近一次成功抓取该榜单的时间',
+  },
+  {
+    label: '代表作品',
+    value: props.representativeBook || props.boardName || '--',
+    note: '最近榜单样本里最能代表当前走势的书',
   },
 ]);
 </script>
@@ -46,14 +46,14 @@ const stats = computed(() => [
 
     <article class="trend-summary__card trend-summary__card--wide">
       <div class="trend-summary__summary-head">
-        <p class="trend-summary__label">趋势摘要</p>
+        <p class="trend-summary__label">榜单摘要</p>
         <div class="trend-summary__badges">
-          <span class="trend-summary__badge">{{ currentCategoryLabel || '全部榜单' }}</span>
+          <span class="trend-summary__badge">{{ boardName || '未选择榜单' }}</span>
           <span class="trend-summary__badge trend-summary__badge--soft">{{ phaseLabel || '待命' }}</span>
         </div>
       </div>
       <p class="trend-summary__copy">
-        {{ summary || '当前还没有可展示的趋势摘要，等分析完成或可视化数据返回后会自动补齐。' }}
+        {{ summary || '当前还没有可展示的榜单摘要，先看快照与历史数据，需要时再点击按钮发起新的趋势分析。' }}
       </p>
     </article>
   </section>
@@ -109,8 +109,8 @@ const stats = computed(() => [
 }
 
 .trend-summary__value {
-  font-size: clamp(1.45rem, 2.8vw, 2.2rem);
-  line-height: 1.2;
+  font-size: clamp(1.25rem, 2.6vw, 1.95rem);
+  line-height: 1.35;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -122,10 +122,9 @@ const stats = computed(() => [
 }
 
 .trend-summary__badge {
-  justify-self: start;
   padding: 0.4rem 0.75rem;
   border-radius: 999px;
-  background: rgba(185, 104, 31, 0.12);
+  background: rgba(190, 108, 28, 0.14);
   color: var(--color-text);
   font-size: 0.82rem;
 }

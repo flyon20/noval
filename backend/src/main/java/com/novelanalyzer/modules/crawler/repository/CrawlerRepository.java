@@ -288,6 +288,29 @@ public class CrawlerRepository {
             .flatMap(board -> findLatestBoardSnapshot(board.getId()));
     }
 
+    public List<RankSnapshotEntity> findRecentBoardSnapshots(Long rankBoardId, int limit) {
+        return rankSnapshotMapper.selectList(
+            new LambdaQueryWrapper<RankSnapshotEntity>()
+                .eq(RankSnapshotEntity::getRankBoardId, rankBoardId)
+                .eq(RankSnapshotEntity::getDeleted, 0)
+                .orderByDesc(RankSnapshotEntity::getSnapshotTime)
+                .last("LIMIT " + Math.max(limit, 1))
+        );
+    }
+
+    public List<CrawlRankEntity> findRanksBySnapshotIds(List<Long> snapshotIds) {
+        if (snapshotIds == null || snapshotIds.isEmpty()) {
+            return List.of();
+        }
+        return crawlRankMapper.selectList(
+            new LambdaQueryWrapper<CrawlRankEntity>()
+                .in(CrawlRankEntity::getSnapshotId, snapshotIds)
+                .eq(CrawlRankEntity::getDeleted, 0)
+                .orderByDesc(CrawlRankEntity::getCrawlTime)
+                .orderByAsc(CrawlRankEntity::getRankNo)
+        );
+    }
+
     public List<CrawlRankEntity> findRankPageBySnapshot(Long snapshotId, int offset, int limit) {
         return crawlRankMapper.selectList(
             new LambdaQueryWrapper<CrawlRankEntity>()

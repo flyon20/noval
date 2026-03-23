@@ -5,6 +5,7 @@ import com.novelanalyzer.modules.data.service.DataQueryService;
 import com.novelanalyzer.modules.data.vo.AnalysisHistoryItemVO;
 import com.novelanalyzer.modules.data.vo.VisualDataVO;
 import com.novelanalyzer.modules.security.annotation.RequireRole;
+import jakarta.validation.constraints.NotBlank;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -32,7 +33,9 @@ public class DataController {
     }
 
     @GetMapping("/visual")
-    public Result<VisualDataVO> visual(@RequestParam(value = "platform", required = false) String platform) {
-        return Result.success(dataQueryService.getVisualData(platform));
+    public Result<VisualDataVO> visual(@RequestParam("platform") @NotBlank String platform,
+                                       @RequestParam("channelCode") @NotBlank String channelCode,
+                                       @RequestParam("boardCode") @NotBlank String boardCode) {
+        return Result.success(dataQueryService.getVisualData(platform, channelCode, boardCode));
     }
 }

@@ -1,17 +1,8 @@
-export interface ChartItem {
-  name: string;
-  value: number;
-}
-
-export interface DailyCount {
-  date: string;
-  value: number;
-}
-
 export interface RankSnapshot {
-  category: string;
-  crawlTime: string;
+  snapshotTime: string;
   bookCount: number;
+  topBookName?: string | null;
+  topBookAuthor?: string | null;
 }
 
 export interface ThemeWordCloudItem {
@@ -31,15 +22,35 @@ export interface SnapshotThemeComparison {
   change: string;
 }
 
+export interface HotBook {
+  bookName: string;
+  author?: string | null;
+  rankLabel?: string | null;
+  reason?: string | null;
+}
+
+export interface InsightCard {
+  label: string;
+  value: string;
+  note?: string | null;
+}
+
 export interface VisualData {
-  analysisTypeDistribution: ChartItem[];
-  analysisDailyTrend: DailyCount[];
-  rankCategoryDistribution: ChartItem[];
+  platform: 'fanqie';
+  channelCode: string;
+  boardCode: string;
+  boardName: string;
+  sourceSnapshotCount: number;
+  historyAnalysisCount: number;
   latestSnapshots: RankSnapshot[];
-  wordCloud: ThemeWordCloudItem[];
+  historicalWordCloud: ThemeWordCloudItem[];
   themeTable: ThemeTableItem[];
+  hotBooks: HotBook[];
+  insightCards: InsightCard[];
   comparisonSummary: string | null;
   snapshotComparisons: SnapshotThemeComparison[];
+  trendPreview?: string | null;
+  detailContent?: string | null;
 }
 
 export interface AnalysisHistoryQuery {

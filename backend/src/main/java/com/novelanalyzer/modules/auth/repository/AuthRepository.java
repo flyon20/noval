@@ -27,6 +27,17 @@ public class AuthRepository {
     }
 
     public Optional<AuthUserEntity> findActiveUserByUsername(String username) {
+        AuthUserEntity user = findUserByUsername(username).orElse(null);
+        if (user == null) {
+            return Optional.empty();
+        }
+        if (user.getStatus() == null || user.getStatus() != 1) {
+            return Optional.empty();
+        }
+        return Optional.of(user);
+    }
+
+    public Optional<AuthUserEntity> findUserByUsername(String username) {
         List<AuthUserEntity> users = jdbcTemplate.query(
             "SELECT id, username, password, status FROM sys_user WHERE username = ? AND deleted = 0 LIMIT 1",
             AUTH_USER_ROW_MAPPER,
@@ -35,11 +46,7 @@ public class AuthRepository {
         if (users.isEmpty()) {
             return Optional.empty();
         }
-        AuthUserEntity user = users.get(0);
-        if (user.getStatus() == null || user.getStatus() != 1) {
-            return Optional.empty();
-        }
-        return Optional.of(user);
+        return Optional.of(users.get(0));
     }
 
     public Optional<AuthUserEntity> findActiveUserById(Long userId) {

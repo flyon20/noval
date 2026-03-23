@@ -3,11 +3,9 @@ import type { ApiResponse } from '@/types/api';
 import type { AnalysisHistoryItem, AnalysisHistoryQuery, VisualData } from '@/types/data';
 
 export const dataApi = {
-  getVisual(platform?: 'fanqie') {
+  getVisual(params: { platform: 'fanqie'; channelCode: string; boardCode: string }) {
     return httpClient.get<ApiResponse<VisualData>>('/api/data/visual', {
-      params: {
-        ...(platform ? { platform } : {}),
-      },
+      params,
     });
   },
   getHistory(query: AnalysisHistoryQuery = {}) {

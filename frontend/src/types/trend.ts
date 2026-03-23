@@ -1,12 +1,15 @@
 export interface TrendRequest {
   platform: 'fanqie';
-  category?: string;
+  channelCode: string;
+  boardCode: string;
 }
 
 export interface TrendAnalysisResult {
   analysisType: 'theme';
   platform: 'fanqie';
-  category?: string;
+  channelCode: string;
+  boardCode: string;
+  boardName: string;
   modelName: string;
   resultContent: string;
   resultJson: Record<string, unknown>;

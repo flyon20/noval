@@ -75,19 +75,30 @@ class AuthControllerTest {
     }
 
     @Test
-    void shouldRejectInvalidCredential() throws Exception {
+    void shouldRejectWrongPasswordWithHelpfulMessage() throws Exception {
         mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"username\":\"admin\",\"password\":\"wrong\"}"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value(401));
+            .andExpect(jsonPath("$.code").value(401))
+            .andExpect(jsonPath("$.message").value("密码错误，请重新输入"));
+    }
+
+    @Test
+    void shouldRejectUnknownUsernameWithHelpfulMessage() throws Exception {
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"missing-user\",\"password\":\"Password123\"}"))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value(401))
+            .andExpect(jsonPath("$.message").value("用户名不存在，请先注册"));
     }
 
     @Test
     void shouldRegisterUserAndReturnToken() throws Exception {
         MvcResult registerResult = mockMvc.perform(post("/api/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"new-user\",\"password\":\"secret123\"}"))
+                .content("{\"username\":\"new-user\",\"password\":\"Password123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
@@ -128,10 +139,20 @@ class AuthControllerTest {
     void shouldRejectRegisterWhenUsernameExists() throws Exception {
         mockMvc.perform(post("/api/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"secret123\"}"))
+                .content("{\"username\":\"admin\",\"password\":\"Password123\"}"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value(400))
-            .andExpect(jsonPath("$.message").value("username already exists"));
+            .andExpect(jsonPath("$.message").value("用户名已存在，请更换后重试"));
+    }
+
+    @Test
+    void shouldRejectRegisterWhenPasswordIsTooWeak() throws Exception {
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"weak-user\",\"password\":\"secret123\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.message").value("密码需至少 8 位，且包含大写字母、小写字母和数字"));
     }
 
     @Test

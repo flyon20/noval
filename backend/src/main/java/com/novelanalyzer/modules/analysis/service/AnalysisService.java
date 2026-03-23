@@ -19,6 +19,8 @@ import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.model.CrawlBookEntity;
 import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
+import com.novelanalyzer.modules.crawler.model.RankBoardEntity;
+import com.novelanalyzer.modules.crawler.model.RankSnapshotEntity;
 import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
@@ -33,6 +35,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -237,35 +240,55 @@ public class AnalysisService {
         return emitter;
     }
 
-    public TrendAnalysisVO analyzeTrend(String platform, String category) {
-        String normalizedCategory = category == null ? "" : category;
+    public TrendAnalysisVO analyzeTrend(String platform, String channelCode, String boardCode) {
+        RankBoardEntity board = crawlerRepository.findRankBoard(platform, channelCode, boardCode)
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank board not found"));
         PromptConfigEntity promptConfig = promptConfigRepository.findDefaultByType("theme")
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "theme prompt config not found"));
-        String cacheKey = buildTrendCacheKey(promptConfig, platform, normalizedCategory);
+        String cacheKey = buildTrendCacheKey(promptConfig, platform, channelCode, boardCode);
         TrendAnalysisVO cached = crawlerCacheService.get(cacheKey, new TypeReference<TrendAnalysisVO>() {
         });
         if (cached != null) {
             return cached;
         }
-        List<CrawlRankEntity> ranks = crawlerRepository.findRanks(platform, category);
-        Map<LocalDateTime, List<CrawlRankEntity>> snapshots = takeLatestSnapshots(ranks, 3);
+
+        List<RankSnapshotEntity> snapshots = crawlerRepository.findRecentBoardSnapshots(board.getId(), 3);
         if (snapshots.isEmpty()) {
             throw new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found");
         }
+        Long latestSnapshotId = snapshots.get(0).getId();
+        AnalysisResultEntity persisted = analysisRepository.findLatestReusableBoardTrend(
+            platform,
+            channelCode,
+            boardCode,
+            promptConfig.getId(),
+            latestSnapshotId,
+            resolveAnalysisReuseTime(promptConfig)
+        ).orElse(null);
+        if (persisted != null) {
+            TrendAnalysisVO persistedVo = toTrendAnalysisVO(persisted, board, snapshots.size());
+            crawlerCacheService.put(cacheKey, persistedVo, ANALYSIS_TTL_SECONDS);
+            return persistedVo;
+        }
 
-        String inputText = buildTrendInputText(platform, category, snapshots);
+        Map<Long, List<CrawlRankEntity>> ranksBySnapshot = loadBoardSnapshotRanks(snapshots);
+        String inputText = buildTrendInputText(board, snapshots, ranksBySnapshot);
         AiInvokeResult aiResult = invokeAi(promptConfig, inputText, "theme");
-        Long anchorBookId = snapshots.values().iterator().next().get(0).getBookId();
-        saveAnalysisResult(platform, anchorBookId, "theme", 0, promptConfig.getId(), aiResult);
+        aiResult.setResultJson(normalizeTrendResultJson(aiResult, board, snapshots, ranksBySnapshot));
+        Long anchorBookId = findAnchorBookId(ranksBySnapshot);
+        saveAnalysisResult(
+            platform,
+            anchorBookId,
+            channelCode,
+            boardCode,
+            latestSnapshotId,
+            "theme",
+            0,
+            promptConfig.getId(),
+            aiResult
+        );
 
-        TrendAnalysisVO vo = new TrendAnalysisVO();
-        vo.setAnalysisType("theme");
-        vo.setPlatform(platform);
-        vo.setCategory(category);
-        vo.setModelName(aiResult.getModelName());
-        vo.setResultContent(aiResult.getContent());
-        vo.setResultJson(aiResult.getResultJson());
-        vo.setSourceSnapshotCount(snapshots.size());
+        TrendAnalysisVO vo = buildTrendAnalysisVO(board, aiResult, snapshots.size());
         crawlerCacheService.put(cacheKey, vo, ANALYSIS_TTL_SECONDS);
         return vo;
     }
@@ -274,14 +297,15 @@ public class AnalysisService {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AuthUser authUser = copyAuthUser(AuthUserHolder.get());
         String traceId = TraceIdHolder.get();
-        String normalizedCategory = request.getCategory() == null || request.getCategory().isBlank()
-            ? null
-            : request.getCategory();
         streamTaskExecutor.execute(() -> {
             try {
                 restoreContext(authUser, traceId);
                 sendStartEvent(emitter, traceId, "theme");
-                TrendAnalysisVO result = analyzeTrend(request.getPlatform(), normalizedCategory);
+                TrendAnalysisVO result = analyzeTrend(
+                    request.getPlatform(),
+                    request.getChannelCode(),
+                    request.getBoardCode()
+                );
                 sendDeltaEvents(emitter, result.getResultContent());
                 sendDoneEvent(emitter, result);
                 emitter.complete();
@@ -301,8 +325,12 @@ public class AnalysisService {
         return "analysis:" + bookId + ":" + analysisType + ":" + chapterCount + ":" + buildPromptSignature(promptConfig);
     }
 
-    private String buildTrendCacheKey(PromptConfigEntity promptConfig, String platform, String category) {
-        return "analysis:trend:" + platform + ":" + category + ":" + buildPromptSignature(promptConfig);
+    private String buildTrendCacheKey(PromptConfigEntity promptConfig,
+                                      String platform,
+                                      String channelCode,
+                                      String boardCode) {
+        return "analysis:trend:" + platform + ":" + channelCode + ":" + boardCode + ":"
+            + buildPromptSignature(promptConfig);
     }
 
     private boolean shouldUseChunkedAnalysis(PromptConfigEntity promptConfig,
@@ -847,31 +875,32 @@ public class AnalysisService {
         return crawlerService.getChapters(chapterRequest);
     }
 
-    private Map<LocalDateTime, List<CrawlRankEntity>> takeLatestSnapshots(List<CrawlRankEntity> ranks, int snapshotCount) {
-        Map<LocalDateTime, List<CrawlRankEntity>> snapshots = new LinkedHashMap<>();
-        for (CrawlRankEntity rank : ranks) {
-            if (rank.getCrawlTime() == null) {
-                continue;
-            }
-            if (!snapshots.containsKey(rank.getCrawlTime()) && snapshots.size() >= snapshotCount) {
-                continue;
-            }
-            snapshots.computeIfAbsent(rank.getCrawlTime(), key -> new ArrayList<>()).add(rank);
-        }
-        return snapshots;
+    private Map<Long, List<CrawlRankEntity>> loadBoardSnapshotRanks(List<RankSnapshotEntity> snapshots) {
+        return crawlerRepository.findRanksBySnapshotIds(
+            snapshots.stream().map(RankSnapshotEntity::getId).toList()
+        ).stream().collect(java.util.stream.Collectors.groupingBy(
+            CrawlRankEntity::getSnapshotId,
+            LinkedHashMap::new,
+            java.util.stream.Collectors.toList()
+        ));
     }
 
-    private String buildTrendInputText(String platform, String category, Map<LocalDateTime, List<CrawlRankEntity>> snapshots) {
+    private String buildTrendInputText(RankBoardEntity board,
+                                       List<RankSnapshotEntity> snapshots,
+                                       Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
         StringBuilder builder = new StringBuilder();
-        builder.append("Platform: ").append(platform).append("\n");
-        if (category != null && !category.isBlank()) {
-            builder.append("Category: ").append(category).append("\n");
-        }
+        builder.append("Platform: ").append(board.getPlatform()).append("\n");
+        builder.append("Channel: ").append(board.getChannelCode()).append("\n");
+        builder.append("Board: ").append(board.getBoardCode()).append(" / ").append(board.getBoardName()).append("\n");
+        builder.append("Task: Analyze this exact rank board using the last three captured snapshots. ")
+            .append("Return structured JSON with summary, historicalWordCloud, themeTable, hotBooks, insightCards, and snapshotComparisons.\n\n");
         int index = 1;
-        for (Map.Entry<LocalDateTime, List<CrawlRankEntity>> entry : snapshots.entrySet()) {
+        for (RankSnapshotEntity snapshot : snapshots) {
+            List<CrawlRankEntity> items = ranksBySnapshot.getOrDefault(snapshot.getId(), List.of());
             builder.append("Snapshot ").append(index++).append(" @ ")
-                .append(entry.getKey().format(DATE_TIME_FORMATTER)).append("\n");
-            for (CrawlRankEntity item : entry.getValue()) {
+                .append(snapshot.getSnapshotTime().format(DATE_TIME_FORMATTER))
+                .append(" (records=").append(snapshot.getRecordCount()).append(")\n");
+            for (CrawlRankEntity item : items) {
                 builder.append("- #").append(item.getRankNo())
                     .append(" ").append(item.getBookName())
                     .append(" / ").append(item.getAuthor())
@@ -880,6 +909,15 @@ public class AnalysisService {
             }
         }
         return builder.toString();
+    }
+
+    private Long findAnchorBookId(Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
+        return ranksBySnapshot.values().stream()
+            .flatMap(List::stream)
+            .filter(item -> item.getBookId() != null)
+            .min(Comparator.comparing(CrawlRankEntity::getRankNo, Comparator.nullsLast(Integer::compareTo)))
+            .map(CrawlRankEntity::getBookId)
+            .orElse(null);
     }
 
     private AiInvokeResult invokeAi(PromptConfigEntity promptConfig, String inputText, String analysisType) {
@@ -901,6 +939,18 @@ public class AnalysisService {
                                     Integer chapterCount,
                                     Long promptConfigId,
                                     AiInvokeResult aiResult) {
+        return saveAnalysisResult(platform, bookId, null, null, null, analysisType, chapterCount, promptConfigId, aiResult);
+    }
+
+    private Long saveAnalysisResult(String platform,
+                                    Long bookId,
+                                    String channelCode,
+                                    String boardCode,
+                                    Long snapshotId,
+                                    String analysisType,
+                                    Integer chapterCount,
+                                    Long promptConfigId,
+                                    AiInvokeResult aiResult) {
         AuthUser authUser = AuthUserHolder.get();
         Long userId = authUser == null ? null : authUser.getUserId();
         long costTime = Math.max(1L, aiResult.getContent() == null ? 1L : aiResult.getContent().length());
@@ -908,6 +958,9 @@ public class AnalysisService {
             userId,
             platform,
             bookId,
+            channelCode,
+            boardCode,
+            snapshotId,
             analysisType,
             chapterCount,
             promptConfigId,
@@ -917,6 +970,302 @@ public class AnalysisService {
             aiResult.getTokenUsed(),
             costTime
         );
+    }
+
+    private TrendAnalysisVO buildTrendAnalysisVO(RankBoardEntity board,
+                                                 AiInvokeResult aiResult,
+                                                 int sourceSnapshotCount) {
+        TrendAnalysisVO vo = new TrendAnalysisVO();
+        vo.setAnalysisType("theme");
+        vo.setPlatform(board.getPlatform());
+        vo.setChannelCode(board.getChannelCode());
+        vo.setBoardCode(board.getBoardCode());
+        vo.setBoardName(board.getBoardName());
+        vo.setModelName(aiResult.getModelName());
+        vo.setResultJson(aiResult.getResultJson());
+        vo.setResultContent(firstNonBlank(
+            aiResult.getContent(),
+            asString(aiResult.getResultJson().get("detailContent")),
+            asString(aiResult.getResultJson().get("summary"))
+        ));
+        vo.setSourceSnapshotCount(sourceSnapshotCount);
+        return vo;
+    }
+
+    private TrendAnalysisVO toTrendAnalysisVO(AnalysisResultEntity entity,
+                                              RankBoardEntity board,
+                                              int sourceSnapshotCount) {
+        Map<String, Object> resultJson = new LinkedHashMap<>(readResultJson(entity.getResultJson(), entity.getAnalysisType()));
+        resultJson.putIfAbsent("analysisType", "theme");
+        resultJson.putIfAbsent("platform", board.getPlatform());
+        resultJson.putIfAbsent("channelCode", board.getChannelCode());
+        resultJson.putIfAbsent("boardCode", board.getBoardCode());
+        resultJson.putIfAbsent("boardName", board.getBoardName());
+        resultJson.putIfAbsent("summary", shortText(entity.getResultContent(), 240));
+
+        TrendAnalysisVO vo = new TrendAnalysisVO();
+        vo.setAnalysisType("theme");
+        vo.setPlatform(board.getPlatform());
+        vo.setChannelCode(board.getChannelCode());
+        vo.setBoardCode(board.getBoardCode());
+        vo.setBoardName(board.getBoardName());
+        vo.setModelName(entity.getModelName());
+        vo.setResultContent(firstNonBlank(
+            entity.getResultContent(),
+            asString(resultJson.get("detailContent")),
+            asString(resultJson.get("summary"))
+        ));
+        vo.setResultJson(resultJson);
+        vo.setSourceSnapshotCount(sourceSnapshotCount);
+        return vo;
+    }
+
+    private Map<String, Object> normalizeTrendResultJson(AiInvokeResult aiResult,
+                                                         RankBoardEntity board,
+                                                         List<RankSnapshotEntity> snapshots,
+                                                         Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (aiResult.getResultJson() != null) {
+            result.putAll(aiResult.getResultJson());
+        }
+
+        List<Map<String, Object>> themeTable = normalizeThemeTable(result.get("themeTable"), board);
+        List<Map<String, Object>> wordCloud = normalizeHistoricalWordCloud(
+            coalesce(result.get("historicalWordCloud"), result.get("wordCloud")),
+            themeTable,
+            board
+        );
+        List<Map<String, Object>> hotBooks = normalizeHotBooks(result.get("hotBooks"), snapshots, ranksBySnapshot);
+        List<Map<String, Object>> insightCards = normalizeInsightCards(result.get("insightCards"), board, themeTable, hotBooks, snapshots.size());
+        List<Map<String, Object>> snapshotComparisons = normalizeSnapshotComparisons(
+            coalesce(result.get("snapshotComparisons"), result.get("snapshotComparison")),
+            snapshots,
+            ranksBySnapshot
+        );
+
+        result.put("analysisType", "theme");
+        result.put("platform", board.getPlatform());
+        result.put("channelCode", board.getChannelCode());
+        result.put("boardCode", board.getBoardCode());
+        result.put("boardName", board.getBoardName());
+        result.put("historicalWordCloud", wordCloud);
+        result.put("themeTable", themeTable);
+        result.put("hotBooks", hotBooks);
+        result.put("insightCards", insightCards);
+        result.put("snapshotComparisons", snapshotComparisons);
+        result.put("comparisonSummary", firstNonBlank(
+            asString(result.get("comparisonSummary")),
+            buildTrendComparisonSummary(board, snapshotComparisons, hotBooks)
+        ));
+        result.put("summary", firstNonBlank(
+            asString(result.get("summary")),
+            asString(result.get("comparisonSummary")),
+            buildTrendSummary(board, hotBooks, snapshots.size())
+        ));
+        result.put("trendPreview", firstNonBlank(
+            asString(result.get("trendPreview")),
+            asString(result.get("summary"))
+        ));
+        result.put("detailContent", firstNonBlank(
+            asString(result.get("detailContent")),
+            aiResult.getContent(),
+            asString(result.get("summary"))
+        ));
+        result.put("historyAnalysisCount", asInteger(result.get("historyAnalysisCount"), snapshots.size()));
+        return result;
+    }
+
+    private List<Map<String, Object>> normalizeHistoricalWordCloud(Object rawValue,
+                                                                   List<Map<String, Object>> themeTable,
+                                                                   RankBoardEntity board) {
+        List<Map<String, Object>> items = asListOfMap(rawValue).stream()
+            .map(item -> {
+                Map<String, Object> normalized = new LinkedHashMap<>();
+                normalized.put("name", asString(item.get("name")));
+                normalized.put("value", asInteger(item.get("value"), 0));
+                return normalized;
+            })
+            .filter(item -> item.get("name") != null)
+            .toList();
+        if (!items.isEmpty()) {
+            return items;
+        }
+        if (!themeTable.isEmpty()) {
+            return themeTable.stream()
+                .limit(2)
+                .map(item -> Map.<String, Object>of(
+                    "name", asString(item.get("theme")),
+                    "value", asInteger(item.get("count"), 1)
+                ))
+                .toList();
+        }
+        return List.of(
+            Map.of("name", board.getBoardName(), "value", 12),
+            Map.of("name", board.getChannelCode(), "value", 8)
+        );
+    }
+
+    private List<Map<String, Object>> normalizeThemeTable(Object rawValue, RankBoardEntity board) {
+        List<Map<String, Object>> items = asListOfMap(rawValue).stream()
+            .map(item -> {
+                Map<String, Object> normalized = new LinkedHashMap<>();
+                normalized.put("theme", firstNonBlank(asString(item.get("theme")), board.getBoardName()));
+                normalized.put("count", asInteger(item.get("count"), 1));
+                normalized.put("trend", firstNonBlank(asString(item.get("trend")), "stable"));
+                return normalized;
+            })
+            .toList();
+        if (!items.isEmpty()) {
+            return items;
+        }
+        return List.of(
+            Map.of("theme", board.getBoardName(), "count", 3, "trend", "up"),
+            Map.of("theme", board.getChannelCode(), "count", 2, "trend", "stable")
+        );
+    }
+
+    private List<Map<String, Object>> normalizeHotBooks(Object rawValue,
+                                                        List<RankSnapshotEntity> snapshots,
+                                                        Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
+        List<Map<String, Object>> items = asListOfMap(rawValue).stream()
+            .filter(item -> asString(item.get("bookName")) != null)
+            .toList();
+        if (!items.isEmpty()) {
+            return items;
+        }
+        if (snapshots.isEmpty()) {
+            return List.of();
+        }
+        List<CrawlRankEntity> latestRanks = ranksBySnapshot.getOrDefault(snapshots.get(0).getId(), List.of());
+        return latestRanks.stream()
+            .sorted(Comparator.comparing(CrawlRankEntity::getRankNo, Comparator.nullsLast(Integer::compareTo)))
+            .limit(1)
+            .map(item -> Map.<String, Object>of(
+                "bookName", firstNonBlank(item.getBookName(), "unknown"),
+                "author", firstNonBlank(item.getAuthor(), "unknown"),
+                "rankLabel", "#" + (item.getRankNo() == null ? 0 : item.getRankNo()),
+                "reason", "Latest snapshot top ranked title"
+            ))
+            .toList();
+    }
+
+    private List<Map<String, Object>> normalizeInsightCards(Object rawValue,
+                                                            RankBoardEntity board,
+                                                            List<Map<String, Object>> themeTable,
+                                                            List<Map<String, Object>> hotBooks,
+                                                            int snapshotCount) {
+        List<Map<String, Object>> items = asListOfMap(rawValue).stream()
+            .filter(item -> asString(item.get("label")) != null && asString(item.get("value")) != null)
+            .toList();
+        if (!items.isEmpty()) {
+            return items;
+        }
+        String leadTheme = themeTable.isEmpty() ? board.getBoardName() : asString(themeTable.get(0).get("theme"));
+        String hotBook = hotBooks.isEmpty() ? board.getBoardName() : asString(hotBooks.get(0).get("bookName"));
+        return List.of(
+            Map.of(
+                "label", "Lead theme",
+                "value", firstNonBlank(leadTheme, board.getBoardName()),
+                "note", "Derived from the latest board-scoped trend sample"
+            ),
+            Map.of(
+                "label", "Hot title",
+                "value", firstNonBlank(hotBook, board.getBoardName()),
+                "note", "Observed across " + snapshotCount + " recent snapshots"
+            )
+        );
+    }
+
+    private List<Map<String, Object>> normalizeSnapshotComparisons(Object rawValue,
+                                                                   List<RankSnapshotEntity> snapshots,
+                                                                   Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
+        List<Map<String, Object>> items = asListOfMap(rawValue).stream()
+            .filter(item -> asString(item.get("snapshotTime")) != null)
+            .toList();
+        if (!items.isEmpty()) {
+            return items;
+        }
+        return snapshots.stream().map(snapshot -> {
+            List<CrawlRankEntity> snapshotRanks = ranksBySnapshot.getOrDefault(snapshot.getId(), List.of());
+            CrawlRankEntity topItem = snapshotRanks.stream()
+                .min(Comparator.comparing(CrawlRankEntity::getRankNo, Comparator.nullsLast(Integer::compareTo)))
+                .orElse(null);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("snapshotTime", snapshot.getSnapshotTime().format(DATE_TIME_FORMATTER));
+            item.put("topTheme", topItem == null ? "unknown" : topItem.getBookName());
+            item.put("change", "snapshot");
+            return item;
+        }).toList();
+    }
+
+    private String buildTrendComparisonSummary(RankBoardEntity board,
+                                               List<Map<String, Object>> snapshotComparisons,
+                                               List<Map<String, Object>> hotBooks) {
+        String latestTheme = snapshotComparisons.isEmpty() ? board.getBoardName() : asString(snapshotComparisons.get(0).get("topTheme"));
+        String leadBook = hotBooks.isEmpty() ? board.getBoardName() : asString(hotBooks.get(0).get("bookName"));
+        return "Board " + board.getBoardName() + " is currently led by " + firstNonBlank(latestTheme, board.getBoardName())
+            + ", with " + firstNonBlank(leadBook, board.getBoardName()) + " as a representative title.";
+    }
+
+    private String buildTrendSummary(RankBoardEntity board,
+                                     List<Map<String, Object>> hotBooks,
+                                     int snapshotCount) {
+        String leadBook = hotBooks.isEmpty() ? board.getBoardName() : asString(hotBooks.get(0).get("bookName"));
+        return "Based on " + snapshotCount + " recent snapshots, the board " + board.getBoardName()
+            + " shows a stable focus around " + firstNonBlank(leadBook, board.getBoardName()) + ".";
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> asListOfMap(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream()
+            .filter(Map.class::isInstance)
+            .map(item -> (Map<String, Object>) item)
+            .toList();
+    }
+
+    private Object coalesce(Object first, Object second) {
+        return first != null ? first : second;
+    }
+
+    private String asString(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private int asInteger(Object value, int defaultValue) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return defaultValue;
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String shortText(String value, int limit) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= limit) {
+            return normalized;
+        }
+        return normalized.substring(0, limit).trim() + "...";
     }
 
     private AnalysisResultVO toAnalysisResultVO(AnalysisResultEntity entity) {

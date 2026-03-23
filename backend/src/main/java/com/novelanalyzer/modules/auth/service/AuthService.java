@@ -20,9 +20,20 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 @Service
 public class AuthService {
+
+    private static final String LOGIN_FAILED_MESSAGE = "登录失败，请检查用户名和密码";
+    private static final String USERNAME_NOT_FOUND_MESSAGE = "用户名不存在，请先注册";
+    private static final String PASSWORD_INCORRECT_MESSAGE = "密码错误，请重新输入";
+    private static final String USERNAME_EXISTS_MESSAGE = "用户名已存在，请更换后重试";
+    private static final String ACCOUNT_DISABLED_MESSAGE = "账号不可用，请联系管理员";
+    private static final String PASSWORD_RULE_MESSAGE = "密码需至少 8 位，且包含大写字母、小写字母和数字";
+    private static final Pattern UPPERCASE_PATTERN = Pattern.compile(".*[A-Z].*");
+    private static final Pattern LOWERCASE_PATTERN = Pattern.compile(".*[a-z].*");
+    private static final Pattern DIGIT_PATTERN = Pattern.compile(".*\\d.*");
 
     private final AuthProperties authProperties;
     private final AuthRepository authRepository;
@@ -44,11 +55,16 @@ public class AuthService {
     }
 
     public TokenResponse login(LoginRequest request, String loginIp) {
-        AuthUserEntity dbUser = authRepository.findActiveUserByUsername(request.getUsername()).orElse(null);
+        String username = normalizeUsername(request.getUsername());
+        AuthUserEntity dbUser = authRepository.findUserByUsername(username).orElse(null);
         if (dbUser != null) {
+            if (dbUser.getStatus() == null || dbUser.getStatus() != 1) {
+                authRepository.insertLoginLog(dbUser.getId(), dbUser.getUsername(), loginIp, 0, ACCOUNT_DISABLED_MESSAGE);
+                throw new BusinessException(ResultCode.UNAUTHORIZED, ACCOUNT_DISABLED_MESSAGE);
+            }
             if (!passwordMatches(request.getPassword(), dbUser.getPassword())) {
-                authRepository.insertLoginLog(dbUser.getId(), dbUser.getUsername(), loginIp, 0, "username or password is incorrect");
-                throw new BusinessException(ResultCode.UNAUTHORIZED, "username or password is incorrect");
+                authRepository.insertLoginLog(dbUser.getId(), dbUser.getUsername(), loginIp, 0, PASSWORD_INCORRECT_MESSAGE);
+                throw new BusinessException(ResultCode.UNAUTHORIZED, PASSWORD_INCORRECT_MESSAGE);
             }
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
             authRepository.updateLastLoginTime(dbUser.getId());
@@ -57,19 +73,20 @@ public class AuthService {
         }
 
         if (authProperties.isDemoEnabled()) {
-            validateDemoUser(request.getUsername(), request.getPassword(), loginIp);
-            return issueToken(0L, request.getUsername(), List.of("ADMIN"));
+            validateDemoUser(username, request.getPassword(), loginIp);
+            return issueToken(0L, username, List.of("ADMIN"));
         }
 
-        authRepository.insertLoginLog(null, request.getUsername(), loginIp, 0, "username or password is incorrect");
-        throw new BusinessException(ResultCode.UNAUTHORIZED, "username or password is incorrect");
+        authRepository.insertLoginLog(null, username, loginIp, 0, USERNAME_NOT_FOUND_MESSAGE);
+        throw new BusinessException(ResultCode.UNAUTHORIZED, USERNAME_NOT_FOUND_MESSAGE);
     }
 
     public TokenResponse register(RegisterRequest request, String registerIp) {
-        String username = request.getUsername().trim();
+        String username = normalizeUsername(request.getUsername());
+        validatePasswordRule(request.getPassword());
         if (authRepository.existsUserByUsername(username)) {
-            authRepository.insertLoginLog(null, username, registerIp, 0, "username already exists");
-            throw new BusinessException(ResultCode.BAD_REQUEST, "username already exists");
+            authRepository.insertLoginLog(null, username, registerIp, 0, USERNAME_EXISTS_MESSAGE);
+            throw new BusinessException(ResultCode.BAD_REQUEST, USERNAME_EXISTS_MESSAGE);
         }
 
         try {
@@ -82,8 +99,8 @@ public class AuthService {
             authRepository.insertLoginLog(userId, username, registerIp, 1, "register success");
             return issueToken(userId, username, roleCodes);
         } catch (DuplicateKeyException ex) {
-            authRepository.insertLoginLog(null, username, registerIp, 0, "username already exists");
-            throw new BusinessException(ResultCode.BAD_REQUEST, "username already exists");
+            authRepository.insertLoginLog(null, username, registerIp, 0, USERNAME_EXISTS_MESSAGE);
+            throw new BusinessException(ResultCode.BAD_REQUEST, USERNAME_EXISTS_MESSAGE);
         }
     }
 
@@ -121,15 +138,29 @@ public class AuthService {
 
     private void validateDemoUser(String username, String password, String loginIp) {
         if (!authProperties.getDemoUsername().equals(username)) {
-            authRepository.insertLoginLog(null, username, loginIp, 0, "username or password is incorrect");
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "username or password is incorrect");
+            authRepository.insertLoginLog(null, username, loginIp, 0, LOGIN_FAILED_MESSAGE);
+            throw new BusinessException(ResultCode.UNAUTHORIZED, LOGIN_FAILED_MESSAGE);
         }
         String encodedPassword = getOrInitEncodedPassword();
         if (!passwordEncoder.matches(password, encodedPassword)) {
-            authRepository.insertLoginLog(null, username, loginIp, 0, "username or password is incorrect");
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "username or password is incorrect");
+            authRepository.insertLoginLog(null, username, loginIp, 0, PASSWORD_INCORRECT_MESSAGE);
+            throw new BusinessException(ResultCode.UNAUTHORIZED, PASSWORD_INCORRECT_MESSAGE);
         }
         authRepository.insertLoginLog(0L, username, loginIp, 1, "login success(demo)");
+    }
+
+    private void validatePasswordRule(String password) {
+        String candidate = password == null ? "" : password.trim();
+        if (candidate.length() < 8
+            || !UPPERCASE_PATTERN.matcher(candidate).matches()
+            || !LOWERCASE_PATTERN.matcher(candidate).matches()
+            || !DIGIT_PATTERN.matcher(candidate).matches()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, PASSWORD_RULE_MESSAGE);
+        }
+    }
+
+    private String normalizeUsername(String username) {
+        return username == null ? "" : username.trim();
     }
 
     private String getOrInitEncodedPassword() {

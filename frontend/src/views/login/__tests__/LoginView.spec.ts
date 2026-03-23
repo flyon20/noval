@@ -139,14 +139,14 @@ describe('LoginView', () => {
 
     await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
     await wrapper.get('input[autocomplete="username"]').setValue('new-user');
-    await wrapper.get('input[autocomplete="new-password"]').setValue('secret123');
-    await wrapper.get('input[data-test="register-confirm-password"]').setValue('secret123');
+    await wrapper.get('input[autocomplete="new-password"]').setValue('Password123');
+    await wrapper.get('input[data-test="register-confirm-password"]').setValue('Password123');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
     expect((authApi as any).register).toHaveBeenCalledWith({
       username: 'new-user',
-      password: 'secret123',
+      password: 'Password123',
     });
     expect(systemApi.loginBootstrap).toHaveBeenCalledWith({ platform: 'fanqie' });
     expect(push).toHaveBeenCalledWith('/rank');
@@ -169,13 +169,45 @@ describe('LoginView', () => {
 
     await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
     await wrapper.get('input[autocomplete="username"]').setValue('new-user');
-    await wrapper.get('input[autocomplete="new-password"]').setValue('secret123');
-    await wrapper.get('input[data-test="register-confirm-password"]').setValue('secret456');
+    await wrapper.get('input[autocomplete="new-password"]').setValue('Password123');
+    await wrapper.get('input[data-test="register-confirm-password"]').setValue('Password456');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
     expect((authApi as any).register).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('两次输入的密码不一致');
+  });
+
+  test('register mode shows password rules and blocks weak passwords before request', async () => {
+    const { authApi } = await import('@/api/auth');
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/login', component: LoginView }],
+    });
+    await router.push('/login');
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
+
+    expect(wrapper.text()).toContain('密码需至少 8 位');
+    expect(wrapper.text()).toContain('大写字母');
+    expect(wrapper.text()).toContain('小写字母');
+    expect(wrapper.text()).toContain('数字');
+
+    await wrapper.get('input[autocomplete="username"]').setValue('new-user');
+    await wrapper.get('input[autocomplete="new-password"]').setValue('secret123');
+    await wrapper.get('input[data-test="register-confirm-password"]').setValue('secret123');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect((authApi as any).register).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('密码需至少 8 位，且包含大写字母、小写字母和数字');
   });
 
   test('failed login displays backend message', async () => {
@@ -185,7 +217,7 @@ describe('LoginView', () => {
       response: {
         status: 401,
         data: {
-          message: 'bad credentials',
+          message: '密码错误，请重新输入',
           traceId: 'trace-failed',
         },
       },
@@ -209,7 +241,43 @@ describe('LoginView', () => {
     await flushPromises();
 
     expect(systemApi.loginBootstrap).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain('bad credentials');
+    expect(wrapper.text()).toContain('密码错误，请重新输入');
     expect(wrapper.text()).toContain('trace-failed');
+  });
+
+  test('failed login hides odd backend message and shows friendly reason copy', async () => {
+    const { authApi } = await import('@/api/auth');
+    const { systemApi } = await import('@/api/system');
+    vi.mocked(authApi.login).mockRejectedValue({
+      response: {
+        status: 401,
+        data: {
+          message: '40101',
+          traceId: 'trace-odd',
+        },
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/login', component: LoginView }],
+    });
+    await router.push('/login');
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await wrapper.get('input[autocomplete="username"]').setValue('demo');
+    await wrapper.get('input[autocomplete="current-password"]').setValue('wrong');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(systemApi.loginBootstrap).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('登录失败，请检查用户名和密码');
+    expect(wrapper.text()).not.toContain('40101');
+    expect(wrapper.text()).toContain('trace-odd');
   });
 });

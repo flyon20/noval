@@ -61,8 +61,9 @@ public class AnalysisController {
 
     @GetMapping("/trend")
     public Result<TrendAnalysisVO> trend(@RequestParam("platform") @NotBlank String platform,
-                                         @RequestParam(value = "category", required = false) String category) {
-        return Result.success(analysisService.analyzeTrend(platform, category));
+                                         @RequestParam("channelCode") @NotBlank String channelCode,
+                                         @RequestParam("boardCode") @NotBlank String boardCode) {
+        return Result.success(analysisService.analyzeTrend(platform, channelCode, boardCode));
     }
 
     @PostMapping(value = "/trend/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

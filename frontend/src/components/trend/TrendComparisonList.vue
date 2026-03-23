@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import type { SnapshotThemeComparison } from '@/types/data';
-import type { TrendRankingItem } from '@/lib/trend-display';
+import type { InsightCard, SnapshotThemeComparison } from '@/types/data';
 
 defineProps<{
   summary?: string | null;
-  analysisTypes: TrendRankingItem[];
-  categories: TrendRankingItem[];
+  insightCards: InsightCard[];
   comparisons?: SnapshotThemeComparison[];
 }>();
 </script>
@@ -14,49 +12,37 @@ defineProps<{
   <article class="trend-comparison-list" data-test="trend-comparison-list">
     <header class="trend-comparison-list__header">
       <h3>趋势洞察</h3>
-      <p>{{ summary || '当前没有额外的主题对比摘要，下面先展示现有统计里最有价值的趋势线索。' }}</p>
+      <p>{{ summary || '当前没有额外的趋势补充说明，先用结构化洞察和快照对比帮助你快速判断榜单方向。' }}</p>
     </header>
 
     <section class="trend-comparison-list__group">
       <div class="trend-comparison-list__group-head">
-        <h4>分析类型排行</h4>
-        <span>{{ analysisTypes.length }} 项</span>
+        <h4>洞察卡片</h4>
+        <span>{{ insightCards.length }} 项</span>
       </div>
-      <ul v-if="analysisTypes.length" class="trend-comparison-list__items">
-        <li v-for="item in analysisTypes" :key="item.label">
+      <ul v-if="insightCards.length" class="trend-comparison-list__items">
+        <li v-for="item in insightCards" :key="`${item.label}-${item.value}`">
           <span>{{ item.label }}</span>
           <strong>{{ item.value }}</strong>
+          <em>{{ item.note }}</em>
         </li>
       </ul>
-      <p v-else class="trend-comparison-list__empty">暂无分析类型统计。</p>
+      <p v-else class="trend-comparison-list__empty">暂无洞察卡片。</p>
     </section>
 
     <section class="trend-comparison-list__group">
       <div class="trend-comparison-list__group-head">
-        <h4>覆盖分类排行</h4>
-        <span>{{ categories.length }} 项</span>
+        <h4>历史快照对比</h4>
+        <span>{{ comparisons?.length ?? 0 }} 条</span>
       </div>
-      <ul v-if="categories.length" class="trend-comparison-list__items">
-        <li v-for="item in categories" :key="item.label">
-          <span>{{ item.label }}</span>
-          <strong>{{ item.value }}</strong>
-        </li>
-      </ul>
-      <p v-else class="trend-comparison-list__empty">暂无榜单分类统计。</p>
-    </section>
-
-    <section v-if="comparisons?.length" class="trend-comparison-list__group">
-      <div class="trend-comparison-list__group-head">
-        <h4>快照对比</h4>
-        <span>{{ comparisons.length }} 条</span>
-      </div>
-      <ul class="trend-comparison-list__items">
+      <ul v-if="comparisons?.length" class="trend-comparison-list__items">
         <li v-for="item in comparisons" :key="item.snapshotTime">
           <span>{{ item.snapshotTime }}</span>
           <strong>{{ item.topTheme }}</strong>
           <em>{{ item.change }}</em>
         </li>
       </ul>
+      <p v-else class="trend-comparison-list__empty">暂无快照对比数据。</p>
     </section>
   </article>
 </template>

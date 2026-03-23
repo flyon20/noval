@@ -113,7 +113,8 @@ class Phase5BackendIntegrationTest {
         mockMvc.perform(get("/api/analysis/trend")
                 .header("Authorization", "Bearer " + token)
                 .param("platform", " ")
-                .param("category", "male-hot-a"))
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value(400));
     }
@@ -130,7 +131,7 @@ class Phase5BackendIntegrationTest {
     }
 
     @Test
-    void shouldReturnHistoryAndVisualData() throws Exception {
+    void shouldReturnHistoryAndBoardScopedVisualData() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
 
         mockMvc.perform(get("/api/data/history")
@@ -145,33 +146,46 @@ class Phase5BackendIntegrationTest {
 
         mockMvc.perform(get("/api/data/visual")
                 .header("Authorization", "Bearer " + token)
-                .param("platform", "fanqie"))
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.analysisTypeDistribution.length()").value(4))
-            .andExpect(jsonPath("$.data.rankCategoryDistribution.length()").value(2))
+            .andExpect(jsonPath("$.data.platform").value("fanqie"))
+            .andExpect(jsonPath("$.data.channelCode").value("male-new"))
+            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"))
+            .andExpect(jsonPath("$.data.boardName").isNotEmpty())
+            .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
+            .andExpect(jsonPath("$.data.historyAnalysisCount").value(3))
             .andExpect(jsonPath("$.data.latestSnapshots.length()").value(3))
-            .andExpect(jsonPath("$.data.wordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(2))
             .andExpect(jsonPath("$.data.themeTable.length()").value(2))
+            .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
+            .andExpect(jsonPath("$.data.insightCards.length()").value(2))
             .andExpect(jsonPath("$.data.comparisonSummary").isNotEmpty())
             .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3));
     }
 
     @Test
-    void shouldReturnTrendAnalysis() throws Exception {
+    void shouldReturnBoardScopedTrendAnalysis() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
 
         mockMvc.perform(get("/api/analysis/trend")
                 .header("Authorization", "Bearer " + token)
                 .param("platform", "fanqie")
-                .param("category", "male-hot-a"))
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.analysisType").value("theme"))
             .andExpect(jsonPath("$.data.platform").value("fanqie"))
-            .andExpect(jsonPath("$.data.category").value("male-hot-a"))
+            .andExpect(jsonPath("$.data.channelCode").value("male-new"))
+            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"))
+            .andExpect(jsonPath("$.data.boardName").isNotEmpty())
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"))
+            .andExpect(jsonPath("$.data.resultJson.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.resultJson.summary").isNotEmpty())
             .andExpect(jsonPath("$.data.resultContent").isNotEmpty());
     }
 
@@ -199,7 +213,7 @@ class Phase5BackendIntegrationTest {
             Integer.class,
             boardId
         );
-        assertTrue(snapshotCount != null && snapshotCount > 0);
+        assertEquals(3, snapshotCount);
 
         Integer rankRowWithSnapshotCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(1) FROM crawl_rank WHERE platform = ? AND channel_code = ? AND board_code = ? AND snapshot_id IS NOT NULL AND deleted = 0",

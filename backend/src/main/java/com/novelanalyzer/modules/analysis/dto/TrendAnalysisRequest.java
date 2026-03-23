@@ -7,7 +7,11 @@ public class TrendAnalysisRequest {
     @NotBlank(message = "platform is required")
     private String platform;
 
-    private String category;
+    @NotBlank(message = "channelCode is required")
+    private String channelCode;
+
+    @NotBlank(message = "boardCode is required")
+    private String boardCode;
 
     public String getPlatform() {
         return platform;
@@ -17,11 +21,19 @@ public class TrendAnalysisRequest {
         this.platform = platform;
     }
 
-    public String getCategory() {
-        return category;
+    public String getChannelCode() {
+        return channelCode;
     }
 
-    public void setCategory(String category) {
-        this.category = category;
+    public void setChannelCode(String channelCode) {
+        this.channelCode = channelCode;
+    }
+
+    public String getBoardCode() {
+        return boardCode;
+    }
+
+    public void setBoardCode(String boardCode) {
+        this.boardCode = boardCode;
     }
 }
