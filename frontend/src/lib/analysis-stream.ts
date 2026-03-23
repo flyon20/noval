@@ -26,6 +26,8 @@ interface ParsedEvent {
   payload: unknown;
 }
 
+const FALLBACK_SIGNAL = Symbol('analysis-stream-fallback');
+
 export interface AnalysisStreamRunnerDeps<TRequest = AnalysisRequest, TDone = AnalysisResult> {
   getAccessToken(): string | null;
   refreshToken(token: string): Promise<TokenResponse>;
@@ -165,6 +167,10 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
               if (item.event === 'error') {
                 const errorEvent = item.payload as StreamErrorEvent;
                 callbacks.onError(errorEvent);
+                if (!sawDelta) {
+                  callbacks.onFallback?.();
+                  return FALLBACK_SIGNAL;
+                }
                 throw new Error(errorEvent.message);
               }
             }
@@ -230,6 +236,10 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
                 buffer = finalParsed.rest;
                 const finalResult = consumeEvents(finalParsed.events);
 
+                if (finalResult === FALLBACK_SIGNAL) {
+                  return deps.fallbackRequest(payload);
+                }
+
                 if (finalResult) {
                   return finalResult;
                 }
@@ -242,6 +252,10 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
               buffer = parsed.rest;
 
               const streamedResult = consumeEvents(parsed.events);
+
+              if (streamedResult === FALLBACK_SIGNAL) {
+                return deps.fallbackRequest(payload);
+              }
 
               if (streamedResult) {
                 return streamedResult;

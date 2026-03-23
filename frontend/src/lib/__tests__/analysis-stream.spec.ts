@@ -116,6 +116,44 @@ describe('analysis stream runtime', () => {
     expect(fallbackRequest).toHaveBeenCalledWith(payload);
   });
 
+  test('falls back to blocking request when stream emits error before first delta', async () => {
+    const fallbackRequest = vi.fn().mockResolvedValue(result);
+    const onError = vi.fn();
+    const onFallback = vi.fn();
+    const runtime = createAnalysisStreamRunner({
+      getAccessToken: () => 'token-1',
+      refreshToken: vi.fn(),
+      applyTokenResponse: vi.fn(),
+      clearSession: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(
+        createSseResponse(
+          [
+            'event: start',
+            'data: {"event":"start","traceId":"trace-1","analysisType":"deconstruct"}',
+            '',
+            'event: error',
+            'data: {"event":"error","code":500,"message":"internal server error","traceId":"trace-1"}',
+            '',
+          ].join('\n'),
+        ),
+      ),
+      fallbackRequest,
+    });
+
+    const task = runtime.run('/api/analysis/deconstruct/stream', payload, {
+      onStart: vi.fn(),
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError,
+      onFallback,
+    });
+
+    await expect(task.result).resolves.toEqual(result);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onFallback).toHaveBeenCalledTimes(1);
+    expect(fallbackRequest).toHaveBeenCalledWith(payload);
+  });
+
   test('refreshes and retries stream request once on 401', async () => {
     const refreshToken = vi.fn().mockResolvedValue({
       accessToken: 'token-2',
