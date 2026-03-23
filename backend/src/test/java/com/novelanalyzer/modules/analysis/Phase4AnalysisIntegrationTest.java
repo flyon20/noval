@@ -255,6 +255,37 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldSendPromptPrefixAsSystemMessageForOpenAiCompatibleModel() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"promptType":"deconstruct","promptName":"default-deconstruct","promptContent":"SYSTEM PREFIX\\n{{content}}\\nJSON ONLY","modelName":"deepseek-chat","temperature":0.55,"maxTokens":1200}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
+        assertThat(requestBody).contains("\"role\" : \"system\"");
+        assertThat(requestBody).contains("\"role\" : \"user\"");
+        assertThat(requestBody).contains("SYSTEM PREFIX");
+        assertThat(requestBody).contains("JSON ONLY");
+        assertThat(requestBody).contains("Book:");
+        assertThat(requestBody).contains("Author:");
+        assertThat(requestBody).contains("[");
+    }
+
+    @Test
     void shouldReanalyzeWhenForceReanalyzeEnabled() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
 

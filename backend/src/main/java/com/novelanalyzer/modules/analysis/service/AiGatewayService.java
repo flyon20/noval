@@ -1,5 +1,7 @@
 package com.novelanalyzer.modules.analysis.service;
 
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.TokenCountEstimator;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -29,6 +31,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -73,7 +76,7 @@ public class AiGatewayService {
 
     public AiInvokeResult analyze(PromptConfigEntity promptConfig, String text, String analysisType) {
         String renderedPrompt = renderPrompt(promptConfig.getPromptContent(), text, analysisType);
-        AiInvokeResult providerResult = invokePreferredProvider(promptConfig, renderedPrompt, analysisType);
+        AiInvokeResult providerResult = invokePreferredProvider(promptConfig, text, renderedPrompt, analysisType);
         if (providerResult != null) {
             return providerResult;
         }
@@ -115,6 +118,7 @@ public class AiGatewayService {
     }
 
     private AiInvokeResult invokePreferredProvider(PromptConfigEntity promptConfig,
+                                                   String text,
                                                    String renderedPrompt,
                                                    String analysisType) {
         String providerType = resolveProviderType();
@@ -123,10 +127,10 @@ public class AiGatewayService {
             if (difyResult != null) {
                 return difyResult;
             }
-            return invokeOpenAiCompatible(promptConfig, renderedPrompt, analysisType);
+            return invokeOpenAiCompatible(promptConfig, text, analysisType);
         }
 
-        AiInvokeResult openAiResult = invokeOpenAiCompatible(promptConfig, renderedPrompt, analysisType);
+        AiInvokeResult openAiResult = invokeOpenAiCompatible(promptConfig, text, analysisType);
         if (openAiResult != null) {
             return openAiResult;
         }
@@ -134,7 +138,7 @@ public class AiGatewayService {
     }
 
     private AiInvokeResult invokeOpenAiCompatible(PromptConfigEntity promptConfig,
-                                                  String renderedPrompt,
+                                                  String text,
                                                   String analysisType) {
         String apiKey = resolveOpenAiCompatibleApiKey();
         if (apiKey == null || apiKey.isBlank()) {
@@ -147,12 +151,13 @@ public class AiGatewayService {
         }
 
         try {
+            PromptMessagePair promptMessages = buildPromptMessagePair(promptConfig, text, analysisType);
             OpenAiChatModel model = getOrCreateChatModel(
                 resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
                 promptConfig.getTemperature(), promptConfig.getMaxTokens()
             );
             ChatResponse response = model.chat(ChatRequest.builder()
-                .messages(UserMessage.from(renderedPrompt))
+                .messages(promptMessages.messages())
                 .build());
             String content = response.aiMessage().text();
             if (content == null || content.isBlank()) {
@@ -166,7 +171,7 @@ public class AiGatewayService {
                 modelName,
                 content,
                 totalTokens != null ? totalTokens
-                    : Math.max(120, estimateTokenCountInternal(renderedPrompt) + estimateTokenCountInternal(content)),
+                    : Math.max(120, estimateTokenCountInternal(promptMessages.combinedText()) + estimateTokenCountInternal(content)),
                 resultJson
             );
         } catch (Exception ex) {
@@ -195,7 +200,7 @@ public class AiGatewayService {
             return false;
         }
 
-        String renderedPrompt = renderPrompt(promptConfig.getPromptContent(), text, analysisType);
+        PromptMessagePair promptMessages = buildPromptMessagePair(promptConfig, text, analysisType);
         OpenAiStreamingChatModel streamModel = getOrCreateStreamingChatModel(
             resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
             promptConfig.getTemperature(), promptConfig.getMaxTokens()
@@ -204,7 +209,9 @@ public class AiGatewayService {
         StringBuilder buffer = new StringBuilder();
         final String resolvedModel = modelName;
 
-        streamModel.chat(renderedPrompt, new StreamingChatResponseHandler() {
+        streamModel.doChat(ChatRequest.builder()
+            .messages(promptMessages.messages())
+            .build(), new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String token) {
                 buffer.append(token);
@@ -229,7 +236,7 @@ public class AiGatewayService {
                 AiInvokeResult result = AiInvokeResult.of(
                     usedModel, content,
                     totalTokens != null ? totalTokens
-                        : Math.max(120, estimateTokenCountInternal(renderedPrompt) + estimateTokenCountInternal(content)),
+                        : Math.max(120, estimateTokenCountInternal(promptMessages.combinedText()) + estimateTokenCountInternal(content)),
                     resultJson
                 );
                 onDone.accept(emitter, result);
@@ -241,6 +248,32 @@ public class AiGatewayService {
             }
         });
         return true;
+    }
+
+    private PromptMessagePair buildPromptMessagePair(PromptConfigEntity promptConfig,
+                                                     String text,
+                                                     String analysisType) {
+        String template = normalizePromptTemplate(promptConfig == null ? null : promptConfig.getPromptContent(), analysisType);
+        if (!template.contains("{{content}}")) {
+            return new PromptMessagePair(
+                List.of(UserMessage.from(renderPrompt(template, text, analysisType))),
+                renderPrompt(template, text, analysisType)
+            );
+        }
+
+        String systemPrompt = PromptTemplate.from(template)
+            .apply(Map.of(
+                "content", "正文内容会在下一条 user message 中提供，请只基于该正文完成分析。",
+                "analysisType", analysisType
+            ))
+            .text();
+        return new PromptMessagePair(
+            List.<ChatMessage>of(
+                SystemMessage.from(systemPrompt),
+                UserMessage.from(text)
+            ),
+            systemPrompt + "\n" + text
+        );
     }
 
     private void emitRawStreamingDeltas(ChatResponse response,
@@ -576,5 +609,8 @@ public class AiGatewayService {
             return trimmed.substring(firstBrace, lastBrace + 1);
         }
         return trimmed;
+    }
+
+    private record PromptMessagePair(List<ChatMessage> messages, String combinedText) {
     }
 }
