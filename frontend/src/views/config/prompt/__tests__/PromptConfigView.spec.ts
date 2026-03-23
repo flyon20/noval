@@ -22,6 +22,10 @@ function createPromptConfig(promptType: 'deconstruct' | 'structure' | 'plot' | '
     modelName: 'dify',
     temperature: 0.7,
     maxTokens: 2048,
+    outputJsonSchema: '{"type":"object"}',
+    outputExampleJson: '{"summary":"example"}',
+    postProcessType: 'json_extract',
+    parseConfigJson: '{"parser":"json"}',
   };
 }
 
@@ -64,6 +68,7 @@ describe('PromptConfigView', () => {
 
     expect(promptConfigApi.getByType).toHaveBeenCalledWith('deconstruct');
     expect(wrapper.text()).toContain('{{content}}');
+    expect((wrapper.get('[data-test="prompt-post-process-type-input"]').element as HTMLInputElement).value).toBe('json_extract');
 
     await wrapper.get('[data-test="prompt-type-structure"]').trigger('click');
     await flushPromises();
@@ -124,6 +129,10 @@ describe('PromptConfigView', () => {
     await flushPromises();
     await wrapper.get('[data-test="prompt-temperature-input"]').setValue('0.9');
     await wrapper.get('[data-test="prompt-max-tokens-input"]').setValue('4096');
+    await wrapper.get('[data-test="prompt-output-json-schema-input"]').setValue('{"type":"object","properties":{"summary":{"type":"string"}}}');
+    await wrapper.get('[data-test="prompt-output-example-json-input"]').setValue('{"summary":"example"}');
+    await wrapper.get('[data-test="prompt-post-process-type-input"]').setValue('json_extract');
+    await wrapper.get('[data-test="prompt-parse-config-json-input"]').setValue('{"parser":"json","trimMarkdownFence":true}');
     await wrapper.get('[data-test="prompt-save-button"]').trigger('click');
     await flushPromises();
 
@@ -134,6 +143,10 @@ describe('PromptConfigView', () => {
       modelName: 'dify-chat',
       temperature: 0.9,
       maxTokens: 4096,
+      outputJsonSchema: '{"type":"object","properties":{"summary":{"type":"string"}}}',
+      outputExampleJson: '{"summary":"example"}',
+      postProcessType: 'json_extract',
+      parseConfigJson: '{"parser":"json","trimMarkdownFence":true}',
     });
   });
 });

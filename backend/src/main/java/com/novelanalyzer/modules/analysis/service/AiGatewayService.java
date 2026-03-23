@@ -5,6 +5,7 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.TokenCountEstimator;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.input.PromptTemplate;
@@ -156,9 +157,13 @@ public class AiGatewayService {
                 resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
                 promptConfig.getTemperature(), promptConfig.getMaxTokens()
             );
-            ChatResponse response = model.chat(ChatRequest.builder()
-                .messages(promptMessages.messages())
-                .build());
+            ChatRequest.Builder requestBuilder = ChatRequest.builder()
+                .messages(promptMessages.messages());
+            ResponseFormat responseFormat = resolveResponseFormat(promptConfig);
+            if (responseFormat != null) {
+                requestBuilder.responseFormat(responseFormat);
+            }
+            ChatResponse response = model.chat(requestBuilder.build());
             String content = response.aiMessage().text();
             if (content == null || content.isBlank()) {
                 return null;
@@ -166,7 +171,7 @@ public class AiGatewayService {
             Integer totalTokens = Optional.ofNullable(response.tokenUsage())
                 .map(u -> u.totalTokenCount())
                 .orElse(null);
-            Map<String, Object> resultJson = buildStructuredResult(Map.of(), content, analysisType, modelName);
+            Map<String, Object> resultJson = buildStructuredResult(promptConfig, Map.of(), content, analysisType, modelName);
             return AiInvokeResult.of(
                 modelName,
                 content,
@@ -209,9 +214,14 @@ public class AiGatewayService {
         StringBuilder buffer = new StringBuilder();
         final String resolvedModel = modelName;
 
-        streamModel.doChat(ChatRequest.builder()
-            .messages(promptMessages.messages())
-            .build(), new StreamingChatResponseHandler() {
+        ChatRequest.Builder requestBuilder = ChatRequest.builder()
+            .messages(promptMessages.messages());
+        ResponseFormat responseFormat = resolveResponseFormat(promptConfig);
+        if (responseFormat != null) {
+            requestBuilder.responseFormat(responseFormat);
+        }
+
+        streamModel.doChat(requestBuilder.build(), new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String token) {
                 buffer.append(token);
@@ -232,7 +242,7 @@ public class AiGatewayService {
                 String usedModel = firstNonBlank(response.modelName(), resolvedModel);
                 Integer totalTokens = Optional.ofNullable(response.tokenUsage())
                     .map(u -> u.totalTokenCount()).orElse(null);
-                Map<String, Object> resultJson = buildStructuredResult(Map.of(), content, analysisType, usedModel);
+                Map<String, Object> resultJson = buildStructuredResult(promptConfig, Map.of(), content, analysisType, usedModel);
                 AiInvokeResult result = AiInvokeResult.of(
                     usedModel, content,
                     totalTokens != null ? totalTokens
@@ -267,6 +277,7 @@ public class AiGatewayService {
                 "analysisType", analysisType
             ))
             .text();
+        systemPrompt = augmentSystemPromptWithStructuredOutput(promptConfig, systemPrompt);
         return new PromptMessagePair(
             List.<ChatMessage>of(
                 SystemMessage.from(systemPrompt),
@@ -274,6 +285,42 @@ public class AiGatewayService {
             ),
             systemPrompt + "\n" + text
         );
+    }
+
+    private String augmentSystemPromptWithStructuredOutput(PromptConfigEntity promptConfig, String systemPrompt) {
+        if (!requiresJsonResponse(promptConfig)) {
+            return systemPrompt;
+        }
+        StringBuilder builder = new StringBuilder(systemPrompt);
+        builder.append("\n\nPlease output valid JSON only.");
+        if (promptConfig != null && promptConfig.getOutputJsonSchema() != null && !promptConfig.getOutputJsonSchema().isBlank()) {
+            builder.append("\noutput schema:\n").append(promptConfig.getOutputJsonSchema());
+        }
+        if (promptConfig != null && promptConfig.getOutputExampleJson() != null && !promptConfig.getOutputExampleJson().isBlank()) {
+            builder.append("\noutput example:\n").append(promptConfig.getOutputExampleJson());
+        }
+        return builder.toString();
+    }
+
+    private ResponseFormat resolveResponseFormat(PromptConfigEntity promptConfig) {
+        if (!requiresJsonResponse(promptConfig)) {
+            return null;
+        }
+        return ResponseFormat.JSON;
+    }
+
+    private boolean requiresJsonResponse(PromptConfigEntity promptConfig) {
+        if (promptConfig == null) {
+            return false;
+        }
+        if (promptConfig.getOutputJsonSchema() != null && !promptConfig.getOutputJsonSchema().isBlank()) {
+            return true;
+        }
+        if ("json_extract".equalsIgnoreCase(promptConfig.getPostProcessType())) {
+            return true;
+        }
+        return promptConfig.getParseConfigJson() != null
+            && promptConfig.getParseConfigJson().toLowerCase(java.util.Locale.ROOT).contains("\"parser\":\"json\"");
     }
 
     private void emitRawStreamingDeltas(ChatResponse response,
@@ -424,7 +471,7 @@ public class AiGatewayService {
             if (content == null || content.isBlank()) {
                 return null;
             }
-            Map<String, Object> resultJson = buildStructuredResult(outputs, content, analysisType, "dify:" + workflowId);
+            Map<String, Object> resultJson = buildStructuredResult(promptConfig, outputs, content, analysisType, "dify:" + workflowId);
 
             Integer tokenUsed = Optional.ofNullable(data.get("total_tokens"))
                 .map(Object::toString)
@@ -566,7 +613,8 @@ public class AiGatewayService {
         return null;
     }
 
-    private Map<String, Object> buildStructuredResult(Map<String, Object> outputs,
+    private Map<String, Object> buildStructuredResult(PromptConfigEntity promptConfig,
+                                                      Map<String, Object> outputs,
                                                       String content,
                                                       String analysisType,
                                                       String modelName) {
@@ -579,8 +627,7 @@ public class AiGatewayService {
         }
 
         try {
-            Map<String, Object> parsed = objectMapper.readValue(extractJsonObject(content), new TypeReference<Map<String, Object>>() {
-            });
+            Map<String, Object> parsed = parseStructuredResult(promptConfig, content);
             parsed.putIfAbsent("analysisType", analysisType);
             parsed.putIfAbsent("modelName", modelName);
             return parsed;
@@ -592,6 +639,21 @@ public class AiGatewayService {
                 "content", content
             );
         }
+    }
+
+    private Map<String, Object> parseStructuredResult(PromptConfigEntity promptConfig, String content) throws IOException {
+        String normalized = content == null ? "" : content.trim();
+        Map<String, Object> parseConfig = Map.of();
+        if (promptConfig != null && promptConfig.getParseConfigJson() != null && !promptConfig.getParseConfigJson().isBlank()) {
+            parseConfig = objectMapper.readValue(promptConfig.getParseConfigJson(), new TypeReference<Map<String, Object>>() {
+            });
+        }
+        boolean trimMarkdownFence = Boolean.parseBoolean(String.valueOf(parseConfig.getOrDefault("trimMarkdownFence", false)));
+        if (trimMarkdownFence || "json_extract".equalsIgnoreCase(promptConfig == null ? null : promptConfig.getPostProcessType())) {
+            normalized = extractJsonObject(normalized);
+        }
+        return objectMapper.readValue(normalized, new TypeReference<Map<String, Object>>() {
+        });
     }
 
     private String extractJsonObject(String content) {

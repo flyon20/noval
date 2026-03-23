@@ -34,6 +34,10 @@ public class PromptConfigService {
         entity.setModelName(request.getModelName());
         entity.setTemperature(request.getTemperature());
         entity.setMaxTokens(request.getMaxTokens());
+        entity.setOutputJsonSchema(request.getOutputJsonSchema());
+        entity.setOutputExampleJson(request.getOutputExampleJson());
+        entity.setPostProcessType(request.getPostProcessType());
+        entity.setParseConfigJson(request.getParseConfigJson());
         Long id = promptConfigRepository.saveOrUpdate(entity);
         PromptConfigEntity updated = promptConfigRepository.findByTypeAndName(request.getPromptType(), request.getPromptName())
             .orElseThrow(() -> new BusinessException(ResultCode.INTERNAL_ERROR, "prompt config save failed"));
@@ -57,6 +61,10 @@ public class PromptConfigService {
         vo.setModelName(entity.getModelName());
         vo.setTemperature(entity.getTemperature());
         vo.setMaxTokens(entity.getMaxTokens());
+        vo.setOutputJsonSchema(entity.getOutputJsonSchema());
+        vo.setOutputExampleJson(entity.getOutputExampleJson());
+        vo.setPostProcessType(entity.getPostProcessType());
+        vo.setParseConfigJson(entity.getParseConfigJson());
         return vo;
     }
 }

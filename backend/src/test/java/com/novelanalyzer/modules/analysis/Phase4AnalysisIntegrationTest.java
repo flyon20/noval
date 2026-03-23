@@ -173,6 +173,33 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldUpdateAndGetPromptConfigWithStructuredOutputFields() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"promptType":"deconstruct","promptName":"default-deconstruct","promptContent":"UPDATED {{content}}","modelName":"deepseek-chat","outputJsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{\\"summary\\":{\\"type\\":\\"string\\"}}}","outputExampleJson":"{\\"summary\\":\\"example\\"}","postProcessType":"json_extract","parseConfigJson":"{\\"parser\\":\\"json\\",\\"trimMarkdownFence\\":true}"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value("{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}}}"))
+            .andExpect(jsonPath("$.data.outputExampleJson").value("{\"summary\":\"example\"}"))
+            .andExpect(jsonPath("$.data.postProcessType").value("json_extract"))
+            .andExpect(jsonPath("$.data.parseConfigJson").value("{\"parser\":\"json\",\"trimMarkdownFence\":true}"));
+
+        mockMvc.perform(get("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .param("promptType", "deconstruct"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value("{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}}}"))
+            .andExpect(jsonPath("$.data.outputExampleJson").value("{\"summary\":\"example\"}"))
+            .andExpect(jsonPath("$.data.postProcessType").value("json_extract"))
+            .andExpect(jsonPath("$.data.parseConfigJson").value("{\"parser\":\"json\",\"trimMarkdownFence\":true}"));
+    }
+
+    @Test
     void shouldAllowUserRoleToUpdatePromptConfig() throws Exception {
         String token = loginAndGetToken("writer", "writer123");
         mockMvc.perform(put("/api/config/prompt")
@@ -283,6 +310,34 @@ class Phase4AnalysisIntegrationTest {
         assertThat(requestBody).contains("Book:");
         assertThat(requestBody).contains("Author:");
         assertThat(requestBody).contains("[");
+    }
+
+    @Test
+    void shouldAttachJsonOutputHintsWhenPromptConfigRequestsStructuredOutput() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(put("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"promptType":"deconstruct","promptName":"default-deconstruct","promptContent":"SYSTEM PREFIX\\n{{content}}","modelName":"deepseek-chat","outputJsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{\\"summary\\":{\\"type\\":\\"string\\"},\\"analysisType\\":{\\"type\\":\\"string\\"}}}","outputExampleJson":"{\\"summary\\":\\"example\\",\\"analysisType\\":\\"deconstruct\\"}","postProcessType":"json_extract","parseConfigJson":"{\\"parser\\":\\"json\\",\\"trimMarkdownFence\\":true}"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
+        assertThat(requestBody).contains("response_format");
+        assertThat(requestBody).contains("\"type\" : \"json_object\"");
+        assertThat(requestBody).contains("output schema");
+        assertThat(requestBody).contains("output example");
     }
 
     @Test

@@ -8,6 +8,10 @@ export interface PromptConfig {
   modelName: string;
   temperature?: number | null;
   maxTokens?: number | null;
+  outputJsonSchema?: string | null;
+  outputExampleJson?: string | null;
+  postProcessType?: string | null;
+  parseConfigJson?: string | null;
 }
 
 export interface PromptConfigUpdateRequest {
@@ -17,6 +21,10 @@ export interface PromptConfigUpdateRequest {
   modelName: string;
   temperature?: number;
   maxTokens?: number;
+  outputJsonSchema?: string;
+  outputExampleJson?: string;
+  postProcessType?: string;
+  parseConfigJson?: string;
 }
 
 export type KnownSystemConfigKey =

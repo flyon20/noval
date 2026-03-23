@@ -23,6 +23,10 @@ const formState = reactive({
   modelName: '',
   temperature: '',
   maxTokens: '',
+  outputJsonSchema: '',
+  outputExampleJson: '',
+  postProcessType: '',
+  parseConfigJson: '',
 });
 
 function applyPromptConfig(config: PromptConfig) {
@@ -31,6 +35,10 @@ function applyPromptConfig(config: PromptConfig) {
   formState.modelName = config.modelName;
   formState.temperature = config.temperature == null ? '' : String(config.temperature);
   formState.maxTokens = config.maxTokens == null ? '' : String(config.maxTokens);
+  formState.outputJsonSchema = config.outputJsonSchema ?? '';
+  formState.outputExampleJson = config.outputExampleJson ?? '';
+  formState.postProcessType = config.postProcessType ?? '';
+  formState.parseConfigJson = config.parseConfigJson ?? '';
 }
 
 async function loadPromptConfig(promptType = activeType.value) {
@@ -57,6 +65,10 @@ function buildUpdatePayload() {
     modelName: formState.modelName.trim(),
     ...(formState.temperature !== '' ? { temperature: Number(formState.temperature) } : {}),
     ...(formState.maxTokens !== '' ? { maxTokens: Number(formState.maxTokens) } : {}),
+    ...(formState.outputJsonSchema.trim() ? { outputJsonSchema: formState.outputJsonSchema.trim() } : {}),
+    ...(formState.outputExampleJson.trim() ? { outputExampleJson: formState.outputExampleJson.trim() } : {}),
+    ...(formState.postProcessType.trim() ? { postProcessType: formState.postProcessType.trim() } : {}),
+    ...(formState.parseConfigJson.trim() ? { parseConfigJson: formState.parseConfigJson.trim() } : {}),
   };
 }
 
@@ -214,6 +226,48 @@ onMounted(() => {
 
       <div class="prompt-config-page__hint">
         保存前必须保留 <code v-pre>{{content}}</code> 占位符。
+      </div>
+
+      <div class="prompt-config-page__grid">
+        <el-form-item label="Output JSON Schema">
+          <el-input
+            v-model="formState.outputJsonSchema"
+            :autosize="{ minRows: 6, maxRows: 10 }"
+            data-test="prompt-output-json-schema-input"
+            type="textarea"
+            placeholder='例如 {"type":"object","properties":{"summary":{"type":"string"}}}'
+          />
+        </el-form-item>
+
+        <el-form-item label="Output Example JSON">
+          <el-input
+            v-model="formState.outputExampleJson"
+            :autosize="{ minRows: 6, maxRows: 10 }"
+            data-test="prompt-output-example-json-input"
+            type="textarea"
+            placeholder='例如 {"summary":"example"}'
+          />
+        </el-form-item>
+      </div>
+
+      <div class="prompt-config-page__grid">
+        <el-form-item label="Post Process Type">
+          <el-input
+            v-model="formState.postProcessType"
+            data-test="prompt-post-process-type-input"
+            placeholder="例如 json_extract"
+          />
+        </el-form-item>
+
+        <el-form-item label="Parse Config JSON">
+          <el-input
+            v-model="formState.parseConfigJson"
+            :autosize="{ minRows: 6, maxRows: 10 }"
+            data-test="prompt-parse-config-json-input"
+            type="textarea"
+            placeholder='例如 {"parser":"json","trimMarkdownFence":true}'
+          />
+        </el-form-item>
       </div>
 
       <div class="prompt-config-page__preview">
