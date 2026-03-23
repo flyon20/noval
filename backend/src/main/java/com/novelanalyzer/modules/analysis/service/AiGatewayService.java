@@ -7,6 +7,9 @@ import dev.langchain4j.model.TokenCountEstimator;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.PartialResponse;
+import dev.langchain4j.model.chat.response.PartialResponseContext;
+import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.model.openai.OpenAiChatResponseMetadata;
@@ -36,6 +39,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -194,6 +199,7 @@ public class AiGatewayService {
                                    String text,
                                    String analysisType,
                                    SseEmitter emitter,
+                                   InvocationHandle invocationHandle,
                                    BiConsumer<SseEmitter, AiInvokeResult> onDone,
                                    Consumer<Throwable> onError) {
         if (!isOpenAiCompatibleStreamingEnabled()) {
@@ -221,20 +227,33 @@ public class AiGatewayService {
             requestBuilder.responseFormat(responseFormat);
         }
 
-        streamModel.doChat(requestBuilder.build(), new StreamingChatResponseHandler() {
+        streamModel.chat(requestBuilder.build(), new StreamingChatResponseHandler() {
             @Override
-            public void onPartialResponse(String token) {
+            public void onPartialResponse(PartialResponse partialResponse, PartialResponseContext partialResponseContext) {
+                String token = partialResponse == null ? "" : partialResponse.text();
+                StreamingHandle streamingHandle = partialResponseContext == null ? null : partialResponseContext.streamingHandle();
+                invocationHandle.attachStreamingHandle(streamingHandle);
+                if (invocationHandle.isCancelled()) {
+                    if (streamingHandle != null) {
+                        streamingHandle.cancel();
+                    }
+                    return;
+                }
                 buffer.append(token);
                 try {
                     emitter.send(SseEmitter.event()
                         .name("delta")
                         .data(Map.of("event", "delta", "delta", token)));
                 } catch (IOException ignored) {
+                    invocationHandle.cancel();
                 }
             }
 
             @Override
             public void onCompleteResponse(ChatResponse response) {
+                if (invocationHandle.isCancelled()) {
+                    return;
+                }
                 if (buffer.isEmpty()) {
                     emitRawStreamingDeltas(response, buffer, emitter);
                 }
@@ -254,6 +273,9 @@ public class AiGatewayService {
 
             @Override
             public void onError(Throwable error) {
+                if (invocationHandle.isCancelled()) {
+                    return;
+                }
                 onError.accept(error);
             }
         });
@@ -263,6 +285,39 @@ public class AiGatewayService {
     private PromptMessagePair buildPromptMessagePair(PromptConfigEntity promptConfig,
                                                      String text,
                                                      String analysisType) {
+        if (!"experimental-shared-context".equals(System.getProperty("noval.analysis.prompt-layout"))) {
+            return buildPromptMessagePairLegacy(promptConfig, text, analysisType);
+        }
+        /*
+        String template = normalizePromptTemplate(promptConfig == null ? null : promptConfig.getPromptContent(), analysisType);
+        if (!template.contains("{{content}}")) {
+            return new PromptMessagePair(
+                List.of(UserMessage.from(renderPrompt(template, text, analysisType))),
+                renderPrompt(template, text, analysisType)
+            );
+        }
+
+        String systemPrompt = PromptTemplate.from(template)
+            .apply(Map.of(
+                "content", "姝ｆ枃鍐呭浼氬湪涓嬩竴鏉?user message 涓彁渚涳紝璇峰彧鍩轰簬璇ユ鏂囧畬鎴愬垎鏋愩€?,
+                "analysisType", analysisType
+            ))
+            .text();
+        systemPrompt = augmentSystemPromptWithStructuredOutput(promptConfig, systemPrompt);
+        return new PromptMessagePair(
+            List.<ChatMessage>of(
+                SystemMessage.from(systemPrompt),
+                UserMessage.from(text)
+            ),
+            systemPrompt + "\n" + text
+        );
+        */
+        return buildPromptMessagePairLegacy(promptConfig, text, analysisType);
+    }
+
+    private PromptMessagePair buildPromptMessagePairLegacy(PromptConfigEntity promptConfig,
+                                                           String text,
+                                                           String analysisType) {
         String template = normalizePromptTemplate(promptConfig == null ? null : promptConfig.getPromptContent(), analysisType);
         if (!template.contains("{{content}}")) {
             return new PromptMessagePair(
@@ -378,9 +433,12 @@ public class AiGatewayService {
     }
 
     private boolean isOpenAiCompatibleStreamingEnabled() {
+        if (!aiProperties.getOpenAiCompatible().isStreamingEnabled()) {
+            return false;
+        }
         return systemConfigService.getBooleanValueOrDefault(
             "ai.openai-compatible.streaming-enabled",
-            aiProperties.getOpenAiCompatible().isStreamingEnabled()
+            true
         );
     }
 
@@ -674,5 +732,35 @@ public class AiGatewayService {
     }
 
     private record PromptMessagePair(List<ChatMessage> messages, String combinedText) {
+    }
+
+    public static final class InvocationHandle {
+
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private final AtomicReference<StreamingHandle> streamingHandle = new AtomicReference<>();
+
+        public void attachStreamingHandle(StreamingHandle handle) {
+            if (handle == null) {
+                return;
+            }
+            streamingHandle.set(handle);
+            if (isCancelled()) {
+                handle.cancel();
+            }
+        }
+
+        public void cancel() {
+            if (!cancelled.compareAndSet(false, true)) {
+                return;
+            }
+            StreamingHandle handle = streamingHandle.get();
+            if (handle != null) {
+                handle.cancel();
+            }
+        }
+
+        public boolean isCancelled() {
+            return cancelled.get();
+        }
     }
 }

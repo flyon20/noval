@@ -57,6 +57,11 @@ function openChapter(chapterNo: number) {
 function closeChapterDetail() {
   selectedChapterNo.value = null;
 }
+
+function closeDrawer() {
+  selectedChapterNo.value = null;
+  visible.value = false;
+}
 </script>
 
 <template>
@@ -70,7 +75,7 @@ function closeChapterDetail() {
   >
     <div class="chapter-drawer">
       <div class="chapter-drawer__header">
-        <div>
+        <div class="chapter-drawer__header-main">
           <p>章节预览</p>
           <h3>{{ selectedChapter ? selectedChapter.chapterTitle : `当前已加载 ${chapters.length} 章` }}</h3>
         </div>
@@ -82,6 +87,15 @@ function closeChapterDetail() {
             @click="closeChapterDetail"
           >
             返回列表
+          </el-button>
+          <el-button
+            class="chapter-drawer__close"
+            data-testid="chapter-close"
+            plain
+            type="default"
+            @click="closeDrawer"
+          >
+            关闭
           </el-button>
           <el-button
             data-testid="go-analysis"
@@ -104,7 +118,9 @@ function closeChapterDetail() {
           重新抓取章节
         </el-button>
         <p v-if="refreshSummary" class="chapter-drawer__quota">
-          当前窗口 {{ refreshSummary.windowDays }} 天，已用 {{ refreshSummary.usedRefreshTimes }}/{{ refreshSummary.maxAllowedRefreshTimes }}，剩余 {{ refreshSummary.remainingRefreshTimes }}
+          当前窗口 {{ refreshSummary.windowDays }} 天，已用 {{ refreshSummary.usedRefreshTimes }}/{{
+            refreshSummary.maxAllowedRefreshTimes
+          }}，剩余 {{ refreshSummary.remainingRefreshTimes }}
         </p>
       </div>
 
@@ -157,6 +173,11 @@ function closeChapterDetail() {
   gap: 1rem;
 }
 
+.chapter-drawer__header-main {
+  min-width: 0;
+  flex: 1;
+}
+
 .chapter-drawer__header-actions,
 .chapter-drawer__actions {
   display: flex;
@@ -183,6 +204,12 @@ function closeChapterDetail() {
 .chapter-drawer__header h3 {
   font-size: 1.3rem;
   line-height: 1.3;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chapter-drawer__close {
+  min-height: 2.5rem;
 }
 
 .chapter-drawer__list {
@@ -237,6 +264,10 @@ function closeChapterDetail() {
   .chapter-card__heading,
   .chapter-detail__meta {
     align-items: flex-start;
+  }
+
+  .chapter-drawer__header-actions {
+    width: 100%;
   }
 }
 </style>

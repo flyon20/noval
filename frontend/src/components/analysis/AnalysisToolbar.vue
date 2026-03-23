@@ -4,6 +4,7 @@ const props = defineProps<{
   disabling?: boolean;
   availableModels?: string[];
   modelName?: string;
+  primaryLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -20,6 +21,13 @@ function handleCopy() {
 function handleModelChange(value: string) {
   emit('update:modelName', value);
 }
+
+const uiText = {
+  modelPlaceholder: '\u9009\u62e9\u6a21\u578b',
+  stopLabel: '\u505c\u6b62\u751f\u6210',
+  defaultPrimaryLabel: '\u91cd\u65b0\u751f\u6210',
+  copyLabel: '\u590d\u5236\u7ed3\u679c',
+};
 </script>
 
 <template>
@@ -28,7 +36,7 @@ function handleModelChange(value: string) {
       v-if="props.availableModels && props.availableModels.length > 1"
       :model-value="props.modelName"
       class="analysis-toolbar__model-select"
-      placeholder="选择模型"
+      :placeholder="uiText.modelPlaceholder"
       data-test="analysis-toolbar-model-select"
       @update:model-value="handleModelChange"
     >
@@ -47,7 +55,7 @@ function handleModelChange(value: string) {
       data-test="analysis-toolbar-stop"
       @click="$emit('stop')"
     >
-      停止生成
+      {{ uiText.stopLabel }}
     </el-button>
     <el-button
       type="primary"
@@ -57,10 +65,10 @@ function handleModelChange(value: string) {
       data-test="analysis-toolbar-rerun"
       @click="$emit('rerun')"
     >
-      重新生成
+      {{ props.primaryLabel ?? uiText.defaultPrimaryLabel }}
     </el-button>
     <el-button plain native-type="button" data-test="analysis-toolbar-copy" @click="handleCopy">
-      复制结果
+      {{ uiText.copyLabel }}
     </el-button>
   </div>
 </template>

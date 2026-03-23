@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { renderAnalysisMarkdown } from '@/lib/markdown';
 
 const props = defineProps<{
@@ -21,78 +21,12 @@ const cursorVisible = computed(() => props.phase === 'streaming');
 const finalHtml = computed(() => (props.resultContent ? renderAnalysisMarkdown(props.resultContent) : ''));
 const showError = computed(() => props.phase === 'error' && props.errorMessage);
 const partialVisible = computed(() => Boolean(props.streamingText) && (props.phase === 'error' || props.phase === 'aborted'));
-const animatedStreamingText = ref('');
-let animationTimer: ReturnType<typeof setInterval> | null = null;
-let initialized = false;
-const animationTargetText = computed(() => {
+const displayText = computed(() => {
   if (props.phase === 'done' && props.resultContent) {
     return props.resultContent;
   }
   return props.streamingText ?? '';
 });
-const showAnimatedDone = computed(() =>
-  props.phase === 'done' &&
-  Boolean(props.resultContent) &&
-  animatedStreamingText.value !== (props.resultContent ?? ''),
-);
-
-function stopAnimation() {
-  if (animationTimer) {
-    clearInterval(animationTimer);
-    animationTimer = null;
-  }
-}
-
-function resolveAnimationStep(remaining: number) {
-  if (remaining > 240) {
-    return 24;
-  }
-  if (remaining > 80) {
-    return 12;
-  }
-  return 4;
-}
-
-function syncAnimatedStreamingText(force = false) {
-  const target = animationTargetText.value;
-
-  if (force) {
-    animatedStreamingText.value = target;
-    stopAnimation();
-    return;
-  }
-
-  if (animatedStreamingText.value.length > target.length) {
-    animatedStreamingText.value = target;
-  }
-
-  if (animatedStreamingText.value === target) {
-    if (props.phase !== 'streaming') {
-      stopAnimation();
-    }
-    return;
-  }
-
-  if (animationTimer) {
-    return;
-  }
-
-  animationTimer = setInterval(() => {
-    const nextTarget = animationTargetText.value;
-    if (animatedStreamingText.value.length >= nextTarget.length) {
-      if (props.phase !== 'streaming') {
-        stopAnimation();
-      }
-      return;
-    }
-
-    const nextLength = Math.min(
-      nextTarget.length,
-      animatedStreamingText.value.length + resolveAnimationStep(nextTarget.length - animatedStreamingText.value.length),
-    );
-    animatedStreamingText.value = nextTarget.slice(0, nextLength);
-  }, 16);
-}
 
 watch(
   () => [props.phase, props.streamingText, props.resultContent],
@@ -105,28 +39,6 @@ watch(
   },
   { flush: 'post' },
 );
-
-watch(
-  () => [props.phase, props.streamingText, props.resultContent],
-  () => {
-    if (!initialized) {
-      initialized = true;
-      syncAnimatedStreamingText(true);
-      return;
-    }
-    if (props.phase === 'idle' || props.phase === 'preparing') {
-      animatedStreamingText.value = '';
-      stopAnimation();
-      return;
-    }
-    syncAnimatedStreamingText();
-  },
-  { immediate: true },
-);
-
-onBeforeUnmount(() => {
-  stopAnimation();
-});
 </script>
 
 <template>
@@ -141,9 +53,9 @@ onBeforeUnmount(() => {
         <p v-if="props.resultMeta?.traceId" class="analysis-result__trace">traceId: {{ props.resultMeta.traceId }}</p>
       </div>
     </template>
-    <template v-else-if="props.phase === 'streaming' || showAnimatedDone">
+    <template v-else-if="props.phase === 'streaming'">
       <div ref="contentRef" class="analysis-result__stream">
-        <p>{{ animatedStreamingText }}</p>
+        <p>{{ displayText }}</p>
         <span v-if="cursorVisible" class="analysis-result__cursor"></span>
       </div>
     </template>
@@ -169,7 +81,7 @@ onBeforeUnmount(() => {
 
     <div v-if="partialVisible" ref="contentRef" class="analysis-result__partial">
       <p class="analysis-result__partial-title">已保留的片段</p>
-      <p>{{ animatedStreamingText }}</p>
+      <p>{{ displayText }}</p>
     </div>
   </div>
 </template>

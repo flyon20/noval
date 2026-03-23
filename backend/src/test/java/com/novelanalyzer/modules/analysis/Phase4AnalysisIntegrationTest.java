@@ -2,6 +2,7 @@ package com.novelanalyzer.modules.analysis;
 
 import com.jayway.jsonpath.JsonPath;
 import com.sun.net.httpserver.HttpServer;
+import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.service.AiGatewayService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
@@ -47,7 +48,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.sql.init.mode=never",
         "app.security.rate-limit-per-minute=100",
         "app.ai.openai-compatible.api-key-ref=TEST_DEEPSEEK_API_KEY",
-        "app.ai.openai-compatible.default-model=deepseek-chat"
+        "app.ai.openai-compatible.default-model=deepseek-chat",
+        "app.ai.openai-compatible.streaming-enabled=true"
     }
 )
 @AutoConfigureMockMvc
@@ -84,6 +86,9 @@ class Phase4AnalysisIntegrationTest {
 
     @Autowired
     private AiGatewayService aiGatewayService;
+
+    @Autowired
+    private AiProperties aiProperties;
 
     @DynamicPropertySource
     static void registerAiProperties(DynamicPropertyRegistry registry) {
@@ -469,6 +474,59 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldUseRealStreamingWhenSystemSwitchIsEnabled() throws Exception {
+        updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+
+        assertThat(body).contains("\"event\":\"start\"");
+        assertThat(body).doesNotContain("mock summary DEFAULT");
+        assertThat(LAST_OPENAI_REQUEST_BODY.get()).contains("\"stream\" : true");
+    }
+
+    @Test
+    void shouldTreatAppStreamingFlagAsGlobalKillSwitch() throws Exception {
+        updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
+        boolean original = aiProperties.getOpenAiCompatible().isStreamingEnabled();
+        aiProperties.getOpenAiCompatible().setStreamingEnabled(false);
+        try {
+            String token = loginAndGetToken("admin", "admin123");
+
+            MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                    .header("Authorization", "Bearer " + token)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("""
+                        {"platform":"fanqie","bookId":1001,"chapterCount":2}
+                        """))
+                .andExpect(request().asyncStarted())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andReturn();
+
+            streamStart.getAsyncResult(10000);
+            String body = streamStart.getResponse().getContentAsString();
+
+            assertThat(body).contains("\"event\":\"done\"");
+            assertThat(body).contains("mock summary DEFAULT");
+            assertThat(body).doesNotContain("mock summary STREAM");
+            assertThat(LAST_OPENAI_REQUEST_BODY.get()).doesNotContain("\"stream\":true");
+        } finally {
+            aiProperties.getOpenAiCompatible().setStreamingEnabled(original);
+        }
+    }
+
+    @Test
     void shouldEmitChunkProgressDeltaWhenChunkedAnalysisTakesOver() throws Exception {
         updateSystemConfig("analysis.chunk.max-input-tokens", "1000");
         updateSystemConfig("analysis.chunk.target-input-tokens", "1000");
@@ -645,9 +703,9 @@ class Phase4AnalysisIntegrationTest {
                 OPENAI_REQUEST_COUNT.incrementAndGet();
                 if (requestBody.contains("\"stream\":true")) {
                     byte[] response = """
-                        data: {"id":"chatcmpl-stream-1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"S-1"},"finish_reason":null}]}
+                        data: {"id":"chatcmpl-stream-1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"{\\"summary\\":\\"mock summary STREAM\\","},"finish_reason":null}]}
 
-                        data: {"id":"chatcmpl-stream-1","object":"chat.completion.chunk","created":1760000001,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"S-2"},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":80,"total_tokens":200}}
+                        data: {"id":"chatcmpl-stream-1","object":"chat.completion.chunk","created":1760000001,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"\\"source\\":\\"mock-openai\\",\\"analysisType\\":\\"deconstruct\\"}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":80,"total_tokens":200}}
 
                         data: [DONE]
 

@@ -45,6 +45,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class AnalysisService {
@@ -54,8 +56,10 @@ public class AnalysisService {
     private static final int STREAM_CHUNK_SIZE = 120;
     private static final int DEFAULT_CHUNK_MAX_INPUT_TOKENS = 6000;
     private static final int DEFAULT_CHUNK_TARGET_INPUT_TOKENS = 3500;
-    private static final int DEEPSEEK_CHUNK_MAX_INPUT_TOKENS = 32000;
-    private static final int DEEPSEEK_CHUNK_TARGET_INPUT_TOKENS = 24000;
+    private static final int SYSTEM_DEFAULT_CHUNK_MAX_INPUT_TOKENS = 32000;
+    private static final int SYSTEM_DEFAULT_CHUNK_TARGET_INPUT_TOKENS = 24000;
+    private static final int DEEPSEEK_CHUNK_MAX_INPUT_TOKENS = 100000;
+    private static final int DEEPSEEK_CHUNK_TARGET_INPUT_TOKENS = 75000;
     private static final int DEFAULT_CHUNK_PARALLELISM = 3;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -148,10 +152,13 @@ public class AnalysisService {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AuthUser authUser = copyAuthUser(AuthUserHolder.get());
         String traceId = TraceIdHolder.get();
+        AiGatewayService.InvocationHandle invocationHandle = new AiGatewayService.InvocationHandle();
+        registerEmitterLifecycle(emitter, invocationHandle);
         streamTaskExecutor.execute(() -> {
             try {
                 restoreContext(authUser, traceId);
                 sendStartEvent(emitter, traceId, analysisType);
+                ensureNotCancelled(invocationHandle);
 
                 // 尝试真流式：非 chunk 场景直接推 token，避免等全文再切割
                 PromptConfigEntity promptConfig = promptConfigRepository
@@ -168,7 +175,7 @@ public class AnalysisService {
 
                 if (!useChunk) {
                     boolean streamed = aiGatewayService.streamToEmitter(
-                        promptConfig, inputText, analysisType, emitter,
+                        promptConfig, inputText, analysisType, emitter, invocationHandle,
                         (em, aiResult) -> {
                             try {
                                 String cacheKey = buildAnalysisCacheKey(
@@ -204,8 +211,10 @@ public class AnalysisService {
                         promptConfig,
                         book,
                         chapters,
-                        analysisType
+                        analysisType,
+                        invocationHandle
                     );
+                    ensureNotCancelled(invocationHandle);
                     sendDoneEvent(emitter, result);
                     emitter.complete();
                     return;
@@ -213,8 +222,11 @@ public class AnalysisService {
 
                 // 降级：chunk 分析或流式不可用 → 阻塞等全文再切割推送
                 AnalysisResultVO result = analyze(analysisType, request);
+                ensureNotCancelled(invocationHandle);
                 sendDeltaEvents(emitter, result.getResultContent());
                 sendDoneEvent(emitter, result);
+                emitter.complete();
+            } catch (AnalysisCancelledException ignored) {
                 emitter.complete();
             } catch (Exception ex) {
                 completeWithErrorEvent(emitter, traceId, ex);
@@ -315,7 +327,7 @@ public class AnalysisService {
             1000,
             systemConfigService.getIntValueOrDefault("analysis.chunk.max-input-tokens", DEFAULT_CHUNK_MAX_INPUT_TOKENS)
         );
-        if (shouldUseDeepSeekChunkDefaults(promptConfig) && configured == DEFAULT_CHUNK_MAX_INPUT_TOKENS) {
+        if (shouldUseDeepSeekChunkDefaults(promptConfig) && isLegacyOrSystemChunkDefault(configured, DEFAULT_CHUNK_MAX_INPUT_TOKENS, SYSTEM_DEFAULT_CHUNK_MAX_INPUT_TOKENS)) {
             return DEEPSEEK_CHUNK_MAX_INPUT_TOKENS;
         }
         return configured;
@@ -326,7 +338,8 @@ public class AnalysisService {
             1000,
             systemConfigService.getIntValueOrDefault("analysis.chunk.target-input-tokens", DEFAULT_CHUNK_TARGET_INPUT_TOKENS)
         );
-        int effective = shouldUseDeepSeekChunkDefaults(promptConfig) && configured == DEFAULT_CHUNK_TARGET_INPUT_TOKENS
+        int effective = shouldUseDeepSeekChunkDefaults(promptConfig)
+            && isLegacyOrSystemChunkDefault(configured, DEFAULT_CHUNK_TARGET_INPUT_TOKENS, SYSTEM_DEFAULT_CHUNK_TARGET_INPUT_TOKENS)
             ? DEEPSEEK_CHUNK_TARGET_INPUT_TOKENS
             : configured;
         return Math.min(effective, resolveChunkMaxInputTokens(promptConfig));
@@ -351,6 +364,10 @@ public class AnalysisService {
             );
         }
         return modelName != null && modelName.toLowerCase(Locale.ROOT).contains("deepseek");
+    }
+
+    private boolean isLegacyOrSystemChunkDefault(int configured, int legacyDefault, int systemDefault) {
+        return configured == legacyDefault || configured == systemDefault;
     }
 
     private LocalDateTime resolveAnalysisReuseTime(PromptConfigEntity promptConfig) {
@@ -381,6 +398,12 @@ public class AnalysisService {
     private void clearContext() {
         AuthUserHolder.clear();
         TraceIdHolder.clear();
+    }
+
+    private void registerEmitterLifecycle(SseEmitter emitter, AiGatewayService.InvocationHandle invocationHandle) {
+        emitter.onCompletion(invocationHandle::cancel);
+        emitter.onTimeout(invocationHandle::cancel);
+        emitter.onError(error -> invocationHandle.cancel());
     }
 
     private void sendStartEvent(SseEmitter emitter, String traceId, String analysisType) throws IOException {
@@ -486,7 +509,7 @@ public class AnalysisService {
                                                  CrawlBookEntity book,
                                                  List<ChapterVO> chapters,
                                                  String analysisType) {
-        return invokeChunkedAnalysis(promptConfig, book, chapters, analysisType, null);
+        return invokeChunkedAnalysis(promptConfig, book, chapters, analysisType, null, null);
     }
 
     private AiInvokeResult invokeChunkedAnalysis(PromptConfigEntity promptConfig,
@@ -494,15 +517,29 @@ public class AnalysisService {
                                                  List<ChapterVO> chapters,
                                                  String analysisType,
                                                  java.util.function.Consumer<String> progressListener) {
+        return invokeChunkedAnalysis(promptConfig, book, chapters, analysisType, progressListener, null);
+    }
+
+    private AiInvokeResult invokeChunkedAnalysis(PromptConfigEntity promptConfig,
+                                                 CrawlBookEntity book,
+                                                 List<ChapterVO> chapters,
+                                                 String analysisType,
+                                                 java.util.function.Consumer<String> progressListener,
+                                                 AiGatewayService.InvocationHandle invocationHandle) {
+        ensureNotCancelled(invocationHandle);
         List<List<ChapterVO>> chunks = splitChaptersForChunkedAnalysis(promptConfig, book, chapters, analysisType);
         if (chunks.size() <= 1) {
+            ensureNotCancelled(invocationHandle);
             return invokeAi(promptConfig, buildBookInputText(book, chapters), analysisType);
         }
 
-        List<ChunkAnalysisOutcome> outcomes = analyzeChunks(promptConfig, book, chunks, analysisType, progressListener);
+        List<ChunkAnalysisOutcome> outcomes = invocationHandle == null
+            ? analyzeChunks(promptConfig, book, chunks, analysisType, progressListener)
+            : analyzeChunksCancellable(promptConfig, book, chunks, analysisType, progressListener, invocationHandle);
         List<String> chunkOutputs = new ArrayList<>();
         int tokenUsed = 0;
         for (ChunkAnalysisOutcome outcome : outcomes) {
+            ensureNotCancelled(invocationHandle);
             tokenUsed += Math.max(0, outcome.result().getTokenUsed());
             chunkOutputs.add(buildChunkResultText(outcome.index() + 1, outcome.chunk(), outcome.result()));
         }
@@ -518,6 +555,7 @@ public class AnalysisService {
             buildChunkMergeInput(book, chunkOutputs),
             analysisType
         );
+        ensureNotCancelled(invocationHandle);
         tokenUsed += Math.max(0, mergedResult.getTokenUsed());
 
         Map<String, Object> resultJson = new HashMap<>(mergedResult.getResultJson() == null ? Map.of() : mergedResult.getResultJson());
@@ -581,6 +619,66 @@ public class AnalysisService {
         );
         AiInvokeResult chunkResult = aiGatewayService.analyze(chunkPrompt, chunkInput, analysisType);
         return new ChunkAnalysisOutcome(chunkIndex, chunk, chunkResult);
+    }
+
+    private List<ChunkAnalysisOutcome> analyzeChunksCancellable(PromptConfigEntity promptConfig,
+                                                                CrawlBookEntity book,
+                                                                List<List<ChapterVO>> chunks,
+                                                                String analysisType,
+                                                                java.util.function.Consumer<String> progressListener,
+                                                                AiGatewayService.InvocationHandle invocationHandle) {
+        if (chunks.isEmpty()) {
+            return List.of();
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(resolveChunkParallelism());
+        ExecutorCompletionService<ChunkAnalysisOutcome> completionService = new ExecutorCompletionService<>(executor);
+        List<ChunkAnalysisOutcome> outcomes = new ArrayList<>(Collections.nCopies(chunks.size(), null));
+        try {
+            int submitted = 0;
+            int initialParallelism = Math.min(resolveChunkParallelism(), chunks.size());
+            for (; submitted < initialParallelism; submitted++) {
+                submitChunkAnalysis(completionService, promptConfig, book, chunks, analysisType, progressListener, invocationHandle, submitted);
+            }
+
+            for (int completed = 0; completed < chunks.size(); completed++) {
+                ChunkAnalysisOutcome outcome = awaitChunkOutcome(completionService, invocationHandle);
+                ensureNotCancelled(invocationHandle);
+                outcomes.set(outcome.index(), outcome);
+                emitChunkProgress(
+                    progressListener,
+                    buildChunkProgressMessage(outcome.index() + 1, chunks.size(), outcome.chunk(), "已完成")
+                );
+                if (submitted < chunks.size()) {
+                    submitChunkAnalysis(completionService, promptConfig, book, chunks, analysisType, progressListener, invocationHandle, submitted);
+                    submitted++;
+                }
+            }
+            return outcomes;
+        } catch (AnalysisCancelledException ex) {
+            executor.shutdownNow();
+            throw ex;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("chunk analysis interrupted", ex);
+        } catch (ExecutionException ex) {
+            throw unwrapChunkExecutionException(ex);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private ChunkAnalysisOutcome analyzeSingleChunk(PromptConfigEntity promptConfig,
+                                                    CrawlBookEntity book,
+                                                    int chunkCount,
+                                                    String analysisType,
+                                                    int chunkIndex,
+                                                    List<ChapterVO> chunk,
+                                                    AiGatewayService.InvocationHandle invocationHandle) {
+        ensureNotCancelled(invocationHandle);
+        ChunkAnalysisOutcome outcome = analyzeSingleChunk(promptConfig, book, chunkCount, analysisType, chunkIndex, chunk);
+        ensureNotCancelled(invocationHandle);
+        return outcome;
     }
 
     private RuntimeException unwrapChunkExecutionException(ExecutionException ex) {
@@ -679,7 +777,8 @@ public class AnalysisService {
                                                    PromptConfigEntity promptConfig,
                                                    CrawlBookEntity book,
                                                    List<ChapterVO> chapters,
-                                                   String analysisType) throws IOException {
+                                                   String analysisType,
+                                                   AiGatewayService.InvocationHandle invocationHandle) throws IOException {
         AiInvokeResult aiResult = invokeChunkedAnalysis(
             promptConfig,
             book,
@@ -687,12 +786,16 @@ public class AnalysisService {
             analysisType,
             progress -> {
                 try {
+                    ensureNotCancelled(invocationHandle);
                     sendDeltaEvent(emitter, progress, null);
                 } catch (IOException ex) {
-                    throw new RuntimeException(ex);
+                    invocationHandle.cancel();
+                    throw new AnalysisCancelledException();
                 }
-            }
+            },
+            invocationHandle
         );
+        ensureNotCancelled(invocationHandle);
 
         Long resultId = saveAnalysisResult(
             request.getPlatform(),
@@ -851,6 +954,50 @@ public class AnalysisService {
         }
     }
 
+    private void submitChunkAnalysis(ExecutorCompletionService<ChunkAnalysisOutcome> completionService,
+                                     PromptConfigEntity promptConfig,
+                                     CrawlBookEntity book,
+                                     List<List<ChapterVO>> chunks,
+                                     String analysisType,
+                                     java.util.function.Consumer<String> progressListener,
+                                     AiGatewayService.InvocationHandle invocationHandle,
+                                     int chunkIndex) {
+        ensureNotCancelled(invocationHandle);
+        List<ChapterVO> chunk = chunks.get(chunkIndex);
+        emitChunkProgress(progressListener, buildChunkProgressMessage(chunkIndex + 1, chunks.size(), chunk, "正在分析"));
+        completionService.submit(() -> analyzeSingleChunk(
+            promptConfig,
+            book,
+            chunks.size(),
+            analysisType,
+            chunkIndex,
+            chunk,
+            invocationHandle
+        ));
+    }
+
+    private ChunkAnalysisOutcome awaitChunkOutcome(ExecutorCompletionService<ChunkAnalysisOutcome> completionService,
+                                                   AiGatewayService.InvocationHandle invocationHandle)
+        throws InterruptedException, ExecutionException {
+        while (true) {
+            ensureNotCancelled(invocationHandle);
+            Future<ChunkAnalysisOutcome> future = completionService.poll(200, TimeUnit.MILLISECONDS);
+            if (future == null) {
+                continue;
+            }
+            return future.get();
+        }
+    }
+
+    private void ensureNotCancelled(AiGatewayService.InvocationHandle invocationHandle) {
+        if (invocationHandle != null && invocationHandle.isCancelled()) {
+            throw new AnalysisCancelledException();
+        }
+    }
+
     private record ChunkAnalysisOutcome(int index, List<ChapterVO> chunk, AiInvokeResult result) {
+    }
+
+    private static final class AnalysisCancelledException extends RuntimeException {
     }
 }

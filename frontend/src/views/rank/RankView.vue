@@ -109,9 +109,12 @@ async function initializePage() {
   state.traceId = '';
 
   try {
-    const response = await crawlerApi.getBoards({
-      platform: filters.platform,
-    });
+    const [response, preference] = await Promise.all([
+      crawlerApi.getBoards({
+        platform: filters.platform,
+      }),
+      loadUserPreference(),
+    ]);
     state.boardCatalog = response.data.data;
     state.traceId = response.data.traceId;
 
@@ -123,7 +126,6 @@ async function initializePage() {
       return;
     }
 
-    const preference = await loadUserPreference();
     const preferredChannel = preference
       ? state.boardCatalog.find((item) => item.channelCode === preference.channelCode)
       : null;
@@ -132,9 +134,50 @@ async function initializePage() {
       : null;
     filters.channelCode = preferredChannel?.channelCode ?? firstChannel.channelCode;
     filters.boardCode = preferredBoard?.boardCode ?? preferredChannel?.boards[0]?.boardCode ?? firstBoard.boardCode;
-    await refreshCurrentBoard('AUTO');
+    await loadCurrentBoard();
   } catch (error) {
     applyListError(error, '榜单目录加载失败');
+  } finally {
+    state.listLoading = false;
+  }
+}
+
+async function loadCurrentBoard() {
+  if (!filters.channelCode || !filters.boardCode) {
+    return;
+  }
+
+  state.listLoading = true;
+  state.errorMessage = '';
+
+  try {
+    const response = await crawlerApi.getRankPage({
+      platform: filters.platform,
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+      page: 1,
+      pageSize: state.pageSize,
+    });
+    const pageResult = response.data.data;
+    applyPageResult(pageResult);
+    state.traceId = response.data.traceId;
+    state.refreshInfo = {
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+      snapshotId: pageResult.snapshotId,
+      snapshotTime: pageResult.snapshotTime,
+      total: pageResult.total,
+      reused: true,
+      refreshLimited: false,
+      analysisTriggered: false,
+    };
+    state.errorMessage = '';
+  } catch (error) {
+    if (isSnapshotMissingError(error)) {
+      await refreshCurrentBoard('AUTO');
+      return;
+    }
+    applyListError(error, '姒滃崟鍒嗛〉鍔犺浇澶辫触');
   } finally {
     state.listLoading = false;
   }
@@ -201,13 +244,13 @@ async function handleChannelChange(channelCode: string) {
   filters.channelCode = channelCode;
   filters.boardCode = nextBoard?.boardCode ?? '';
   await saveUserPreference();
-  await refreshCurrentBoard('AUTO');
+  await loadCurrentBoard();
 }
 
 async function handleBoardChange(boardCode: string) {
   filters.boardCode = boardCode;
   await saveUserPreference();
-  await refreshCurrentBoard('AUTO');
+  await loadCurrentBoard();
 }
 
 async function handlePageChange(page: number) {
@@ -319,6 +362,10 @@ function applyListError(error: unknown, fallbackMessage: string) {
   state.errorMessage = payload.message ?? fallbackMessage;
   state.traceId = payload.traceId ?? '';
   state.rankList = [];
+}
+
+function isSnapshotMissingError(error: unknown) {
+  return getErrorPayload(error).code === 404;
 }
 
 async function loadUserPreference() {
@@ -758,6 +805,11 @@ onMounted(() => {
 .rank-page__item-main {
   display: grid;
   gap: 0.55rem;
+  min-width: 0;
+}
+
+.rank-page__item-title {
+  min-width: 0;
 }
 
 .rank-page__item-title h3,
@@ -767,13 +819,17 @@ onMounted(() => {
 }
 
 .rank-page__item-title h3 {
+  color: var(--color-text);
   font-size: 1.08rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .rank-page__item-title p {
   margin-top: 0.2rem;
   color: var(--color-text-muted);
+  overflow-wrap: anywhere;
 }
 
 .rank-page__item-intro {

@@ -94,6 +94,24 @@ class CrawlerPhase3IntegrationTest {
     }
 
     @Test
+    void shouldReturnPersistedBoardCatalogWithoutSyncingCrawlerAgain() throws Exception {
+        insertRankBoard("fanqie", "male-new", "persisted-channel-1", "urban-brain", "persisted-board-1");
+        insertRankBoard("fanqie", "male-read", "persisted-channel-2", "urban-power", "persisted-board-2");
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(get("/api/crawler/boards")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0].channelCode").value("male-new"))
+            .andExpect(jsonPath("$.data[0].boards[0].boardCode").value("urban-brain"));
+
+        verify(pythonCrawlerClient, times(0)).fetchBoardCatalog("fanqie", 20);
+    }
+
+    @Test
     void shouldSaveAndReturnUserRankPreference() throws Exception {
         String token = loginAndGetToken("writer", "writer123");
 

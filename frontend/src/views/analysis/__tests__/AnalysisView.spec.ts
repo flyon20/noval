@@ -14,6 +14,32 @@ vi.mock('@/api/analysis', () => ({
   },
 }));
 
+vi.mock('@/api/config', () => ({
+  systemConfigApi: {
+    getAvailableModels: vi.fn().mockResolvedValue({
+      data: {
+        data: ['deepseek-chat'],
+      },
+    }),
+  },
+  userConfigApi: {
+    get: vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          configValue: 'deepseek-chat',
+        },
+      },
+    }),
+    update: vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          configValue: 'deepseek-chat',
+        },
+      },
+    }),
+  },
+}));
+
 function createResult(
   analysisType: AnalysisType,
   resultContent = `${analysisType} result`,
@@ -23,7 +49,7 @@ function createResult(
     id: 1,
     bookId: 1001,
     analysisType,
-    modelName: 'dify',
+    modelName: 'deepseek-chat',
     resultContent,
     resultJson,
     tokenUsed: 128,
@@ -89,11 +115,11 @@ describe('AnalysisView', () => {
     expect(push).toHaveBeenCalledWith('/rank');
   });
 
-  test('auto-runs deconstruct mode from route query', async () => {
+  test('waits for manual start, then runs all three analysis modes in parallel', async () => {
     const { analysisApi } = await import('@/api/analysis');
     vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
       createStreamTask(
-        createResult('deconstruct', '# 拆文结果\n第一段', {
+        createResult('deconstruct', '# deconstruct result', {
           analysisMode: 'chunk_merge',
           segmentCount: 4,
           inputChapterCount: 3,
@@ -101,10 +127,10 @@ describe('AnalysisView', () => {
       ),
     );
     vi.mocked(analysisApi.streamStructure).mockImplementation(
-      createStreamTask(createResult('structure', '# 结构结果')),
+      createStreamTask(createResult('structure', '# structure result')),
     );
     vi.mocked(analysisApi.streamPlot).mockImplementation(
-      createStreamTask(createResult('plot', '# 情节结果')),
+      createStreamTask(createResult('plot', '# plot result')),
     );
 
     const router = createRouter({
@@ -119,6 +145,13 @@ describe('AnalysisView', () => {
       },
     });
 
+    await flushPromises();
+
+    expect(analysisApi.streamDeconstruct).not.toHaveBeenCalled();
+    expect(analysisApi.streamStructure).not.toHaveBeenCalled();
+    expect(analysisApi.streamPlot).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
     await flushPromises();
 
     expect(analysisApi.streamDeconstruct).toHaveBeenCalledWith(
@@ -129,23 +162,62 @@ describe('AnalysisView', () => {
       },
       expect.any(Object),
     );
-    expect(wrapper.text()).toContain('拆文结果');
-    expect(wrapper.find('[data-role="analysis-context"]').exists()).toBe(true);
-    expect(wrapper.text()).toContain('分段汇总');
-    expect(wrapper.text()).toContain('章节数：3');
-    expect(wrapper.text()).toContain('分段数：4');
+    expect(analysisApi.streamStructure).toHaveBeenCalledWith(
+      {
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 3,
+      },
+      expect.any(Object),
+    );
+    expect(analysisApi.streamPlot).toHaveBeenCalledWith(
+      {
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 3,
+      },
+      expect.any(Object),
+    );
+    expect(wrapper.findAll('[data-test="analysis-mode-panel"]')).toHaveLength(1);
+    expect(wrapper.get('[data-test="analysis-mode-panel"]').attributes('data-mode')).toBe('deconstruct');
+    expect(wrapper.text()).toContain('deconstruct result');
+    expect(wrapper.text()).not.toContain('structure result');
+    expect(wrapper.text()).not.toContain('plot result');
+
+    await wrapper.findAll('[data-test="analysis-tab"]')[2].trigger('click');
+
+    expect(wrapper.findAll('[data-test="analysis-mode-panel"]')).toHaveLength(1);
+    expect(wrapper.get('[data-test="analysis-mode-panel"]').attributes('data-mode')).toBe('plot');
+    expect(wrapper.text()).toContain('plot result');
+    expect(wrapper.text()).not.toContain('deconstruct result');
   });
 
-  test('switches mode and reruns current analysis with forceReanalyze', async () => {
+  test('stops and reruns only the targeted panel', async () => {
     const { analysisApi } = await import('@/api/analysis');
+    const deconstructAbort = vi.fn();
+    const structureAbort = vi.fn();
+    const plotAbort = vi.fn();
+
     vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
-      createStreamTask(createResult('deconstruct', '# 拆文结果')),
+      vi.fn().mockImplementation(() => ({
+        abort: deconstructAbort,
+        result: new Promise<AnalysisResult>(() => undefined),
+      })),
     );
     vi.mocked(analysisApi.streamStructure).mockImplementation(
-      createStreamTask(createResult('structure', '# 结构结果')),
+      vi
+        .fn()
+        .mockImplementationOnce(() => ({
+          abort: structureAbort,
+          result: new Promise<AnalysisResult>(() => undefined),
+        }))
+        .mockImplementationOnce(createStreamTask(createResult('structure', '# rerun structure result'))),
     );
     vi.mocked(analysisApi.streamPlot).mockImplementation(
-      createStreamTask(createResult('plot', '# 情节结果')),
+      vi.fn().mockImplementation(() => ({
+        abort: plotAbort,
+        result: new Promise<AnalysisResult>(() => undefined),
+      })),
     );
 
     const router = createRouter({
@@ -161,19 +233,19 @@ describe('AnalysisView', () => {
     });
 
     await flushPromises();
-    await wrapper.findAll('[data-test="analysis-tab"]')[1].trigger('click');
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
     await flushPromises();
 
-    expect(analysisApi.streamStructure).toHaveBeenCalledWith(
-      {
-        platform: 'fanqie',
-        bookId: 1001,
-        chapterCount: 3,
-      },
-      expect.any(Object),
-    );
+    await wrapper.findAll('[data-test="analysis-tab"]')[1].trigger('click');
 
-    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    const structurePanel = wrapper.get('[data-test="analysis-mode-panel"][data-mode="structure"]');
+    await structurePanel.get('[data-test="analysis-toolbar-stop"]').trigger('click');
+
+    expect(structureAbort).toHaveBeenCalledTimes(1);
+    expect(deconstructAbort).not.toHaveBeenCalled();
+    expect(plotAbort).not.toHaveBeenCalled();
+
+    await structurePanel.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
     await flushPromises();
 
     expect(analysisApi.streamStructure).toHaveBeenLastCalledWith(

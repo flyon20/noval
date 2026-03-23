@@ -10,10 +10,12 @@ import AnalysisModeTabs from '@/components/analysis/AnalysisModeTabs.vue';
 import AnalysisResultCard from '@/components/analysis/AnalysisResultCard.vue';
 import AnalysisToolbar from '@/components/analysis/AnalysisToolbar.vue';
 import { useAnalysisRun } from '@/composables/useAnalysisRun';
-import type { AnalysisType } from '@/types/analysis';
+import type { AnalysisResult, AnalysisType } from '@/types/analysis';
 
 const route = useRoute();
 const router = useRouter();
+
+const ANALYSIS_MODES: AnalysisType[] = ['deconstruct', 'structure', 'plot'];
 
 const availableModels = ref<string[]>([]);
 const selectedModel = ref('');
@@ -80,7 +82,9 @@ const pageContext = computed(() => {
   };
 });
 
-const currentResultMode = computed(() => parseAnalysisType(route.query.mode));
+const preferredMode = computed(() => parseAnalysisType(route.query.mode));
+const activeMode = ref<AnalysisType>(preferredMode.value);
+const hasStarted = ref(false);
 const analysis = useAnalysisRun({
   context: () =>
     pageContext.value ?? {
@@ -101,36 +105,38 @@ const analysis = useAnalysisRun({
   },
   async copyText(text) {
     if (!navigator.clipboard?.writeText) {
-      throw new Error('当前浏览器不支持剪贴板复制');
+      throw new Error('Clipboard API is not available');
     }
 
     await navigator.clipboard.writeText(text);
   },
 });
 
-const currentResult = computed(() => analysis.state.results[analysis.state.activeMode]);
-const currentAnalysisModeLabel = computed(() => {
-  const resultJson = currentResult.value?.resultJson;
+function resolveAnalysisModeLabel(result: AnalysisResult | null) {
+  const resultJson = result?.resultJson;
   const analysisMode = typeof resultJson?.analysisMode === 'string' ? resultJson.analysisMode : '';
   const segmentCount = typeof resultJson?.segmentCount === 'number' ? resultJson.segmentCount : null;
 
-  if (analysis.state.phase !== 'done' || !currentResult.value) {
+  if (!result) {
     return undefined;
   }
 
   if (analysisMode === 'chunk_merge') {
-    return segmentCount && segmentCount > 1 ? `分析方式：分段汇总 · ${segmentCount} 段` : '分析方式：分段汇总';
+    return segmentCount && segmentCount > 1
+      ? `分析方式：分段汇总 · ${segmentCount} 段`
+      : '分析方式：分段汇总';
   }
 
   return '分析方式：单次分析';
-});
-const currentAnalysisDetailLabel = computed(() => {
-  const resultJson = currentResult.value?.resultJson;
+}
+
+function resolveAnalysisDetailLabel(result: AnalysisResult | null) {
+  const resultJson = result?.resultJson;
   const segmentCount = typeof resultJson?.segmentCount === 'number' ? resultJson.segmentCount : null;
   const inputChapterCount =
     typeof resultJson?.inputChapterCount === 'number' ? resultJson.inputChapterCount : pageContext.value?.chapterCount;
 
-  if (analysis.state.phase !== 'done' || !currentResult.value) {
+  if (!result) {
     return undefined;
   }
 
@@ -140,24 +146,106 @@ const currentAnalysisDetailLabel = computed(() => {
   ].filter(Boolean);
 
   return parts.length ? parts.join(' · ') : undefined;
+}
+
+function resolvePhaseLabel(mode: AnalysisType) {
+  const phase = analysis.state.modes[mode].phase;
+  if (phase === 'done') {
+    return '已完成';
+  }
+  if (phase === 'streaming') {
+    return '流式输出中';
+  }
+  if (phase === 'fallback-blocking') {
+    return '阻塞回退中';
+  }
+  if (phase === 'preparing') {
+    return '准备分析';
+  }
+  if (phase === 'error') {
+    return '分析失败';
+  }
+  if (phase === 'aborted') {
+    return '已停止';
+  }
+  return '等待开始';
+}
+
+const analysisPanels = computed(() => {
+  return ANALYSIS_MODES.map((mode) => {
+    const modeState = analysis.state.modes[mode];
+    const result = modeState.result;
+    const running = ['preparing', 'streaming', 'fallback-blocking'].includes(modeState.phase);
+
+    return {
+      mode,
+      title: modeLabelMap[mode],
+      phaseLabel: resolvePhaseLabel(mode),
+      running,
+      state: modeState,
+      result,
+      meta: {
+        analysisModeLabel: modeState.phase === 'done' ? resolveAnalysisModeLabel(result) : undefined,
+        analysisDetailLabel: modeState.phase === 'done' ? resolveAnalysisDetailLabel(result) : undefined,
+        traceId: result?.traceId ?? modeState.traceId,
+        modelName: result?.modelName,
+        tokenUsed: result?.tokenUsed,
+      },
+    };
+  });
 });
-const isRunning = computed(() =>
-  ['preparing', 'streaming', 'fallback-blocking'].includes(analysis.state.phase),
+
+const activePanel = computed(
+  () => analysisPanels.value.find((panel) => panel.mode === activeMode.value) ?? analysisPanels.value[0],
 );
-const analysisTypeLabel = computed(() => modeLabelMap[analysis.state.activeMode]);
+
+const tabStatuses = computed(
+  () =>
+    Object.fromEntries(
+      analysisPanels.value.map((panel) => [
+        panel.mode,
+        {
+          phaseLabel: panel.phaseLabel,
+          tone:
+            panel.state.phase === 'error'
+              ? 'error'
+              : panel.running
+                ? 'running'
+                : panel.state.phase === 'done'
+                  ? 'done'
+                  : 'idle',
+        },
+      ]),
+    ) as Partial<
+      Record<
+        AnalysisType,
+        {
+          phaseLabel: string;
+          tone: 'idle' | 'running' | 'done' | 'error';
+        }
+      >
+    >,
+);
+
+watch(
+  preferredMode,
+  (mode) => {
+    activeMode.value = mode;
+  },
+  { immediate: true },
+);
 
 watch(
   () =>
     pageContext.value
-      ? `${pageContext.value.bookId}:${pageContext.value.platform}:${pageContext.value.chapterCount}:${currentResultMode.value}`
+      ? `${pageContext.value.bookId}:${pageContext.value.platform}:${pageContext.value.chapterCount}`
       : '',
   (contextKey) => {
+    hasStarted.value = false;
+    analysis.resetAllAnalyses();
     if (!contextKey || !pageContext.value) {
-      analysis.stopAnalysis();
       return;
     }
-
-    void analysis.runAnalysis(currentResultMode.value).catch(() => undefined);
   },
   { immediate: true },
 );
@@ -167,33 +255,32 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  analysis.stopAnalysis();
+  analysis.stopAllAnalyses();
 });
 
-async function handleModeChange(mode: AnalysisType) {
+async function handleRerun(mode: AnalysisType) {
   if (!pageContext.value) {
     return;
   }
 
-  await analysis.switchMode(mode).catch(() => undefined);
-}
-
-async function handleRerun() {
-  if (!pageContext.value) {
+  if (!hasStarted.value) {
+    hasStarted.value = true;
+    activeMode.value = mode;
+    await analysis.runAllAnalyses().catch(() => undefined);
     return;
   }
 
-  await analysis.rerunAnalysis().catch(() => undefined);
+  await analysis.rerunAnalysis(mode).catch(() => undefined);
 }
 
-function handleStop() {
-  analysis.stopAnalysis();
+function handleStop(mode: AnalysisType) {
+  analysis.stopAnalysis(mode);
 }
 
-async function handleCopy() {
+async function handleCopy(mode: AnalysisType) {
   try {
-    await analysis.copyResult();
-    ElMessage.success('分析结果已复制');
+    await analysis.copyResult(mode);
+    ElMessage.success(`${modeLabelMap[mode]}结果已复制`);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '复制失败，请稍后重试');
   }
@@ -209,7 +296,7 @@ async function goBack() {
     <template v-if="pageContext">
       <header class="analysis-page__hero">
         <AnalysisContextBar
-          :analysis-type="analysisTypeLabel"
+          analysis-type="单书并行分析总览"
           :author="pageContext.author"
           :book-id="pageContext.bookId"
           :book-title="pageContext.bookTitle"
@@ -220,35 +307,66 @@ async function goBack() {
 
       <section class="analysis-page__panel">
         <div class="analysis-page__controls">
+          <div class="analysis-page__summary">
+            <p class="analysis-page__summary-eyebrow">Parallel Panels</p>
+            <h3 class="analysis-page__summary-title">三个版块独立运行，互不阻塞</h3>
+            <p class="analysis-page__summary-copy">只有点击对应卡片的“停止生成”才会中断该版块。</p>
+          </div>
+
+          <el-select
+            v-if="availableModels.length > 1"
+            :model-value="selectedModel"
+            class="analysis-page__model-select"
+            placeholder="选择模型"
+            data-test="analysis-model-select"
+            @update:model-value="handleModelChange"
+          >
+            <el-option
+              v-for="model in availableModels"
+              :key="model"
+              :label="model"
+              :value="model"
+            />
+          </el-select>
+        </div>
+
+        <div class="analysis-page__tab-strip">
           <AnalysisModeTabs
-            :model-value="analysis.state.activeMode"
-            @update:model-value="handleModeChange"
-          />
-          <AnalysisToolbar
-            :available-models="availableModels"
-            :disabling="!pageContext"
-            :model-name="selectedModel"
-            :running="isRunning"
-            @copy="handleCopy"
-            @rerun="handleRerun"
-            @stop="handleStop"
-            @update:model-name="handleModelChange"
+            v-model="activeMode"
+            :status-by-mode="tabStatuses"
           />
         </div>
 
-        <AnalysisResultCard
-          :error-message="analysis.state.errorMessage"
-          :phase="analysis.state.phase"
-          :result-content="currentResult?.resultContent"
-          :result-meta="{
-            analysisModeLabel: currentAnalysisModeLabel,
-            analysisDetailLabel: currentAnalysisDetailLabel,
-            traceId: currentResult?.traceId ?? analysis.state.traceId,
-            modelName: currentResult?.modelName,
-            tokenUsed: currentResult?.tokenUsed,
-          }"
-          :streaming-text="analysis.state.streamingText"
-        />
+        <article
+          v-if="activePanel"
+          class="analysis-mode-panel"
+          :data-mode="activePanel.mode"
+          data-test="analysis-mode-panel"
+        >
+          <div class="analysis-mode-panel__header">
+            <div class="analysis-mode-panel__title-wrap">
+              <p class="analysis-mode-panel__eyebrow">{{ activePanel.phaseLabel }}</p>
+              <h3 class="analysis-mode-panel__title">{{ activePanel.title }}</h3>
+            </div>
+
+            <AnalysisToolbar
+              :disabling="!pageContext"
+              :primary-label="hasStarted ? undefined : '\u5f00\u59cb\u5206\u6790'"
+              :running="activePanel.running"
+              @copy="handleCopy(activePanel.mode)"
+              @rerun="handleRerun(activePanel.mode)"
+              @stop="handleStop(activePanel.mode)"
+            />
+          </div>
+
+          <AnalysisResultCard
+            :error-message="activePanel.state.errorMessage"
+            :phase="activePanel.state.phase"
+            :result-content="activePanel.result?.resultContent"
+            :result-meta="activePanel.meta"
+            :streaming-text="activePanel.state.streamingText"
+          />
+        </article>
       </section>
     </template>
 
@@ -292,10 +410,68 @@ async function goBack() {
   flex-wrap: wrap;
 }
 
-@media (max-width: 960px) {
-  .analysis-page__hero {
-    grid-template-columns: 1fr;
-  }
+.analysis-page__summary {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.analysis-page__summary-eyebrow {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.analysis-page__summary-title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.analysis-page__summary-copy {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.analysis-page__model-select {
+  width: 220px;
+}
+
+.analysis-page__tab-strip {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.analysis-mode-panel {
+  display: grid;
+  gap: 0.85rem;
+  align-content: start;
+}
+
+.analysis-mode-panel__header {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.analysis-mode-panel__title-wrap {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.analysis-mode-panel__eyebrow {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.analysis-mode-panel__title {
+  margin: 0;
+  font-size: 1.05rem;
 }
 
 @media (max-width: 768px) {
@@ -312,6 +488,10 @@ async function goBack() {
 
   .analysis-page__controls {
     gap: 0.6rem;
+  }
+
+  .analysis-page__model-select {
+    width: 100%;
   }
 }
 </style>

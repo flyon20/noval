@@ -38,7 +38,7 @@ interface UseAnalysisRunOptions {
   copyText(text: string): void | Promise<void>;
 }
 
-type AnalysisRunPhase =
+export type AnalysisRunPhase =
   | 'idle'
   | 'preparing'
   | 'streaming'
@@ -46,6 +46,28 @@ type AnalysisRunPhase =
   | 'done'
   | 'error'
   | 'aborted';
+
+interface AnalysisModeState {
+  phase: AnalysisRunPhase;
+  streamingText: string;
+  errorMessage: string;
+  traceId: string;
+  isFallback: boolean;
+  result: AnalysisResult | null;
+}
+
+const ANALYSIS_MODES: AnalysisType[] = ['deconstruct', 'structure', 'plot'];
+
+function createModeState(): AnalysisModeState {
+  return {
+    phase: 'idle',
+    streamingText: '',
+    errorMessage: '',
+    traceId: '',
+    isFallback: false,
+    result: null,
+  };
+}
 
 function normalizeTask(taskOrPromise: Promise<AnalysisResult> | AnalysisStreamTask): AnalysisStreamTask {
   if ('result' in taskOrPromise) {
@@ -65,20 +87,23 @@ function resolveContext(options: UseAnalysisRunOptions) {
 export function useAnalysisRun(options: UseAnalysisRunOptions) {
   const state = reactive({
     activeMode: 'deconstruct' as AnalysisType,
-    phase: 'idle' as AnalysisRunPhase,
-    streamingText: '',
-    errorMessage: '',
-    traceId: '',
-    isFallback: false,
-    results: {
-      deconstruct: null as AnalysisResult | null,
-      structure: null as AnalysisResult | null,
-      plot: null as AnalysisResult | null,
-    },
+    modes: {
+      deconstruct: createModeState(),
+      structure: createModeState(),
+      plot: createModeState(),
+    } as Record<AnalysisType, AnalysisModeState>,
   });
 
-  let currentTask: AnalysisStreamTask | null = null;
-  let currentRunId = 0;
+  const currentTasks: Record<AnalysisType, AnalysisStreamTask | null> = {
+    deconstruct: null,
+    structure: null,
+    plot: null,
+  };
+  const currentRunIds: Record<AnalysisType, number> = {
+    deconstruct: 0,
+    structure: 0,
+    plot: 0,
+  };
 
   function buildPayload(forceReanalyze = false): AnalysisRequest {
     const context = resolveContext(options);
@@ -91,150 +116,162 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
     };
   }
 
-  function abortCurrent() {
-    if (!currentTask) {
+  function resetModeState(mode: AnalysisType, phase: AnalysisRunPhase = 'idle') {
+    const modeState = state.modes[mode];
+    modeState.phase = phase;
+    modeState.streamingText = '';
+    modeState.errorMessage = '';
+    modeState.traceId = '';
+    modeState.isFallback = false;
+    modeState.result = null;
+  }
+
+  function abortMode(mode: AnalysisType) {
+    const task = currentTasks[mode];
+    if (!task) {
       return;
     }
 
-    currentTask.abort();
-    void currentTask.result.catch(() => undefined);
-    currentTask = null;
+    task.abort();
+    void task.result.catch(() => undefined);
+    currentTasks[mode] = null;
   }
 
   async function runAnalysis(mode: AnalysisType, runOptions: { forceReanalyze?: boolean } = {}) {
-    abortCurrent();
+    abortMode(mode);
 
-    currentRunId += 1;
-    const runId = currentRunId;
+    currentRunIds[mode] += 1;
+    const runId = currentRunIds[mode];
     const payload = buildPayload(Boolean(runOptions.forceReanalyze));
+    const modeState = state.modes[mode];
 
     state.activeMode = mode;
-    state.phase = 'preparing';
-    state.streamingText = '';
-    state.errorMessage = '';
-    state.traceId = '';
-    state.isFallback = false;
+    resetModeState(mode, 'preparing');
 
     const task = normalizeTask(
       options.runMode(mode, payload, {
         onStart(event) {
-          if (runId !== currentRunId) {
+          if (runId !== currentRunIds[mode]) {
             return;
           }
 
-          state.phase = 'streaming';
-          state.traceId = event.traceId;
+          modeState.phase = 'streaming';
+          modeState.traceId = event.traceId;
         },
         onDelta(event) {
-          if (runId !== currentRunId) {
+          if (runId !== currentRunIds[mode]) {
             return;
           }
 
-          state.phase = 'streaming';
-          state.streamingText += event.delta;
+          modeState.phase = 'streaming';
+          modeState.streamingText += event.delta;
         },
         onDone(event) {
-          if (runId !== currentRunId) {
+          if (runId !== currentRunIds[mode]) {
             return;
           }
 
-          state.results[mode] = event.data;
+          modeState.result = event.data;
         },
         onError(event) {
-          if (runId !== currentRunId) {
+          if (runId !== currentRunIds[mode]) {
             return;
           }
 
-          state.phase = 'error';
-          state.errorMessage = event.message;
-          state.traceId = event.traceId ?? state.traceId;
+          modeState.phase = 'error';
+          modeState.errorMessage = event.message;
+          modeState.traceId = event.traceId ?? modeState.traceId;
         },
         onFallback() {
-          if (runId !== currentRunId) {
+          if (runId !== currentRunIds[mode]) {
             return;
           }
 
-          state.phase = 'fallback-blocking';
-          state.isFallback = true;
+          modeState.phase = 'fallback-blocking';
+          modeState.isFallback = true;
         },
       }),
     );
 
-    currentTask = task;
+    currentTasks[mode] = task;
 
     try {
       const result = await task.result;
 
-      if (runId !== currentRunId) {
+      if (runId !== currentRunIds[mode]) {
         return result;
       }
 
-      state.results[mode] = result;
-      state.phase = 'done';
-      state.streamingText = result.resultContent;
-      state.traceId = result.traceId ?? state.traceId;
-      currentTask = null;
+      modeState.result = result;
+      modeState.phase = 'done';
+      modeState.streamingText = result.resultContent;
+      modeState.traceId = result.traceId ?? modeState.traceId;
+      currentTasks[mode] = null;
       return result;
     } catch (error) {
-      if (runId !== currentRunId) {
+      if (runId !== currentRunIds[mode]) {
         throw error;
       }
 
-      if (state.phase !== 'error') {
-        state.phase = 'error';
-        state.errorMessage = error instanceof Error ? error.message : '分析失败';
+      if (modeState.phase !== 'error') {
+        modeState.phase = 'error';
+        modeState.errorMessage = error instanceof Error ? error.message : 'Analysis failed';
       }
 
-      currentTask = null;
+      currentTasks[mode] = null;
       throw error;
     }
   }
 
-  async function switchMode(mode: AnalysisType) {
-    const cached = state.results[mode];
+  async function runAllAnalyses(runOptions: { forceReanalyze?: boolean } = {}) {
+    return Promise.allSettled(ANALYSIS_MODES.map((mode) => runAnalysis(mode, runOptions)));
+  }
 
-    if (cached) {
-      abortCurrent();
-      currentRunId += 1;
-      state.activeMode = mode;
-      state.phase = 'done';
-      state.streamingText = cached.resultContent;
-      state.errorMessage = '';
-      state.traceId = cached.traceId ?? state.traceId;
-      state.isFallback = false;
-      return cached;
+  function stopAnalysis(mode: AnalysisType) {
+    abortMode(mode);
+    currentRunIds[mode] += 1;
+    state.modes[mode].phase = 'aborted';
+  }
+
+  function stopAllAnalyses() {
+    for (const mode of ANALYSIS_MODES) {
+      stopAnalysis(mode);
     }
-
-    return runAnalysis(mode);
   }
 
-  function stopAnalysis() {
-    abortCurrent();
-    currentRunId += 1;
-    state.phase = 'aborted';
+  function resetAllAnalyses() {
+    for (const mode of ANALYSIS_MODES) {
+      abortMode(mode);
+      currentRunIds[mode] += 1;
+      resetModeState(mode);
+    }
   }
 
-  async function rerunAnalysis() {
-    return runAnalysis(state.activeMode, {
+  async function rerunAnalysis(mode: AnalysisType) {
+    return runAnalysis(mode, {
       forceReanalyze: true,
     });
   }
 
-  async function copyResult() {
-    const text = state.results[state.activeMode]?.resultContent ?? state.streamingText;
+  async function copyResult(mode: AnalysisType) {
+    const modeState = state.modes[mode];
+    const text = modeState.result?.resultContent ?? modeState.streamingText;
 
     if (!text) {
       return;
     }
 
+    state.activeMode = mode;
     await options.copyText(text);
   }
 
   return {
     state,
     runAnalysis,
-    switchMode,
+    runAllAnalyses,
     stopAnalysis,
+    stopAllAnalyses,
+    resetAllAnalyses,
     rerunAnalysis,
     copyResult,
   };

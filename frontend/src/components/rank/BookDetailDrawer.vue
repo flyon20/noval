@@ -17,6 +17,19 @@ const visible = computed({
   get: () => props.modelValue,
   set: (value: boolean) => emit('update:modelValue', value),
 });
+
+function closeDrawer() {
+  visible.value = false;
+}
+
+const uiText = {
+  heading: '书籍详情',
+  loadingTitle: '加载中...',
+  authorLabel: '作者：',
+  sourceLinkLabel: '原始链接',
+  introLabel: '完整简介',
+  closeLabel: '关闭',
+};
 </script>
 
 <template>
@@ -28,21 +41,32 @@ const visible = computed({
     size="440px"
   >
     <div class="rank-drawer">
-      <div class="rank-drawer__heading">
-        <p>书籍详情</p>
-        <h3>{{ detail?.bookName ?? '加载中' }}</h3>
+      <div class="rank-drawer__topbar">
+        <div class="rank-drawer__heading" data-testid="rank-detail-heading">
+          <p>{{ uiText.heading }}</p>
+          <h3 data-testid="rank-detail-title">{{ detail?.bookName ?? uiText.loadingTitle }}</h3>
+        </div>
+        <el-button
+          class="rank-drawer__close"
+          data-testid="rank-detail-close"
+          plain
+          type="default"
+          @click="closeDrawer"
+        >
+          {{ uiText.closeLabel }}
+        </el-button>
       </div>
 
       <el-skeleton v-if="loading" animated :rows="6" />
 
       <template v-else-if="detail">
-        <div class="rank-drawer__meta">
-          <span>作者：{{ detail.author }}</span>
-          <a :href="detail.bookUrl" rel="noreferrer" target="_blank">原始链接</a>
+        <div class="rank-drawer__meta" data-testid="rank-detail-meta">
+          <span>{{ uiText.authorLabel }}{{ detail.author }}</span>
+          <a :href="detail.bookUrl" rel="noreferrer" target="_blank">{{ uiText.sourceLinkLabel }}</a>
         </div>
         <section class="rank-drawer__section">
-          <p class="rank-drawer__label">完整简介</p>
-          <p class="rank-drawer__body">{{ detail.intro }}</p>
+          <p class="rank-drawer__label">{{ uiText.introLabel }}</p>
+          <p class="rank-drawer__body" data-testid="rank-detail-intro">{{ detail.intro }}</p>
         </section>
       </template>
 
@@ -55,6 +79,21 @@ const visible = computed({
 .rank-drawer {
   display: grid;
   gap: 1rem;
+  min-width: 0;
+}
+
+.rank-drawer__topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.rank-drawer__heading {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
 }
 
 .rank-drawer__heading p,
@@ -73,16 +112,33 @@ const visible = computed({
 }
 
 .rank-drawer__heading h3 {
+  color: var(--color-text);
   font-size: 1.4rem;
   line-height: 1.3;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .rank-drawer__meta {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 1rem;
   color: var(--color-text-muted);
   font-size: 0.92rem;
+}
+
+.rank-drawer__meta a,
+.rank-drawer__meta span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.rank-drawer__close {
+  flex-shrink: 0;
+  min-height: 2.5rem;
+  padding-inline: 0.95rem;
 }
 
 .rank-drawer__section {
@@ -97,5 +153,15 @@ const visible = computed({
 .rank-drawer__body {
   line-height: 1.85;
   white-space: pre-wrap;
+}
+
+@media (max-width: 920px) {
+  .rank-drawer__topbar {
+    gap: 0.75rem;
+  }
+
+  .rank-drawer__close {
+    min-width: 4.5rem;
+  }
 }
 </style>

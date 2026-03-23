@@ -33,8 +33,7 @@ describe('AnalysisResultCard', () => {
     expect(wrapper.find('.analysis-result__cursor').exists()).toBe(true);
   });
 
-  test('animates streaming text instead of flushing the whole payload at once', async () => {
-    vi.useFakeTimers();
+  test('flushes streaming text immediately once the chunk arrives', async () => {
     const wrapper = mount(AnalysisResultCard, {
       props: {
         phase: 'streaming',
@@ -45,9 +44,6 @@ describe('AnalysisResultCard', () => {
     await wrapper.setProps({
       streamingText: 'abcdefghijklmnopqrstuvwxyz',
     });
-    expect(wrapper.text()).not.toContain('abcdefghijklmnopqrstuvwxyz');
-
-    await vi.advanceTimersByTimeAsync(500);
     expect(wrapper.text()).toContain('abcdefghijklmnopqrstuvwxyz');
   });
 
@@ -108,6 +104,15 @@ describe('AnalysisModeTabs', () => {
     const wrapper = mount(AnalysisModeTabs, {
       props: {
         modelValue: 'structure',
+        statusByMode: {
+          deconstruct: {
+            phaseLabel: '等待开始',
+          },
+          structure: {
+            phaseLabel: '流式输出中',
+            tone: 'running',
+          },
+        },
       },
     });
 
@@ -115,6 +120,7 @@ describe('AnalysisModeTabs', () => {
     expect(buttons).toHaveLength(3);
     expect(buttons[1].attributes('aria-pressed')).toBe('true');
     expect(buttons[0].attributes('aria-pressed')).toBe('false');
+    expect(wrapper.text()).toContain('流式输出中');
   });
 
   test('emits update when a different tab is clicked', async () => {

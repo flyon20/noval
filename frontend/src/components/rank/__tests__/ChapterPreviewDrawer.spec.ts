@@ -37,4 +37,24 @@ describe('ChapterPreviewDrawer', () => {
     expect(wrapper.text()).toContain(longContent);
     expect(wrapper.get('[data-testid="chapter-back"]').exists()).toBe(true);
   });
+
+  test('emits close when tapping the drawer close button', async () => {
+    const wrapper = mount(ChapterPreviewDrawer, {
+      props: {
+        modelValue: true,
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 3,
+        chapters: [],
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-testid="chapter-close"]').trigger('click');
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([[false]]);
+  });
 });

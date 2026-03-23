@@ -39,7 +39,84 @@ describe('RankView', () => {
     vi.clearAllMocks();
   });
 
-  test('loads board catalog then auto refreshes first board and fetches first page', async () => {
+  test('requests board catalog and user preference in parallel during initialization', async () => {
+    const { crawlerApi } = await import('@/api/crawler');
+    let resolveBoards: ((value: unknown) => void) | null = null;
+
+    vi.mocked(crawlerApi.getBoards).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveBoards = resolve;
+        }) as never,
+    );
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 404,
+        message: 'not found',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    } as never);
+    vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+          page: 1,
+          pageSize: 10,
+          items: buildPageItems(),
+        },
+        timestamp: 1,
+        traceId: 'trace-page',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: RankView }],
+    });
+    await router.push('/rank');
+
+    mount(RankView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await Promise.resolve();
+    expect(crawlerApi.getPreference).toHaveBeenCalledWith({ platform: 'fanqie' });
+
+    resolveBoards?.({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          {
+            channelCode: 'male-new',
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
+          },
+        ],
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+
+    await flushPromises();
+    expect(crawlerApi.getRankPage).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+      page: 1,
+      pageSize: 10,
+    });
+  });
+
+  test('loads board catalog then fetches the cached first page without auto refresh', async () => {
     const { crawlerApi } = await import('@/api/crawler');
     vi.mocked(crawlerApi.getBoards).mockResolvedValue({
       data: {
@@ -57,24 +134,6 @@ describe('RankView', () => {
         ],
         timestamp: 1,
         traceId: 'trace-boards',
-      },
-    });
-    vi.mocked(crawlerApi.refreshRankBoard).mockResolvedValue({
-      data: {
-        code: 200,
-        message: 'success',
-        data: {
-          channelCode: 'male-new',
-          boardCode: 'urban-brain',
-          snapshotId: 6001,
-          snapshotTime: '2026-03-22T10:00:00',
-          total: 12,
-          reused: true,
-          refreshLimited: false,
-          analysisTriggered: false,
-        },
-        timestamp: 1,
-        traceId: 'trace-refresh',
       },
     });
     vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
@@ -125,12 +184,7 @@ describe('RankView', () => {
 
     expect(crawlerApi.getBoards).toHaveBeenCalledWith({ platform: 'fanqie' });
     expect(crawlerApi.getPreference).toHaveBeenCalledWith({ platform: 'fanqie' });
-    expect(crawlerApi.refreshRankBoard).toHaveBeenCalledWith({
-      platform: 'fanqie',
-      channelCode: 'male-new',
-      boardCode: 'urban-power',
-      refreshMode: 'AUTO',
-    });
+    expect(crawlerApi.refreshRankBoard).not.toHaveBeenCalled();
     expect(crawlerApi.getRankPage).toHaveBeenCalledWith({
       platform: 'fanqie',
       channelCode: 'male-new',
@@ -141,6 +195,113 @@ describe('RankView', () => {
     expect(wrapper.text()).toContain('Urban Power');
     expect(wrapper.text()).toContain('Book 1');
     expect(wrapper.text()).toContain('Intr...');
+  });
+
+  test('falls back to auto refresh only when the database snapshot is missing', async () => {
+    const { crawlerApi } = await import('@/api/crawler');
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          {
+            channelCode: 'male-new',
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
+          },
+        ],
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 404,
+        message: 'not found',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    } as never);
+    vi.mocked(crawlerApi.getRankPage)
+      .mockRejectedValueOnce({
+        response: {
+          data: {
+            code: 404,
+            message: 'rank snapshot not found',
+            traceId: 'trace-page-miss',
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: {
+            snapshotId: 6001,
+            snapshotTime: '2026-03-22T10:00:00',
+            total: 12,
+            page: 1,
+            pageSize: 10,
+            items: buildPageItems(),
+          },
+          timestamp: 1,
+          traceId: 'trace-page',
+        },
+      });
+    vi.mocked(crawlerApi.refreshRankBoard).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+          reused: false,
+          refreshLimited: false,
+          analysisTriggered: false,
+        },
+        timestamp: 1,
+        traceId: 'trace-refresh',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: RankView }],
+    });
+    await router.push('/rank');
+
+    mount(RankView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    expect(crawlerApi.getRankPage).toHaveBeenNthCalledWith(1, {
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+      page: 1,
+      pageSize: 10,
+    });
+    expect(crawlerApi.refreshRankBoard).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+      refreshMode: 'AUTO',
+    });
+    expect(crawlerApi.getRankPage).toHaveBeenNthCalledWith(2, {
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+      page: 1,
+      pageSize: 10,
+    });
   });
 
   test('manual refresh uses force mode and pagination only requests page data', async () => {
@@ -231,7 +392,7 @@ describe('RankView', () => {
     });
 
     await flushPromises();
-    vi.mocked(crawlerApi.refreshRankBoard).mockClear();
+    expect(crawlerApi.refreshRankBoard).not.toHaveBeenCalled();
     vi.mocked(crawlerApi.getRankPage).mockClear();
 
     await wrapper.get('[data-testid="rank-force-refresh"]').trigger('click');
@@ -327,24 +488,6 @@ describe('RankView', () => {
         ],
         timestamp: 1,
         traceId: 'trace-boards',
-      },
-    });
-    vi.mocked(crawlerApi.refreshRankBoard).mockResolvedValue({
-      data: {
-        code: 200,
-        message: 'success',
-        data: {
-          channelCode: 'male-new',
-          boardCode: 'urban-brain',
-          snapshotId: 6001,
-          snapshotTime: '2026-03-22T10:00:00',
-          total: 12,
-          reused: true,
-          refreshLimited: false,
-          analysisTriggered: false,
-        },
-        timestamp: 1,
-        traceId: 'trace-refresh',
       },
     });
     vi.mocked(crawlerApi.getRankPage).mockResolvedValue({

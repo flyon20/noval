@@ -7,7 +7,7 @@ function createResult(analysisType: AnalysisType, overrides: Partial<AnalysisRes
     id: 1,
     bookId: 1001,
     analysisType,
-    modelName: 'dify',
+    modelName: 'deepseek-chat',
     resultContent: `${analysisType}-content`,
     resultJson: {},
     tokenUsed: 123,
@@ -39,22 +39,76 @@ describe('useAnalysisRun', () => {
       },
       expect.any(Object),
     );
-    expect(analysis.state.phase).toBe('done');
-    expect(analysis.state.results.deconstruct?.resultContent).toBe('deconstruct-content');
+    expect(analysis.state.modes.deconstruct.phase).toBe('done');
+    expect(analysis.state.modes.deconstruct.result?.resultContent).toBe('deconstruct-content');
   });
 
-  test('switches mode and aborts the previous task', async () => {
-    const firstAbort = vi.fn();
-    let firstResolve: ((value: AnalysisResult) => void) | null = null;
+  test('runs multiple modes in parallel without aborting the earlier task', async () => {
+    const deconstructAbort = vi.fn();
+    const structureAbort = vi.fn();
+    let resolveDeconstruct: ((value: AnalysisResult) => void) | null = null;
+    let resolveStructure: ((value: AnalysisResult) => void) | null = null;
+
     const runner = vi
       .fn()
       .mockImplementationOnce(() => ({
-        abort: firstAbort,
+        abort: deconstructAbort,
         result: new Promise<AnalysisResult>((resolve) => {
-          firstResolve = resolve;
+          resolveDeconstruct = resolve;
         }),
       }))
-      .mockImplementationOnce(() => Promise.resolve(createResult('structure')));
+      .mockImplementationOnce(() => ({
+        abort: structureAbort,
+        result: new Promise<AnalysisResult>((resolve) => {
+          resolveStructure = resolve;
+        }),
+      }));
+
+    const analysis = useAnalysisRun({
+      context: {
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 3,
+      },
+      runMode: runner,
+      copyText: vi.fn(),
+    });
+
+    const deconstructRun = analysis.runAnalysis('deconstruct');
+    await nextTick();
+    const structureRun = analysis.runAnalysis('structure');
+    await nextTick();
+
+    expect(deconstructAbort).not.toHaveBeenCalled();
+    expect(structureAbort).not.toHaveBeenCalled();
+
+    resolveDeconstruct?.(createResult('deconstruct'));
+    resolveStructure?.(createResult('structure'));
+    await Promise.all([deconstructRun, structureRun]);
+
+    expect(analysis.state.modes.deconstruct.phase).toBe('done');
+    expect(analysis.state.modes.structure.phase).toBe('done');
+    expect(analysis.state.modes.deconstruct.result?.analysisType).toBe('deconstruct');
+    expect(analysis.state.modes.structure.result?.analysisType).toBe('structure');
+  });
+
+  test('stops only the requested mode and leaves other modes running', async () => {
+    const deconstructAbort = vi.fn();
+    const structureAbort = vi.fn();
+    let resolveStructure: ((value: AnalysisResult) => void) | null = null;
+
+    const runner = vi
+      .fn()
+      .mockImplementationOnce(() => ({
+        abort: deconstructAbort,
+        result: new Promise<AnalysisResult>(() => undefined),
+      }))
+      .mockImplementationOnce(() => ({
+        abort: structureAbort,
+        result: new Promise<AnalysisResult>((resolve) => {
+          resolveStructure = resolve;
+        }),
+      }));
 
     const analysis = useAnalysisRun({
       context: {
@@ -68,15 +122,23 @@ describe('useAnalysisRun', () => {
 
     void analysis.runAnalysis('deconstruct');
     await nextTick();
-    await analysis.switchMode('structure');
-    firstResolve?.(createResult('deconstruct'));
+    const structureRun = analysis.runAnalysis('structure');
+    await nextTick();
 
-    expect(firstAbort).toHaveBeenCalledTimes(1);
-    expect(analysis.state.activeMode).toBe('structure');
-    expect(analysis.state.results.structure?.analysisType).toBe('structure');
+    analysis.stopAnalysis('deconstruct');
+
+    expect(deconstructAbort).toHaveBeenCalledTimes(1);
+    expect(structureAbort).not.toHaveBeenCalled();
+    expect(analysis.state.modes.deconstruct.phase).toBe('aborted');
+
+    resolveStructure?.(createResult('structure'));
+    await structureRun;
+
+    expect(analysis.state.modes.structure.phase).toBe('done');
+    expect(analysis.state.modes.structure.result?.analysisType).toBe('structure');
   });
 
-  test('reruns current mode with forceReanalyze=true', async () => {
+  test('reruns the requested mode with forceReanalyze=true', async () => {
     const runner = vi.fn().mockResolvedValue(createResult('plot'));
     const analysis = useAnalysisRun({
       context: {
@@ -88,8 +150,7 @@ describe('useAnalysisRun', () => {
       copyText: vi.fn(),
     });
 
-    analysis.state.activeMode = 'plot';
-    await analysis.rerunAnalysis();
+    await analysis.rerunAnalysis('plot');
 
     expect(runner).toHaveBeenCalledWith(
       'plot',
@@ -112,13 +173,13 @@ describe('useAnalysisRun', () => {
       });
       callbacks.onDelta({
         event: 'delta',
-        delta: '第一段',
+        delta: 'partial-output',
         chunkIndex: 0,
       });
       callbacks.onError({
         event: 'error',
         code: 500,
-        message: '连接中断，可重试',
+        message: 'stream broken',
         traceId: 'trace-1',
       });
       throw new Error('network error');
@@ -134,7 +195,7 @@ describe('useAnalysisRun', () => {
     });
 
     await expect(analysis.runAnalysis('deconstruct')).rejects.toThrow();
-    expect(analysis.state.streamingText).toBe('第一段');
-    expect(analysis.state.errorMessage).toBe('连接中断，可重试');
+    expect(analysis.state.modes.deconstruct.streamingText).toBe('partial-output');
+    expect(analysis.state.modes.deconstruct.errorMessage).toBe('stream broken');
   });
 });
