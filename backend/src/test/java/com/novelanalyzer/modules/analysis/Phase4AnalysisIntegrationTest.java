@@ -2,6 +2,7 @@ package com.novelanalyzer.modules.analysis;
 
 import com.jayway.jsonpath.JsonPath;
 import com.sun.net.httpserver.HttpServer;
+import com.novelanalyzer.modules.analysis.service.AiGatewayService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -80,6 +81,9 @@ class Phase4AnalysisIntegrationTest {
 
     @Autowired
     private com.novelanalyzer.modules.crawler.service.CrawlerCacheService crawlerCacheService;
+
+    @Autowired
+    private AiGatewayService aiGatewayService;
 
     @DynamicPropertySource
     static void registerAiProperties(DynamicPropertyRegistry registry) {
@@ -371,6 +375,41 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldRespectSystemConfigWhenCheckingStreamingSwitch() {
+        updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
+        Boolean enabled = ReflectionTestUtils.invokeMethod(aiGatewayService, "isOpenAiCompatibleStreamingEnabled");
+        assertThat(enabled).isTrue();
+    }
+
+    @Test
+    void shouldEmitChunkProgressDeltaWhenChunkedAnalysisTakesOver() throws Exception {
+        updateSystemConfig("analysis.chunk.max-input-tokens", "1000");
+        updateSystemConfig("analysis.chunk.target-input-tokens", "1000");
+        long bookId = insertBook("fanqie", "stream-chunk-1", "Chunk Stream Book", "Author Chunk",
+            "Chunk intro", "https://fanqienovel.com/page/stream-chunk-1");
+        insertChapter(bookId, 1, "Chapter 1", "A".repeat(5000));
+        insertChapter(bookId, 2, "Chapter 2", "B".repeat(5000));
+        insertChapter(bookId, 3, "Chapter 3", "C".repeat(5000));
+
+        String token = loginAndGetToken("admin", "admin123");
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":%d,"chapterCount":3,"forceReanalyze":true}
+                    """.formatted(bookId)))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+
+        assertThat(body).contains("[chunk-progress]");
+        assertThat(body).contains("1/3");
+    }
+
+    @Test
     void shouldStreamTrendAnalysisWithSseProtocol() throws Exception {
         insertThemePromptConfig();
         insertRankSnapshot("fanqie", "male-hot-a", 1, 1001L, "Book One", "Author One", "Intro One",
@@ -490,6 +529,22 @@ class Phase4AnalysisIntegrationTest {
                 String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 LAST_OPENAI_REQUEST_BODY.set(requestBody);
                 OPENAI_REQUEST_COUNT.incrementAndGet();
+                if (requestBody.contains("\"stream\":true")) {
+                    byte[] response = """
+                        data: {"id":"chatcmpl-stream-1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"S-1"},"finish_reason":null}]}
+
+                        data: {"id":"chatcmpl-stream-1","object":"chat.completion.chunk","created":1760000001,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"S-2"},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":80,"total_tokens":200}}
+
+                        data: [DONE]
+
+                        """.getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+                    exchange.sendResponseHeaders(200, 0);
+                    try (OutputStream outputStream = exchange.getResponseBody()) {
+                        outputStream.write(response);
+                    }
+                    return;
+                }
                 String marker = extractPromptMarker(requestBody);
                 byte[] response = """
                     {
@@ -605,6 +660,30 @@ class Phase4AnalysisIntegrationTest {
             promptContent,
             modelName,
             id
+        );
+    }
+
+    private void updateSystemConfig(String configKey, String configValue) {
+        int updated = jdbcTemplate.update(
+            """
+                UPDATE system_config
+                SET config_value = ?, update_time = CURRENT_TIMESTAMP
+                WHERE config_key = ?
+                """,
+            configValue,
+            configKey
+        );
+        if (updated > 0) {
+            return;
+        }
+        jdbcTemplate.update(
+            """
+                INSERT INTO system_config(config_key, config_value, config_type, description, is_editable, deleted)
+                VALUES (?, ?, 'analysis', ?, 1, 0)
+                """,
+            configKey,
+            configValue,
+            configKey
         );
     }
 }

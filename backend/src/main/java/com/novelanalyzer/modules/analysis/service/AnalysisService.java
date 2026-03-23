@@ -187,6 +187,20 @@ public class AnalysisService {
                     if (streamed) return; // 真流式已异步启动，退出当前线程
                 }
 
+                if (useChunk) {
+                    AnalysisResultVO result = streamChunkedAnalysis(
+                        emitter,
+                        request,
+                        promptConfig,
+                        book,
+                        chapters,
+                        analysisType
+                    );
+                    sendDoneEvent(emitter, result);
+                    emitter.complete();
+                    return;
+                }
+
                 // 降级：chunk 分析或流式不可用 → 阻塞等全文再切割推送
                 AnalysisResultVO result = analyze(analysisType, request);
                 sendDeltaEvents(emitter, result.getResultContent());
@@ -340,12 +354,18 @@ public class AnalysisService {
     private void sendDeltaEvents(SseEmitter emitter, String content) throws IOException {
         List<String> chunks = splitContent(content);
         for (int i = 0; i < chunks.size(); i++) {
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("event", "delta");
-            payload.put("delta", chunks.get(i));
-            payload.put("chunkIndex", i);
-            sendEvent(emitter, "delta", payload);
+            sendDeltaEvent(emitter, chunks.get(i), i);
         }
+    }
+
+    private void sendDeltaEvent(SseEmitter emitter, String delta, Integer chunkIndex) throws IOException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("event", "delta");
+        payload.put("delta", delta);
+        if (chunkIndex != null) {
+            payload.put("chunkIndex", chunkIndex);
+        }
+        sendEvent(emitter, "delta", payload);
     }
 
     private void sendDoneEvent(SseEmitter emitter, Object data) throws IOException {
@@ -426,6 +446,14 @@ public class AnalysisService {
                                                  CrawlBookEntity book,
                                                  List<ChapterVO> chapters,
                                                  String analysisType) {
+        return invokeChunkedAnalysis(promptConfig, book, chapters, analysisType, null);
+    }
+
+    private AiInvokeResult invokeChunkedAnalysis(PromptConfigEntity promptConfig,
+                                                 CrawlBookEntity book,
+                                                 List<ChapterVO> chapters,
+                                                 String analysisType,
+                                                 java.util.function.Consumer<String> progressListener) {
         List<List<ChapterVO>> chunks = splitChaptersForChunkedAnalysis(promptConfig, book, chapters, analysisType);
         if (chunks.size() <= 1) {
             return invokeAi(promptConfig, buildBookInputText(book, chapters), analysisType);
@@ -435,6 +463,7 @@ public class AnalysisService {
         int tokenUsed = 0;
         for (int index = 0; index < chunks.size(); index++) {
             List<ChapterVO> chunk = chunks.get(index);
+            emitChunkProgress(progressListener, buildChunkProgressMessage(index + 1, chunks.size(), chunk, "正在分析"));
             String chunkInput = buildBookInputText(book, chunk);
             PromptConfigEntity chunkPrompt = copyPromptConfig(
                 promptConfig,
@@ -443,7 +472,10 @@ public class AnalysisService {
             AiInvokeResult chunkResult = aiGatewayService.analyze(chunkPrompt, chunkInput, analysisType);
             tokenUsed += Math.max(0, chunkResult.getTokenUsed());
             chunkOutputs.add(buildChunkResultText(index + 1, chunk, chunkResult));
+            emitChunkProgress(progressListener, buildChunkProgressMessage(index + 1, chunks.size(), chunk, "已完成"));
         }
+
+        emitChunkProgress(progressListener, "\n[chunk-progress] 分段分析已完成，正在汇总最终结果...\n");
 
         PromptConfigEntity mergePrompt = copyPromptConfig(
             promptConfig,
@@ -546,6 +578,68 @@ public class AnalysisService {
             builder.append(chunkOutput).append("\n\n");
         }
         return builder.toString();
+    }
+
+    private AnalysisResultVO streamChunkedAnalysis(SseEmitter emitter,
+                                                   AnalysisRequest request,
+                                                   PromptConfigEntity promptConfig,
+                                                   CrawlBookEntity book,
+                                                   List<ChapterVO> chapters,
+                                                   String analysisType) throws IOException {
+        AiInvokeResult aiResult = invokeChunkedAnalysis(
+            promptConfig,
+            book,
+            chapters,
+            analysisType,
+            progress -> {
+                try {
+                    sendDeltaEvent(emitter, progress, null);
+                } catch (IOException ex) {
+                    throw new RuntimeException(ex);
+                }
+            }
+        );
+
+        Long resultId = saveAnalysisResult(
+            request.getPlatform(),
+            request.getBookId(),
+            analysisType,
+            request.getChapterCount(),
+            promptConfig.getId(),
+            aiResult
+        );
+
+        AnalysisResultVO vo = new AnalysisResultVO();
+        vo.setId(resultId);
+        vo.setBookId(request.getBookId());
+        vo.setAnalysisType(analysisType);
+        vo.setModelName(aiResult.getModelName());
+        vo.setResultContent(aiResult.getContent());
+        vo.setResultJson(aiResult.getResultJson());
+        vo.setTokenUsed(aiResult.getTokenUsed());
+        crawlerCacheService.put(
+            buildAnalysisCacheKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount()),
+            vo,
+            ANALYSIS_TTL_SECONDS
+        );
+        return vo;
+    }
+
+    private void emitChunkProgress(java.util.function.Consumer<String> progressListener, String message) {
+        if (progressListener == null || message == null || message.isBlank()) {
+            return;
+        }
+        progressListener.accept(message);
+    }
+
+    private String buildChunkProgressMessage(int chunkIndex,
+                                             int chunkCount,
+                                             List<ChapterVO> chunk,
+                                             String status) {
+        String firstTitle = chunk.isEmpty() ? "unknown" : chunk.get(0).getChapterTitle();
+        String lastTitle = chunk.isEmpty() ? "unknown" : chunk.get(chunk.size() - 1).getChapterTitle();
+        return "\n[chunk-progress] 第 " + chunkIndex + "/" + chunkCount + " 段" + status
+            + "（" + firstTitle + " ~ " + lastTitle + "）\n";
     }
 
     private List<ChapterVO> loadAnalysisChapters(AnalysisRequest request) {

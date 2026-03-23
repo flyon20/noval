@@ -6,6 +6,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.input.PromptTemplate;
+import dev.langchain4j.model.openai.OpenAiChatResponseMetadata;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.service.AiServices;
@@ -185,7 +186,7 @@ public class AiGatewayService {
                                    SseEmitter emitter,
                                    BiConsumer<SseEmitter, AiInvokeResult> onDone,
                                    Consumer<Throwable> onError) {
-        if (!aiProperties.getOpenAiCompatible().isStreamingEnabled()) {
+        if (!isOpenAiCompatibleStreamingEnabled()) {
             return false;
         }
         String apiKey = resolveOpenAiCompatibleApiKey();
@@ -217,6 +218,9 @@ public class AiGatewayService {
 
             @Override
             public void onCompleteResponse(ChatResponse response) {
+                if (buffer.isEmpty()) {
+                    emitRawStreamingDeltas(response, buffer, emitter);
+                }
                 String content = buffer.toString();
                 String usedModel = firstNonBlank(response.modelName(), resolvedModel);
                 Integer totalTokens = Optional.ofNullable(response.tokenUsage())
@@ -237,6 +241,67 @@ public class AiGatewayService {
             }
         });
         return true;
+    }
+
+    private void emitRawStreamingDeltas(ChatResponse response,
+                                        StringBuilder buffer,
+                                        SseEmitter emitter) {
+        for (String delta : extractRawStreamingDeltas(response)) {
+            buffer.append(delta);
+            try {
+                emitter.send(SseEmitter.event()
+                    .name("delta")
+                    .data(Map.of("event", "delta", "delta", delta)));
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private java.util.List<String> extractRawStreamingDeltas(ChatResponse response) {
+        if (!(response.metadata() instanceof OpenAiChatResponseMetadata metadata)) {
+            return java.util.List.of();
+        }
+        if (metadata.rawServerSentEvents() == null || metadata.rawServerSentEvents().isEmpty()) {
+            return java.util.List.of();
+        }
+
+        java.util.List<String> deltas = new java.util.ArrayList<>();
+        for (dev.langchain4j.http.client.sse.ServerSentEvent event : metadata.rawServerSentEvents()) {
+            String rawData = event == null ? null : event.data();
+            if (rawData == null || rawData.isBlank() || "[DONE]".equals(rawData)) {
+                continue;
+            }
+            try {
+                Map<String, Object> payload = objectMapper.readValue(rawData, new TypeReference<Map<String, Object>>() {
+                });
+                java.util.List<Map<String, Object>> choices = objectMapper.convertValue(
+                    payload.get("choices"),
+                    new TypeReference<java.util.List<Map<String, Object>>>() {
+                    }
+                );
+                if (choices == null || choices.isEmpty()) {
+                    continue;
+                }
+                Map<String, Object> delta = objectMapper.convertValue(
+                    choices.get(0).get("delta"),
+                    new TypeReference<Map<String, Object>>() {
+                    }
+                );
+                String content = asString(delta.get("content"));
+                if (content != null && !content.isBlank()) {
+                    deltas.add(content);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return deltas;
+    }
+
+    private boolean isOpenAiCompatibleStreamingEnabled() {
+        return systemConfigService.getBooleanValueOrDefault(
+            "ai.openai-compatible.streaming-enabled",
+            aiProperties.getOpenAiCompatible().isStreamingEnabled()
+        );
     }
 
     private OpenAiChatModel getOrCreateChatModel(String baseUrl, String apiKey,
