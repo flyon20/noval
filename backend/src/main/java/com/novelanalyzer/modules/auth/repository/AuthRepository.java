@@ -58,6 +58,52 @@ public class AuthRepository {
         return Optional.of(user);
     }
 
+    public boolean existsUserByUsername(String username) {
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM sys_user WHERE username = ?",
+            Integer.class,
+            username
+        );
+        return count != null && count > 0;
+    }
+
+    public Long insertUser(String username, String encodedPassword) {
+        jdbcTemplate.update(
+            """
+            INSERT INTO sys_user (username, password, status, deleted, create_time, update_time, version)
+            VALUES (?, ?, 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+            """,
+            username,
+            encodedPassword
+        );
+
+        return jdbcTemplate.queryForObject(
+            "SELECT id FROM sys_user WHERE username = ? LIMIT 1",
+            Long.class,
+            username
+        );
+    }
+
+    public Optional<Long> findActiveRoleIdByCode(String roleCode) {
+        List<Long> roleIds = jdbcTemplate.queryForList(
+            "SELECT id FROM sys_role WHERE role_code = ? AND deleted = 0 AND status = 1 LIMIT 1",
+            Long.class,
+            roleCode
+        );
+        if (roleIds.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(roleIds.get(0));
+    }
+
+    public void insertUserRole(Long userId, Long roleId) {
+        jdbcTemplate.update(
+            "INSERT INTO sys_user_role (user_id, role_id, create_time) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            userId,
+            roleId
+        );
+    }
+
     public List<String> findRoleCodesByUserId(Long userId) {
         return jdbcTemplate.queryForList(
             """

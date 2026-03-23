@@ -1,5 +1,7 @@
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue';
+
+const props = defineProps<{
   platform: 'fanqie';
   activeCategory: string;
   categories: Array<{
@@ -12,18 +14,24 @@ defineProps<{
 const emit = defineEmits<{
   select: [category: string];
 }>();
+
+const platformLabel = computed(() => (props.platform === 'fanqie' ? '番茄小说' : props.platform));
+const activeCategoryLabel = computed(
+  () => props.categories.find((item) => item.value === props.activeCategory)?.label ?? '全部榜单',
+);
 </script>
 
 <template>
   <section class="trend-context">
     <div class="trend-context__copy">
-      <p class="trend-context__eyebrow">Trend Intelligence</p>
+      <p class="trend-context__eyebrow">趋势情报</p>
       <h2 class="trend-context__title">榜单趋势流式分析</h2>
       <p class="trend-context__description">
-        结合最新快照和历史分析结果，持续输出当前榜单主题、节奏和结构变化。
+        结合最新快照和历史分析结果，持续输出当前榜单的主题、节奏和结构变化，并把可视化数据同步整理成中文视图。
       </p>
       <div class="trend-context__chips">
-        <span class="trend-context__chip">平台：{{ platform }}</span>
+        <span class="trend-context__chip">平台：{{ platformLabel }}</span>
+        <span class="trend-context__chip">当前分类：{{ activeCategoryLabel }}</span>
         <span class="trend-context__chip">{{ running ? '状态：分析中' : '状态：待命' }}</span>
       </div>
     </div>

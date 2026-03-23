@@ -23,8 +23,10 @@ function createTrendResult(overrides: Partial<TrendAnalysisResult> = {}): TrendA
     platform: 'fanqie',
     category: 'male-hot-a',
     modelName: 'dify',
-    resultContent: '# 趋势结论\n榜单热词继续上扬，权谋成长仍然最强。',
-    resultJson: {},
+    resultContent: '# 趋势结论\n' + '这是一个很长的趋势分析结果。'.repeat(60),
+    resultJson: {
+      summary: '这是用于摘要预览的趋势分析总结。'.repeat(30),
+    },
     sourceSnapshotCount: 3,
     ...overrides,
   };
@@ -41,23 +43,16 @@ function createVisualPayload() {
       { date: '2026-03-21', value: 4 },
     ],
     rankCategoryDistribution: [
-      { name: 'male-hot-a', value: 10 },
-      { name: 'male-hot-b', value: 8 },
+      { name: 'male-read:261', value: 20 },
+      { name: 'female-new:1017', value: 10 },
     ],
     latestSnapshots: [
-      { category: 'male-hot-a', crawlTime: '2026-03-21 10:00:00', bookCount: 50 },
+      { category: 'male-read:261', crawlTime: '2026-03-21 10:00:00', bookCount: 50 },
     ],
-    wordCloud: [
-      { name: '权谋', value: 18 },
-      { name: '热血', value: 12 },
-    ],
-    themeTable: [
-      { theme: '权谋成长', count: 8, trend: 'up' },
-    ],
-    comparisonSummary: '近三次快照中，权谋成长主题持续升温。',
-    snapshotComparisons: [
-      { snapshotTime: '2026-03-21 10:00:00', topTheme: '权谋成长', change: '较上次上升' },
-    ],
+    wordCloud: [],
+    themeTable: [],
+    comparisonSummary: null,
+    snapshotComparisons: [],
   };
 }
 
@@ -175,7 +170,7 @@ describe('TrendView', () => {
     );
   });
 
-  test('renders visual summary and chart section after data load', async () => {
+  test('maps fetched trend data into Chinese labels and summaries', async () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
 
@@ -204,8 +199,52 @@ describe('TrendView', () => {
 
     await flushPromises();
 
-    expect(wrapper.get('[data-test="trend-visual-section"]').text()).toContain('近三次快照中');
-    expect(wrapper.get('[data-test="trend-tag-cloud"]').text()).toContain('权谋');
-    expect(wrapper.get('[data-test="trend-snapshot-table"]').text()).toContain('male-hot-a');
+    expect(wrapper.get('[data-test="trend-visual-section"]').text()).toContain('趋势图表');
+    expect(wrapper.get('[data-test="trend-comparison-list"]').text()).toContain('拆文分析');
+    expect(wrapper.get('[data-test="trend-snapshot-table"]').text()).toContain('男频在读榜');
+    expect(wrapper.get('[data-test="trend-snapshot-table"]').text()).not.toContain('male-read:261');
+  });
+
+  test('shows preview first and opens full detail drawer for long trend results', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload(),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createStreamTask(createTrendResult()));
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/trend', component: TrendView }],
+    });
+    await router.push('/trend');
+
+    const wrapper = mount(TrendView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="trend-result-preview"]').text().length).toBeLessThan(380);
+    expect(wrapper.get('[data-test="trend-result-detail-open"]').text()).toContain('查看详情');
+
+    await wrapper.get('[data-test="trend-result-detail-open"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="trend-result-detail"]').text()).toContain('这是一个很长的趋势分析结果');
+
+    await wrapper.get('[data-test="trend-result-detail-close"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="trend-result-detail"]').exists()).toBe(false);
   });
 });

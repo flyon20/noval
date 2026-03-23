@@ -19,11 +19,11 @@ const normalizedItems = computed(() => {
 <template>
   <article class="trend-tag-cloud" data-test="trend-tag-cloud">
     <header class="trend-tag-cloud__header">
-      <h3>主题标签云</h3>
-      <p>按热度映射字号，快速观察当前主题重心。</p>
+      <h3>趋势标签云</h3>
+      <p>优先展示接口返回的主题词；如果接口暂时没有词云，就自动用现有分析类型和榜单覆盖数据补齐。</p>
     </header>
 
-    <div class="trend-tag-cloud__body">
+    <div v-if="normalizedItems.length" class="trend-tag-cloud__body">
       <span
         v-for="item in normalizedItems"
         :key="item.name"
@@ -33,6 +33,7 @@ const normalizedItems = computed(() => {
         {{ item.name }}
       </span>
     </div>
+    <p v-else class="trend-tag-cloud__empty">暂无可用标签，将在积累更多趋势样本后展示。</p>
   </article>
 </template>
 
@@ -53,11 +54,13 @@ const normalizedItems = computed(() => {
 }
 
 .trend-tag-cloud__header h3,
-.trend-tag-cloud__header p {
+.trend-tag-cloud__header p,
+.trend-tag-cloud__empty {
   margin: 0;
 }
 
-.trend-tag-cloud__header p {
+.trend-tag-cloud__header p,
+.trend-tag-cloud__empty {
   color: var(--color-text-muted);
   line-height: 1.6;
 }

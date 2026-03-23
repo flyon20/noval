@@ -3,15 +3,23 @@ import { ElMessage } from 'element-plus';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { analysisApi } from '@/api/analysis';
 import { dataApi } from '@/api/data';
-import AnalysisResultCard from '@/components/analysis/AnalysisResultCard.vue';
 import AnalysisToolbar from '@/components/analysis/AnalysisToolbar.vue';
 import TrendChartCard from '@/components/trend/TrendChartCard.vue';
 import TrendComparisonList from '@/components/trend/TrendComparisonList.vue';
 import TrendContextBar from '@/components/trend/TrendContextBar.vue';
+import TrendResultPreview from '@/components/trend/TrendResultPreview.vue';
 import TrendSnapshotTable from '@/components/trend/TrendSnapshotTable.vue';
 import TrendSummaryCards from '@/components/trend/TrendSummaryCards.vue';
 import TrendTagCloud from '@/components/trend/TrendTagCloud.vue';
 import { useTrendRun } from '@/composables/useTrendRun';
+import {
+  buildFallbackTagCloud,
+  buildPreviewText,
+  extractTrendSummary,
+  formatTrendRequestCategoryLabel,
+  groupRankCategories,
+  toAnalysisTypeRanking,
+} from '@/lib/trend-display';
 import type { VisualData } from '@/types/data';
 
 const CATEGORY_OPTIONS = [
@@ -19,6 +27,16 @@ const CATEGORY_OPTIONS = [
   { label: '男频热门 B', value: 'male-hot-b' },
   { label: '男频新书 A', value: 'male-new-a' },
 ] as const;
+
+const PHASE_LABELS = {
+  idle: '待命',
+  preparing: '准备中',
+  streaming: '流式分析中',
+  'fallback-blocking': '回退阻塞接口',
+  done: '已完成',
+  error: '分析失败',
+  aborted: '已停止',
+} as const;
 
 const visualData = ref<VisualData | null>(null);
 const visualLoading = ref(false);
@@ -40,6 +58,50 @@ const trend = useTrendRun({
 const isRunning = computed(() =>
   ['preparing', 'streaming', 'fallback-blocking'].includes(trend.state.phase),
 );
+const trendSummaryText = computed(() =>
+  extractTrendSummary(trend.state.result?.resultJson, trend.state.result?.resultContent ?? trend.state.streamingText),
+);
+const analysisTypeRanking = computed(() => toAnalysisTypeRanking(visualData.value?.analysisTypeDistribution ?? []));
+const categoryRanking = computed(() => groupRankCategories(visualData.value?.rankCategoryDistribution ?? []));
+const analysisTypeChartData = computed(() =>
+  analysisTypeRanking.value.map((item) => ({
+    name: item.label,
+    value: item.value,
+  })),
+);
+const rankCategoryChartData = computed(() =>
+  categoryRanking.value.map((item) => ({
+    name: item.label,
+    value: item.value,
+  })),
+);
+const comparisonSummary = computed(
+  () => visualData.value?.comparisonSummary?.trim() || trendSummaryText.value || '',
+);
+const summaryPreview = computed(() => buildPreviewText(comparisonSummary.value, 180));
+const currentCategoryLabel = computed(() => formatTrendRequestCategoryLabel(trend.state.category));
+const historyAnalysisCount = computed(() =>
+  analysisTypeChartData.value.reduce((total, item) => total + item.value, 0),
+);
+const coveredCategoryCount = computed(() => categoryRanking.value.length);
+const latestSnapshotTime = computed(() => {
+  const snapshots = visualData.value?.latestSnapshots ?? [];
+
+  return snapshots
+    .map((item) => item.crawlTime)
+    .filter(Boolean)
+    .sort((left, right) => right.localeCompare(left))[0] ?? '';
+});
+const tagCloudItems = computed(() => {
+  const items = visualData.value?.wordCloud ?? [];
+
+  if (items.length) {
+    return items;
+  }
+
+  return buildFallbackTagCloud(visualData.value?.analysisTypeDistribution ?? [], categoryRanking.value);
+});
+const phaseLabel = computed(() => PHASE_LABELS[trend.state.phase]);
 
 const pieOption = computed(() => ({
   tooltip: { trigger: 'item' },
@@ -48,7 +110,7 @@ const pieOption = computed(() => ({
     {
       type: 'pie',
       radius: ['42%', '72%'],
-      data: visualData.value?.analysisTypeDistribution ?? [],
+      data: analysisTypeChartData.value,
     },
   ],
 }));
@@ -74,17 +136,21 @@ const lineOption = computed(() => ({
 
 const barOption = computed(() => ({
   tooltip: { trigger: 'axis' },
-  grid: { left: 24, right: 16, top: 24, bottom: 24, containLabel: true },
+  grid: { left: 24, right: 16, top: 24, bottom: 48, containLabel: true },
   xAxis: {
     type: 'category',
-    data: visualData.value?.rankCategoryDistribution.map((item) => item.name) ?? [],
+    data: rankCategoryChartData.value.map((item) => item.name),
+    axisLabel: {
+      interval: 0,
+      rotate: rankCategoryChartData.value.length > 3 ? 18 : 0,
+    },
   },
   yAxis: { type: 'value' },
   series: [
     {
       type: 'bar',
       barMaxWidth: 32,
-      data: visualData.value?.rankCategoryDistribution.map((item) => item.value) ?? [],
+      data: rankCategoryChartData.value.map((item) => item.value),
     },
   ],
 }));
@@ -156,7 +222,7 @@ onBeforeUnmount(() => {
         <div class="trend-page__toolbar">
           <div class="trend-page__toolbar-copy">
             <p class="trend-page__toolbar-title">趋势页</p>
-            <p class="trend-page__toolbar-subtitle">查看趋势结果与图表。</p>
+            <p class="trend-page__toolbar-subtitle">先看 300 字预览，再按需展开完整趋势分析。</p>
           </div>
           <AnalysisToolbar
             :disabling="false"
@@ -168,7 +234,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div data-test="trend-result-panel">
-          <AnalysisResultCard
+          <TrendResultPreview
             :error-message="trend.state.errorMessage"
             :phase="trend.state.phase"
             :result-content="trend.state.result?.resultContent"
@@ -176,6 +242,7 @@ onBeforeUnmount(() => {
               traceId: trend.state.result?.traceId ?? trend.state.traceId,
               modelName: trend.state.result?.modelName,
             }"
+            :result-summary="trendSummaryText"
             :streaming-text="trend.state.streamingText"
           />
         </div>
@@ -183,15 +250,20 @@ onBeforeUnmount(() => {
 
       <aside class="trend-page__insights">
         <TrendSummaryCards
-          :comparison-summary="visualData?.comparisonSummary"
-          :phase="trend.state.phase"
+          :covered-category-count="coveredCategoryCount"
+          :current-category-label="currentCategoryLabel"
+          :history-analysis-count="historyAnalysisCount"
+          :latest-snapshot-time="latestSnapshotTime"
+          :phase-label="phaseLabel"
           :source-snapshot-count="trend.state.result?.sourceSnapshotCount"
+          :summary="summaryPreview"
         />
-        <TrendTagCloud :items="visualData?.wordCloud ?? []" />
+        <TrendTagCloud :items="tagCloudItems" />
         <TrendComparisonList
+          :analysis-types="analysisTypeRanking"
+          :categories="categoryRanking"
           :comparisons="visualData?.snapshotComparisons ?? []"
-          :summary="visualData?.comparisonSummary"
-          :themes="visualData?.themeTable ?? []"
+          :summary="summaryPreview"
         />
       </aside>
     </div>
@@ -199,29 +271,29 @@ onBeforeUnmount(() => {
     <section class="trend-page__visual" data-test="trend-visual-section">
       <header class="trend-page__visual-header">
         <div>
-          <p class="trend-page__visual-eyebrow">Charts</p>
+          <p class="trend-page__visual-eyebrow">趋势图谱</p>
           <h3 class="trend-page__visual-title">趋势图表</h3>
         </div>
         <p class="trend-page__visual-summary">
-          {{ visualData?.comparisonSummary || '图表区域会汇总最近快照的主题变化。' }}
+          {{ summaryPreview || '图表区域会优先使用已抓到的快照和历史分析结果，自动补齐当前能拿到的趋势信息。' }}
         </p>
       </header>
 
       <TrendChartCard
         title="分析类型分布"
-        subtitle="观察历史分析结果在不同分析类型间的分布。"
+        subtitle="观察历史分析结果在不同分析类型之间的覆盖情况。"
         :option="pieOption"
         :height="280"
       />
       <TrendChartCard
         title="分析日趋势"
-        subtitle="近几天分析记录的数量变化。"
+        subtitle="最近几天趋势分析记录的数量变化。"
         :option="lineOption"
         :height="280"
       />
       <TrendChartCard
         title="榜单分类分布"
-        subtitle="当前可视化样本覆盖到的榜单分类。"
+        subtitle="把原始分类码聚合后，展示当前样本主要覆盖了哪些中文榜单。"
         :option="barOption"
         :height="280"
       />
@@ -239,7 +311,7 @@ onBeforeUnmount(() => {
     <el-alert
       v-else-if="visualLoading && !visualData"
       title="可视化数据加载中"
-      description="正在获取图表与快照数据。"
+      description="正在获取趋势图表和最新快照数据。"
       type="info"
       show-icon
       :closable="false"

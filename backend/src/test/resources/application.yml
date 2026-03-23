@@ -19,6 +19,7 @@ app:
     whitelist-paths:
       - /api/system/health
       - /api/auth/login
+      - /api/auth/register
       - /api/auth/refresh
   crawler:
     base-url: http://127.0.0.1:5000

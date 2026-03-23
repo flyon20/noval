@@ -1,11 +1,14 @@
 import { clearCurrentSession, getAccessToken } from '@/lib/auth-session';
 import { httpClient, rawHttpClient } from '@/lib/http';
 import type { ApiResponse } from '@/types/api';
-import type { LoginRequest, TokenResponse } from '@/types/auth';
+import type { LoginRequest, RegisterRequest, TokenResponse } from '@/types/auth';
 
 export const authApi = {
   login(payload: LoginRequest) {
     return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/login', payload);
+  },
+  register(payload: RegisterRequest) {
+    return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/register', payload);
   },
   async logout() {
     const token = getAccessToken();

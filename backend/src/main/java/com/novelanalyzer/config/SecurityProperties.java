@@ -24,6 +24,7 @@ public class SecurityProperties {
     private List<String> whitelistPaths = new ArrayList<>(Arrays.asList(
         "/api/system/health",
         "/api/auth/login",
+        "/api/auth/register",
         "/api/auth/refresh"
     ));
     private List<String> trustedProxyIps = new ArrayList<>();

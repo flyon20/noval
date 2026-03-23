@@ -4,6 +4,7 @@ import com.novelanalyzer.common.result.Result;
 import com.novelanalyzer.common.web.RequestIpResolver;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
 import com.novelanalyzer.modules.auth.dto.RefreshTokenRequest;
+import com.novelanalyzer.modules.auth.dto.RegisterRequest;
 import com.novelanalyzer.modules.auth.service.AuthService;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
 import com.novelanalyzer.modules.security.service.RateLimitService;
@@ -37,6 +38,14 @@ public class AuthController {
         String requestIp = requestIpResolver.resolve(httpServletRequest);
         rateLimitService.assertWithinLimit(requestIp, "/api/auth/login", null);
         return Result.success(authService.login(request, requestIp));
+    }
+
+    @PostMapping("/register")
+    public Result<TokenResponse> register(@Valid @RequestBody RegisterRequest request,
+                                          HttpServletRequest httpServletRequest) {
+        String requestIp = requestIpResolver.resolve(httpServletRequest);
+        rateLimitService.assertWithinLimit(requestIp, "/api/auth/register", null);
+        return Result.success(authService.register(request, requestIp));
     }
 
     @PostMapping("/refresh")

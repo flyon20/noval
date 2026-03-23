@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { reactive } from 'vue';
+import { computed, reactive } from 'vue';
 import { useRouter } from 'vue-router';
-import { User, Lock } from '@element-plus/icons-vue';
+import { Lock, User } from '@element-plus/icons-vue';
 import { authApi } from '@/api/auth';
 import { systemApi } from '@/api/system';
 import { HOME_ROUTE } from '@/constants/auth';
@@ -9,19 +9,25 @@ import { DEFAULT_PLATFORM } from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
 import { useAuthStore } from '@/stores/auth';
 
+type AuthMode = 'login' | 'register';
+
 const router = useRouter();
 const authStore = useAuthStore();
 
 const form = reactive({
   username: '',
   password: '',
+  confirmPassword: '',
 });
 
 const state = reactive({
+  mode: 'login' as AuthMode,
   submitting: false,
   errorMessage: '',
   traceId: '',
 });
+
+const isRegisterMode = computed(() => state.mode === 'register');
 
 function triggerLoginBootstrap() {
   try {
@@ -33,10 +39,36 @@ function triggerLoginBootstrap() {
   }
 }
 
-async function handleSubmit() {
+function switchMode(mode: AuthMode) {
+  if (state.submitting || state.mode === mode) {
+    return;
+  }
+
+  state.mode = mode;
+  state.errorMessage = '';
+  state.traceId = '';
+  form.password = '';
+  form.confirmPassword = '';
+}
+
+function validateForm() {
   if (!form.username.trim() || !form.password.trim()) {
     state.errorMessage = '请输入用户名和密码';
     state.traceId = '';
+    return false;
+  }
+
+  if (isRegisterMode.value && form.password !== form.confirmPassword) {
+    state.errorMessage = '两次输入的密码不一致';
+    state.traceId = '';
+    return false;
+  }
+
+  return true;
+}
+
+async function handleSubmit() {
+  if (!validateForm()) {
     return;
   }
 
@@ -45,17 +77,20 @@ async function handleSubmit() {
   state.traceId = '';
 
   try {
-    const response = await authApi.login({
+    const payload = {
       username: form.username.trim(),
       password: form.password,
-    });
+    };
+    const response = isRegisterMode.value
+      ? await authApi.register(payload)
+      : await authApi.login(payload);
 
     authStore.applyTokenResponse(response.data.data);
     triggerLoginBootstrap();
     await router.push(HOME_ROUTE);
   } catch (error) {
     const payload = getErrorPayload(error);
-    state.errorMessage = payload.message ?? '登录失败，请稍后重试';
+    state.errorMessage = payload.message ?? `${isRegisterMode.value ? '注册' : '登录'}失败，请稍后重试`;
     state.traceId = payload.traceId ?? '';
   } finally {
     state.submitting = false;
@@ -91,9 +126,33 @@ async function handleSubmit() {
 
     <section class="login-page__panel login-page__form-wrap">
       <div class="login-card">
+        <div class="login-card__mode">
+          <button
+            class="login-card__mode-item"
+            :class="{ 'is-active': !isRegisterMode }"
+            type="button"
+            data-test="auth-mode-login"
+            @click="switchMode('login')"
+          >
+            登录
+          </button>
+          <button
+            class="login-card__mode-item"
+            :class="{ 'is-active': isRegisterMode }"
+            type="button"
+            data-test="auth-mode-register"
+            @click="switchMode('register')"
+          >
+            注册
+          </button>
+        </div>
+
         <div class="login-card__heading">
-          <p class="login-card__eyebrow">账号登录</p>
-          <h2 class="login-card__title">进入工作台</h2>
+          <p class="login-card__eyebrow">{{ isRegisterMode ? '快速注册' : '账号登录' }}</p>
+          <h2 class="login-card__title">{{ isRegisterMode ? '创建新账号' : '进入工作台' }}</h2>
+          <p class="login-card__subtitle">
+            {{ isRegisterMode ? '当前为免验证码注册，注册成功后将自动进入系统。' : '使用已有账号直接进入工作台。' }}
+          </p>
         </div>
 
         <el-alert
@@ -124,8 +183,20 @@ async function handleSubmit() {
               size="large"
               :prefix-icon="Lock"
               show-password
-              autocomplete="current-password"
+              :autocomplete="isRegisterMode ? 'new-password' : 'current-password'"
               data-test="login-password"
+            />
+          </el-form-item>
+          <el-form-item v-if="isRegisterMode">
+            <el-input
+              v-model="form.confirmPassword"
+              placeholder="确认密码"
+              type="password"
+              size="large"
+              :prefix-icon="Lock"
+              show-password
+              autocomplete="new-password"
+              data-test="register-confirm-password"
             />
           </el-form-item>
           <el-button
@@ -136,7 +207,7 @@ async function handleSubmit() {
             :loading="state.submitting"
             data-test="login-submit"
           >
-            登录
+            {{ isRegisterMode ? '注册并进入' : '登录' }}
           </el-button>
         </el-form>
       </div>
@@ -266,13 +337,47 @@ async function handleSubmit() {
   box-shadow: var(--shadow-soft);
 }
 
+.login-card__mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0.35rem;
+  border-radius: 999px;
+  background: rgba(35, 65, 58, 0.06);
+}
+
+.login-card__mode-item {
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.login-card__mode-item.is-active {
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--color-primary);
+  box-shadow: 0 8px 20px rgba(35, 65, 58, 0.12);
+}
+
 .login-card__heading {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.35rem;
+}
+
+.login-card__eyebrow,
+.login-card__subtitle {
+  margin: 0;
 }
 
 .login-card__eyebrow {
-  margin: 0;
   color: var(--color-text-muted);
   font-size: 0.8rem;
   letter-spacing: 0.1em;
@@ -284,6 +389,12 @@ async function handleSubmit() {
   font-size: 1.6rem;
   font-family: var(--font-heading);
   color: var(--color-primary);
+}
+
+.login-card__subtitle {
+  color: var(--color-text-muted);
+  line-height: 1.7;
+  font-size: 0.92rem;
 }
 
 .login-card__form {
@@ -299,7 +410,6 @@ async function handleSubmit() {
   letter-spacing: 0.05em;
 }
 
-/* Mobile */
 @media (max-width: 768px) {
   .login-page {
     grid-template-columns: 1fr;
@@ -340,7 +450,6 @@ async function handleSubmit() {
   }
 }
 
-/* Tablet */
 @media (max-width: 900px) and (min-width: 769px) {
   .login-page {
     grid-template-columns: 1fr;

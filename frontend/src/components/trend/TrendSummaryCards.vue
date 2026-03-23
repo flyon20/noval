@@ -1,27 +1,60 @@
 <script setup lang="ts">
-defineProps<{
+import { computed } from 'vue';
+
+const props = defineProps<{
   sourceSnapshotCount?: number;
-  comparisonSummary?: string | null;
-  phase: 'idle' | 'preparing' | 'streaming' | 'fallback-blocking' | 'done' | 'error' | 'aborted';
+  historyAnalysisCount?: number;
+  coveredCategoryCount?: number;
+  latestSnapshotTime?: string | null;
+  currentCategoryLabel?: string;
+  summary?: string | null;
+  phaseLabel?: string;
 }>();
+
+const stats = computed(() => [
+  {
+    label: '来源快照数',
+    value: String(props.sourceSnapshotCount ?? 0),
+    note: '用于本次趋势判断的快照样本数量',
+    dataTest: 'trend-summary-snapshot-count',
+  },
+  {
+    label: '历史分析数',
+    value: String(props.historyAnalysisCount ?? 0),
+    note: '当前可视化结果中累计可用的分析记录数',
+  },
+  {
+    label: '覆盖分类数',
+    value: String(props.coveredCategoryCount ?? 0),
+    note: '已抓到并参与趋势统计的榜单分类数',
+  },
+  {
+    label: '最近快照',
+    value: props.latestSnapshotTime || '--',
+    note: '最新一次成功抓取到的榜单快照时间',
+  },
+]);
 </script>
 
 <template>
   <section class="trend-summary">
-    <article class="trend-summary__card">
-      <p class="trend-summary__label">来源快照数</p>
-      <strong class="trend-summary__value" data-test="trend-summary-snapshot-count">
-        {{ sourceSnapshotCount ?? 0 }}
-      </strong>
-      <p class="trend-summary__meta">用于本次趋势判断的榜单快照样本数。</p>
+    <article v-for="item in stats" :key="item.label" class="trend-summary__card">
+      <p class="trend-summary__label">{{ item.label }}</p>
+      <strong class="trend-summary__value" :data-test="item.dataTest">{{ item.value }}</strong>
+      <p class="trend-summary__meta">{{ item.note }}</p>
     </article>
 
     <article class="trend-summary__card trend-summary__card--wide">
-      <p class="trend-summary__label">趋势摘要</p>
+      <div class="trend-summary__summary-head">
+        <p class="trend-summary__label">趋势摘要</p>
+        <div class="trend-summary__badges">
+          <span class="trend-summary__badge">{{ currentCategoryLabel || '全部榜单' }}</span>
+          <span class="trend-summary__badge trend-summary__badge--soft">{{ phaseLabel || '待命' }}</span>
+        </div>
+      </div>
       <p class="trend-summary__copy">
-        {{ comparisonSummary || '可视化数据加载后，这里会展示近几次快照的主题变化总结。' }}
+        {{ summary || '当前还没有可展示的趋势摘要，等分析完成或可视化数据返回后会自动补齐。' }}
       </p>
-      <span class="trend-summary__badge">当前阶段：{{ phase }}</span>
     </article>
   </section>
 </template>
@@ -44,9 +77,24 @@ defineProps<{
 }
 
 .trend-summary__card--wide {
+  grid-column: 1 / -1;
   background:
     linear-gradient(135deg, rgba(255, 249, 240, 0.95), rgba(245, 248, 242, 0.9)),
     rgba(255, 255, 255, 0.92);
+}
+
+.trend-summary__summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.trend-summary__badges {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .trend-summary__label,
@@ -61,8 +109,10 @@ defineProps<{
 }
 
 .trend-summary__value {
-  font-size: clamp(2rem, 4vw, 3.1rem);
-  line-height: 1;
+  font-size: clamp(1.45rem, 2.8vw, 2.2rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .trend-summary__meta,
@@ -75,14 +125,22 @@ defineProps<{
   justify-self: start;
   padding: 0.4rem 0.75rem;
   border-radius: 999px;
-  background: rgba(35, 65, 58, 0.08);
+  background: rgba(185, 104, 31, 0.12);
   color: var(--color-text);
   font-size: 0.82rem;
+}
+
+.trend-summary__badge--soft {
+  background: rgba(35, 65, 58, 0.08);
 }
 
 @media (max-width: 760px) {
   .trend-summary {
     grid-template-columns: 1fr;
+  }
+
+  .trend-summary__card--wide {
+    grid-column: auto;
   }
 }
 </style>

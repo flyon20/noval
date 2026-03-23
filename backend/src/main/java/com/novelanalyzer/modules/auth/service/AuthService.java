@@ -5,12 +5,14 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
+import com.novelanalyzer.modules.auth.dto.RegisterRequest;
 import com.novelanalyzer.modules.auth.model.AuthUserEntity;
 import com.novelanalyzer.modules.auth.repository.AuthRepository;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
 import com.novelanalyzer.modules.security.service.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -61,6 +63,28 @@ public class AuthService {
 
         authRepository.insertLoginLog(null, request.getUsername(), loginIp, 0, "username or password is incorrect");
         throw new BusinessException(ResultCode.UNAUTHORIZED, "username or password is incorrect");
+    }
+
+    public TokenResponse register(RegisterRequest request, String registerIp) {
+        String username = request.getUsername().trim();
+        if (authRepository.existsUserByUsername(username)) {
+            authRepository.insertLoginLog(null, username, registerIp, 0, "username already exists");
+            throw new BusinessException(ResultCode.BAD_REQUEST, "username already exists");
+        }
+
+        try {
+            Long userId = authRepository.insertUser(username, passwordEncoder.encode(request.getPassword()));
+            Long defaultRoleId = authRepository.findActiveRoleIdByCode("USER")
+                .orElseThrow(() -> new BusinessException(ResultCode.INTERNAL_ERROR, "default role is not configured"));
+
+            authRepository.insertUserRole(userId, defaultRoleId);
+            List<String> roleCodes = authRepository.findRoleCodesByUserId(userId);
+            authRepository.insertLoginLog(userId, username, registerIp, 1, "register success");
+            return issueToken(userId, username, roleCodes);
+        } catch (DuplicateKeyException ex) {
+            authRepository.insertLoginLog(null, username, registerIp, 0, "username already exists");
+            throw new BusinessException(ResultCode.BAD_REQUEST, "username already exists");
+        }
     }
 
     public TokenResponse refresh(String token) {

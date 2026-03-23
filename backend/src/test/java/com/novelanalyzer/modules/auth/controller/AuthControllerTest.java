@@ -84,6 +84,57 @@ class AuthControllerTest {
     }
 
     @Test
+    void shouldRegisterUserAndReturnToken() throws Exception {
+        MvcResult registerResult = mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"new-user\",\"password\":\"secret123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+            .andReturn();
+
+        String responseBody = registerResult.getResponse().getContentAsString();
+        String accessToken = JsonPath.read(responseBody, "$.data.accessToken");
+
+        Integer userCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM sys_user WHERE username = ?",
+            Integer.class,
+            "new-user"
+        );
+        String roleCode = jdbcTemplate.queryForObject(
+            """
+            SELECT r.role_code
+            FROM sys_role r
+            INNER JOIN sys_user_role ur ON ur.role_id = r.id
+            INNER JOIN sys_user u ON u.id = ur.user_id
+            WHERE u.username = ?
+            LIMIT 1
+            """,
+            String.class,
+            "new-user"
+        );
+
+        org.assertj.core.api.Assertions.assertThat(userCount).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThat(roleCode).isEqualTo("USER");
+
+        mockMvc.perform(post("/api/auth/refresh")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"token\":\"" + accessToken + "\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+    }
+
+    @Test
+    void shouldRejectRegisterWhenUsernameExists() throws Exception {
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"secret123\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.message").value("username already exists"));
+    }
+
+    @Test
     void shouldRejectConfiguredDemoCredentialWhenDemoDisabled() throws Exception {
         mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
