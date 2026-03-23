@@ -17,7 +17,7 @@ CREATE TABLE prompt_config (
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0
 );
-CREATE UNIQUE INDEX uk_prompt_type_name ON prompt_config(prompt_type, prompt_name);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_prompt_type_name ON prompt_config(prompt_type, prompt_name);
 
 CREATE TABLE analysis_result (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,

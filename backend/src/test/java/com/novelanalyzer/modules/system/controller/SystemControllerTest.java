@@ -16,6 +16,8 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -78,10 +80,10 @@ class SystemControllerTest {
 
     @Test
     void shouldBootstrapRankBoardsOnLogin() throws Exception {
-        when(pythonCrawlerClient.fetchBoardCatalog("fanqie")).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchBoardCatalog(eq("fanqie"), any(Integer.class))).thenReturn(List.of(
             boardItem("fanqie", "male-new", "男频新书榜", "urban-brain", "都市脑洞")
         ));
-        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain")).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank(eq("fanqie"), eq("male-new"), eq("urban-brain"), any(Integer.class))).thenReturn(List.of(
             rankItem(1, "Bootstrap Book 01", "Author 01", "https://fanqienovel.com/page/bootstrap-01"),
             rankItem(2, "Bootstrap Book 02", "Author 02", "https://fanqienovel.com/page/bootstrap-02")
         ));

@@ -21,4 +21,5 @@ app:
       - /api/auth/login
       - /api/auth/refresh
   crawler:
+    base-url: http://127.0.0.1:5000
     internal-api-key: crawler-internal-test-key-1234567890

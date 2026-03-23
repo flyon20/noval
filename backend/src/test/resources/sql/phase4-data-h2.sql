@@ -8,11 +8,11 @@ INSERT INTO crawl_book (id, platform, platform_book_id, book_name, author, intro
 VALUES
     (1001, 'fanqie', 'fanqie-demo-1001', '测试书籍', '测试作者', '测试简介', 'https://fanqienovel.com/page/demo-1001', 0);
 
-INSERT INTO crawl_chapter (platform, book_id, chapter_no, chapter_title, content, word_count, deleted)
+INSERT INTO crawl_chapter (platform, book_id, chapter_no, chapter_title, content, word_count, source_word_count, deleted)
 VALUES
-    ('fanqie', 1001, 1, '第一章', '第一章节内容', 5, 0),
-    ('fanqie', 1001, 2, '第二章', '第二章节内容', 5, 0),
-    ('fanqie', 1001, 3, '第三章', '第三章节内容', 5, 0);
+    ('fanqie', 1001, 1, '第一章', '第一章节内容', 5, 5, 0),
+    ('fanqie', 1001, 2, '第二章', '第二章节内容', 5, 5, 0),
+    ('fanqie', 1001, 3, '第三章', '第三章节内容', 5, 5, 0);
 
 INSERT INTO analysis_result
     (id, user_id, platform, book_id, analysis_type, chapter_count, prompt_config_id, model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted)

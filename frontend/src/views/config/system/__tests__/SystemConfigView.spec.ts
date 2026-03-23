@@ -39,9 +39,11 @@ describe('SystemConfigView', () => {
     const expectedKeys = [
       'ai.provider.type',
       'ai.timeout.millis',
+      'ai.openai-compatible.api-key',
       'ai.openai-compatible.base-url',
       'ai.openai-compatible.default-model',
       'ai.openai-compatible.streaming-enabled',
+      'ai.available-models',
       'analysis.chunk.max-input-tokens',
       'analysis.chunk.target-input-tokens',
       'crawler.default.chapter-count',

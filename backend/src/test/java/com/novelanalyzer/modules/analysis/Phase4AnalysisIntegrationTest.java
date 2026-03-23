@@ -582,14 +582,15 @@ class Phase4AnalysisIntegrationTest {
     private void insertChapter(long bookId, int chapterNo, String chapterTitle, String content) {
         jdbcTemplate.update(
             """
-                INSERT INTO crawl_chapter(platform, book_id, chapter_no, chapter_title, content, word_count, deleted)
-                VALUES (?, ?, ?, ?, ?, ?, 0)
+                INSERT INTO crawl_chapter(platform, book_id, chapter_no, chapter_title, content, word_count, source_word_count, deleted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
                 """,
             "fanqie",
             bookId,
             chapterNo,
             chapterTitle,
             content,
+            content.length(),
             content.length()
         );
     }

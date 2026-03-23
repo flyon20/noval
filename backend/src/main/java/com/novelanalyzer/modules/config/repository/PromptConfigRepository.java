@@ -58,6 +58,7 @@ public class PromptConfigRepository {
             if (entity.getDifyApiKeyRef() != null) {
                 dbEntity.setDifyApiKeyRef(entity.getDifyApiKeyRef());
             }
+            dbEntity.setUpdateTime(java.time.LocalDateTime.now());
             promptConfigMapper.updateById(dbEntity);
             return dbEntity.getId();
         }

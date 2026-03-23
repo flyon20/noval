@@ -8,3 +8,40 @@
   --el-border-radius-base: 14px;
   --el-font-size-base: 15px;
 }
+
+/* Mobile touch target improvements */
+@media (max-width: 768px) {
+  .el-button {
+    min-height: 44px;
+  }
+
+  .el-input__wrapper {
+    min-height: 44px;
+  }
+
+  .el-input__inner {
+    height: 44px;
+    line-height: 44px;
+  }
+
+  /* Full-screen drawer on mobile */
+  .el-drawer {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Select dropdown better touch target */
+  .el-select-dropdown__item {
+    height: 44px;
+    line-height: 44px;
+  }
+
+  /* Pagination buttons larger */
+  .el-pagination .el-pager li,
+  .el-pagination .btn-prev,
+  .el-pagination .btn-next {
+    min-width: 36px;
+    height: 36px;
+    line-height: 36px;
+  }
+}

@@ -150,20 +150,22 @@ public class AiGatewayService {
                 resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
                 promptConfig.getTemperature(), promptConfig.getMaxTokens()
             );
-            // AiServices 声明式调用，替代手写 ChatRequest/ChatResponse
-            NovelAnalysisAiService svc = AiServices.builder(NovelAnalysisAiService.class)
-                .chatModel(model)
-                .build();
-            String content = svc.analyze(renderedPrompt);
+            ChatResponse response = model.chat(ChatRequest.builder()
+                .messages(UserMessage.from(renderedPrompt))
+                .build());
+            String content = response.aiMessage().text();
             if (content == null || content.isBlank()) {
                 return null;
             }
-
+            Integer totalTokens = Optional.ofNullable(response.tokenUsage())
+                .map(u -> u.totalTokenCount())
+                .orElse(null);
             Map<String, Object> resultJson = buildStructuredResult(Map.of(), content, analysisType, modelName);
             return AiInvokeResult.of(
                 modelName,
                 content,
-                Math.max(120, estimateTokenCountInternal(renderedPrompt) + estimateTokenCountInternal(content)),
+                totalTokens != null ? totalTokens
+                    : Math.max(120, estimateTokenCountInternal(renderedPrompt) + estimateTokenCountInternal(content)),
                 resultJson
             );
         } catch (Exception ex) {
@@ -183,6 +185,9 @@ public class AiGatewayService {
                                    SseEmitter emitter,
                                    BiConsumer<SseEmitter, AiInvokeResult> onDone,
                                    Consumer<Throwable> onError) {
+        if (!aiProperties.getOpenAiCompatible().isStreamingEnabled()) {
+            return false;
+        }
         String apiKey = resolveOpenAiCompatibleApiKey();
         String modelName = resolveOpenAiCompatibleModelName(promptConfig);
         if (apiKey == null || apiKey.isBlank() || modelName == null || modelName.isBlank()) {

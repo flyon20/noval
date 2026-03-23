@@ -80,15 +80,51 @@ const emit = defineEmits<{
 
 .app-shell__content {
   padding: 1.5rem;
+  flex: 1;
 }
 
-@media (max-width: 980px) {
+/* Tablet breakpoint */
+@media (max-width: 980px) and (min-width: 769px) {
   .app-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(240px, 280px) 1fr;
+    gap: 1rem;
+    padding: 1rem;
   }
 
   .app-shell__sidebar {
     position: static;
+  }
+}
+
+/* Mobile breakpoint */
+@media (max-width: 768px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: 0;
+    min-height: 100dvh;
+    background: var(--color-bg);
+  }
+
+  .app-shell__backdrop {
+    display: none;
+  }
+
+  .app-shell__sidebar {
+    display: none;
+  }
+
+  .app-shell__surface {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+    backdrop-filter: none;
+    min-height: 100dvh;
+  }
+
+  .app-shell__content {
+    padding: 0.875rem;
   }
 }
 </style>

@@ -9,8 +9,7 @@ vi.mock('@/api/config', () => ({
     update: vi.fn(),
   },
   systemConfigApi: {
-    getByKey: vi.fn(),
-    update: vi.fn(),
+    getAvailableModels: vi.fn(),
   },
 }));
 
@@ -28,7 +27,7 @@ function createPromptConfig(promptType: 'deconstruct' | 'structure' | 'plot' | '
 
 describe('PromptConfigView', () => {
   test('loads default prompt config and switches prompt type', async () => {
-    const { promptConfigApi } = await import('@/api/config');
+    const { promptConfigApi, systemConfigApi } = await import('@/api/config');
 
     vi.mocked(promptConfigApi.getByType).mockImplementation(async (promptType) => ({
       data: {
@@ -39,6 +38,15 @@ describe('PromptConfigView', () => {
         traceId: `trace-${promptType}`,
       },
     }));
+    vi.mocked(systemConfigApi.getAvailableModels).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: ['dify', 'deepseek-chat'],
+        timestamp: 1,
+        traceId: 'trace-models',
+      },
+    });
 
     const router = createRouter({
       history: createMemoryHistory(),
@@ -55,7 +63,7 @@ describe('PromptConfigView', () => {
     await flushPromises();
 
     expect(promptConfigApi.getByType).toHaveBeenCalledWith('deconstruct');
-    expect(wrapper.text()).toContain('正文占位');
+    expect(wrapper.text()).toContain('{{content}}');
 
     await wrapper.get('[data-test="prompt-type-structure"]').trigger('click');
     await flushPromises();
@@ -64,7 +72,7 @@ describe('PromptConfigView', () => {
   });
 
   test('submits prompt config update with current form values', async () => {
-    const { promptConfigApi } = await import('@/api/config');
+    const { promptConfigApi, systemConfigApi } = await import('@/api/config');
 
     vi.mocked(promptConfigApi.getByType).mockResolvedValue({
       data: {
@@ -73,6 +81,15 @@ describe('PromptConfigView', () => {
         data: createPromptConfig('deconstruct'),
         timestamp: 1,
         traceId: 'trace-deconstruct',
+      },
+    });
+    vi.mocked(systemConfigApi.getAvailableModels).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: ['dify', 'dify-chat'],
+        timestamp: 1,
+        traceId: 'trace-models',
       },
     });
     vi.mocked(promptConfigApi.update).mockResolvedValue({
@@ -103,7 +120,8 @@ describe('PromptConfigView', () => {
     await wrapper
       .get('[data-test="prompt-content-input"]')
       .setValue('新的提示词模板，保留正文占位：{{content}}');
-    await wrapper.get('[data-test="prompt-model-input"]').setValue('dify-chat');
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 'dify-chat');
+    await flushPromises();
     await wrapper.get('[data-test="prompt-temperature-input"]').setValue('0.9');
     await wrapper.get('[data-test="prompt-max-tokens-input"]').setValue('4096');
     await wrapper.get('[data-test="prompt-save-button"]').trigger('click');

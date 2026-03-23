@@ -16,7 +16,7 @@ CREATE TABLE crawl_book (
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0
 );
-CREATE UNIQUE INDEX uk_platform_url ON crawl_book(platform, book_url);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_platform_url ON crawl_book(platform, book_url);
 
 CREATE TABLE crawl_rank (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -46,7 +46,7 @@ CREATE TABLE crawl_chapter (
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0
 );
-CREATE UNIQUE INDEX uk_book_chapter ON crawl_chapter(book_id, chapter_no);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_book_chapter ON crawl_chapter(book_id, chapter_no);
 
 CREATE TABLE crawler_task (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -69,4 +69,4 @@ CREATE TABLE IF NOT EXISTS user_config (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE UNIQUE INDEX uk_user_key ON user_config(user_id, config_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_user_key ON user_config(user_id, config_key);

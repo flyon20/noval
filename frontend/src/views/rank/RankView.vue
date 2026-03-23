@@ -474,8 +474,8 @@ onMounted(() => {
           :key="row.bookId"
           class="rank-page__item"
         >
-          <div class="rank-page__item-rank">
-            <span>#{{ row.rankNo }}</span>
+          <div class="rank-page__item-rank" :class="{ 'is-top3': row.rankNo <= 3 }">
+            <span class="rank-page__item-rank-number">#{{ row.rankNo }}</span>
           </div>
 
           <div class="rank-page__item-main">
@@ -736,6 +736,23 @@ onMounted(() => {
   background: rgba(35, 65, 58, 0.08);
   color: var(--color-accent-strong);
   font-weight: 700;
+  transition: background 200ms ease;
+}
+
+.rank-page__item-rank.is-top3 {
+  background: linear-gradient(135deg, rgba(199, 146, 92, 0.22), rgba(199, 146, 92, 0.08));
+  border: 1px solid rgba(199, 146, 92, 0.3);
+}
+
+.rank-page__item-rank.is-top3 .rank-page__item-rank-number {
+  color: var(--color-accent-strong);
+  font-size: 1.3rem;
+}
+
+.rank-page__item-rank-number {
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
 .rank-page__item-main {
@@ -795,18 +812,68 @@ onMounted(() => {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .rank-page__item {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
   }
 
-  .rank-page__item-actions,
+  .rank-page__item-rank {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .rank-page__item-main {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .rank-page__item-actions {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .rank-page__item-actions .el-button {
+    flex: 1;
+  }
+
   .rank-page__pagination {
-    grid-auto-flow: row;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .rank-page__pagination-meta {
+    text-align: center;
+  }
+
+  .rank-page__toolbar {
+    gap: 0.75rem;
+  }
+
+  .rank-page__toolbar-group {
+    flex: 1 1 calc(50% - 0.375rem);
+    min-width: 0;
+  }
+
+  .rank-page__select,
+  .rank-page__select--wide {
+    width: 100%;
   }
 
   .rank-page__toolbar-actions {
     margin-left: 0;
+    width: 100%;
+  }
+
+  .rank-page__toolbar-actions .el-button {
+    width: 100%;
+  }
+
+  .rank-page__snapshot {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

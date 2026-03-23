@@ -64,7 +64,7 @@ public class AnalysisRepository {
                 .eq(AnalysisResultEntity::getAnalysisType, analysisType)
                 .eq(AnalysisResultEntity::getChapterCount, chapterCount)
                 .eq(AnalysisResultEntity::getPromptConfigId, promptConfigId)
-                .ge(validAfter != null, AnalysisResultEntity::getCreateTime, validAfter)
+                .gt(validAfter != null, AnalysisResultEntity::getCreateTime, validAfter)
                 .orderByDesc(AnalysisResultEntity::getCreateTime)
                 .last("LIMIT 1")
         );

@@ -159,6 +159,31 @@ watch(
   color: var(--color-text-muted);
 }
 
+@media (max-width: 768px) {
+  .analysis-result-card {
+    font-size: 0.9rem;
+  }
+
+  .analysis-result__stream {
+    max-height: 52vh;
+    overflow-y: auto;
+    font-size: 0.875rem;
+    line-height: 1.65;
+  }
+
+  .analysis-result__done {
+    max-height: 55vh;
+    overflow-y: auto;
+    font-size: 0.875rem;
+    line-height: 1.7;
+  }
+
+  .analysis-result__meta {
+    font-size: 0.78rem;
+    gap: 0.5rem;
+  }
+}
+
 @keyframes blink {
   0%,
   50% {
