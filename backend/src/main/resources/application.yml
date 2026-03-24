@@ -1,0 +1,72 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: novel-analyzer-backend
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:novel_analyzer}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      initialization-fail-timeout: -1
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 3s
+
+mybatis-plus:
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+logging:
+  level:
+    root: INFO
+
+app:
+  auth:
+    demo-enabled: ${APP_DEMO_ENABLED:false}
+    demo-username: ${APP_DEMO_USERNAME:}
+    demo-password: ${APP_DEMO_PASSWORD:}
+    jwt-secret: ${JWT_SECRET:}
+    access-token-expire-seconds: ${JWT_ACCESS_TOKEN_EXPIRE_SECONDS:7200}
+  security:
+    rate-limit-per-minute: ${SECURITY_RATE_LIMIT_PER_MINUTE:100}
+    auto-blacklist-threshold: ${SECURITY_AUTO_BLACKLIST_THRESHOLD:20}
+    blacklist-seconds: ${SECURITY_BLACKLIST_SECONDS:86400}
+    trusted-proxy-ips: ${SECURITY_TRUSTED_PROXY_IPS:}
+    protected-path-prefixes:
+      - /api/auth
+      - /api/secure
+      - /api/system
+      - /api/crawler
+      - /api/analysis
+      - /api/config
+      - /api/data
+    whitelist-paths:
+      - /api/system/health
+      - /api/auth/login
+      - /api/auth/register
+      - /api/auth/refresh
+  crawler:
+    base-url: ${CRAWLER_BASE_URL:http://127.0.0.1:5000}
+    internal-api-key: ${CRAWLER_INTERNAL_API_KEY:}
+    connect-timeout-millis: ${CRAWLER_CONNECT_TIMEOUT_MILLIS:5000}
+    read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:60000}
+  ai:
+    provider-type: ${AI_PROVIDER_TYPE:openai-compatible}
+    dify-base-url: ${DIFY_BASE_URL:https://api.dify.ai/v1}
+    dify-api-key-ref: ${DIFY_API_KEY_REF:}
+    fallback-model: ${AI_FALLBACK_MODEL:local-fallback}
+    timeout-millis: ${AI_TIMEOUT_MILLIS:15000}
+    openai-compatible:
+      base-url: ${AI_OPENAI_COMPATIBLE_BASE_URL:https://api.deepseek.com/v1}
+      api-key-ref: ${AI_OPENAI_COMPATIBLE_API_KEY_REF:DEEPSEEK_API_KEY}
+      default-model: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:deepseek-chat}
+      streaming-enabled: ${AI_OPENAI_COMPATIBLE_STREAMING_ENABLED:true}

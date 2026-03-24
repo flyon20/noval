@@ -1,0 +1,130 @@
+<script setup lang="ts">
+import AppHeader from '@/components/layout/AppHeader.vue';
+import AppSidebar from '@/components/layout/AppSidebar.vue';
+import AppBottomNav from '@/components/layout/AppBottomNav.vue';
+
+defineProps<{
+  username: string;
+  roles: string[];
+}>();
+
+const emit = defineEmits<{
+  logout: [];
+}>();
+</script>
+
+<template>
+  <div class="app-shell">
+    <div class="app-shell__backdrop"></div>
+
+    <div class="app-shell__sidebar">
+      <AppSidebar :roles="roles" />
+    </div>
+
+    <div class="app-shell__surface">
+      <AppHeader :roles="roles" :username="username" @logout="emit('logout')" />
+      <main class="app-shell__content">
+        <slot />
+      </main>
+      <AppBottomNav class="app-shell__mobile-nav" />
+    </div>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.app-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(290px, 330px) 1fr;
+  gap: 1.5rem;
+  min-height: 100vh;
+  padding: 1.35rem;
+  background:
+    radial-gradient(circle at top left, rgba(199, 146, 92, 0.15), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(36, 61, 54, 0.1), transparent 20%),
+    linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
+}
+
+.app-shell__backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(130deg, rgba(255, 255, 255, 0.3), transparent 42%),
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.32), transparent 26%);
+}
+
+.app-shell__sidebar,
+.app-shell__surface {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(10px);
+}
+
+.app-shell__sidebar {
+  position: sticky;
+  top: 1.35rem;
+  align-self: start;
+  overflow: hidden;
+}
+
+.app-shell__surface {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell__content {
+  padding: 1.5rem;
+  flex: 1;
+}
+
+/* Tablet breakpoint */
+@media (max-width: 980px) and (min-width: 769px) {
+  .app-shell {
+    grid-template-columns: minmax(240px, 280px) 1fr;
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .app-shell__sidebar {
+    position: static;
+  }
+}
+
+/* Mobile breakpoint */
+@media (max-width: 768px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: 0;
+    min-height: 100dvh;
+    background: var(--color-bg);
+  }
+
+  .app-shell__backdrop {
+    display: none;
+  }
+
+  .app-shell__sidebar {
+    display: none;
+  }
+
+  .app-shell__surface {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+    backdrop-filter: none;
+    min-height: 100dvh;
+  }
+
+  .app-shell__content {
+    padding: 0.875rem;
+  }
+}
+</style>

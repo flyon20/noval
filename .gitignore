@@ -1,0 +1,16 @@
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+backend/target/
+/.cache/
+__pycache__/
+
+# Logs
+*.log
+logs/

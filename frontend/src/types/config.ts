@@ -1,0 +1,71 @@
+export type PromptType = 'deconstruct' | 'structure' | 'plot' | 'theme';
+
+export interface PromptConfig {
+  id: number;
+  promptType: PromptType;
+  promptName: string;
+  promptContent: string;
+  modelName: string;
+  temperature?: number | null;
+  maxTokens?: number | null;
+  outputJsonSchema?: string | null;
+  outputExampleJson?: string | null;
+  postProcessType?: string | null;
+  parseConfigJson?: string | null;
+}
+
+export interface PromptConfigUpdateRequest {
+  promptType: PromptType;
+  promptName: string;
+  promptContent: string;
+  modelName: string;
+  temperature?: number;
+  maxTokens?: number;
+  outputJsonSchema?: string;
+  outputExampleJson?: string;
+  postProcessType?: string;
+  parseConfigJson?: string;
+}
+
+export type KnownSystemConfigKey =
+  | 'ai.provider.type'
+  | 'ai.timeout.millis'
+  | 'ai.openai-compatible.api-key'
+  | 'ai.openai-compatible.base-url'
+  | 'ai.openai-compatible.default-model'
+  | 'ai.openai-compatible.streaming-enabled'
+  | 'ai.available-models'
+  | 'analysis.chunk.max-input-tokens'
+  | 'analysis.chunk.target-input-tokens'
+  | 'analysis.chunk.parallelism'
+  | 'crawler.default.chapter-count'
+  | 'crawler.http.timeout-seconds'
+  | 'crawler.chapter.fetch-workers'
+  | 'crawler.chapter.force-refresh.user-max-times'
+  | 'crawler.rank.refresh-days';
+
+export interface SystemConfig {
+  id: number;
+  configKey: string;
+  configValue: string;
+  configType?: string | null;
+  description?: string | null;
+  editable: boolean;
+}
+
+export interface SystemConfigUpdateRequest {
+  configKey: string;
+  configValue: string;
+  configType?: string;
+  description?: string;
+}
+
+export interface UserConfig {
+  configKey: string;
+  configValue: string | null;
+}
+
+export interface UserConfigUpdateRequest {
+  configKey: string;
+  configValue: string;
+}
