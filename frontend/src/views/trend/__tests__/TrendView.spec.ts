@@ -153,6 +153,27 @@ function createStreamTask(result: Record<string, unknown>) {
   });
 }
 
+async function mountTrendView() {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/trend', component: TrendView }],
+  });
+  await router.push('/trend');
+
+  const wrapper = mount(TrendView, {
+    global: {
+      plugins: [router, ElementPlus],
+    },
+  });
+
+  await flushPromises();
+  return wrapper;
+}
+
+function getTrendSelects(wrapper: ReturnType<typeof mount>) {
+  return wrapper.findAllComponents({ name: 'ElSelect' }).slice(0, 2);
+}
+
 describe('TrendView', () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -191,19 +212,7 @@ describe('TrendView', () => {
       },
     });
 
-    const router = createRouter({
-      history: createMemoryHistory(),
-      routes: [{ path: '/trend', component: TrendView }],
-    });
-    await router.push('/trend');
-
-    const wrapper = mount(TrendView, {
-      global: {
-        plugins: [router, ElementPlus],
-      },
-    });
-
-    await flushPromises();
+    const wrapper = await mountTrendView();
 
     expect(crawlerApi.getBoards).toHaveBeenCalledWith({ platform: 'fanqie' });
     expect(crawlerApi.getPreference).toHaveBeenCalledWith({ platform: 'fanqie' });
@@ -216,7 +225,7 @@ describe('TrendView', () => {
     expect(wrapper.text()).toContain('都市脑洞');
   });
 
-  test('switching board refreshes context but does not auto rerun trend analysis', async () => {
+  test('switching board from select refreshes context but does not auto rerun trend analysis', async () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
     const { crawlerApi } = await import('@/api/crawler');
@@ -262,20 +271,10 @@ describe('TrendView', () => {
         },
       });
 
-    const router = createRouter({
-      history: createMemoryHistory(),
-      routes: [{ path: '/trend', component: TrendView }],
-    });
-    await router.push('/trend');
+    const wrapper = await mountTrendView();
 
-    const wrapper = mount(TrendView, {
-      global: {
-        plugins: [router, ElementPlus],
-      },
-    });
-
-    await flushPromises();
-    await wrapper.get('[data-test="trend-category-fantasy-rise"]').trigger('click');
+    const [, boardSelect] = getTrendSelects(wrapper);
+    boardSelect.vm.$emit('update:modelValue', 'fantasy-rise');
     await flushPromises();
 
     expect(dataApi.getVisual).toHaveBeenLastCalledWith({
@@ -284,6 +283,7 @@ describe('TrendView', () => {
       boardCode: 'fantasy-rise',
     });
     expect(analysisApi.streamTrend).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('玄幻热升');
   });
 
   test('switching channel from select loads the first board without auto rerunning analysis', async () => {
@@ -333,20 +333,10 @@ describe('TrendView', () => {
         },
       });
 
-    const router = createRouter({
-      history: createMemoryHistory(),
-      routes: [{ path: '/trend', component: TrendView }],
-    });
-    await router.push('/trend');
+    const wrapper = await mountTrendView();
 
-    const wrapper = mount(TrendView, {
-      global: {
-        plugins: [router, ElementPlus],
-      },
-    });
-
-    await flushPromises();
-    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 'female-hot');
+    const [channelSelect] = getTrendSelects(wrapper);
+    channelSelect.vm.$emit('update:modelValue', 'female-hot');
     await flushPromises();
 
     expect(dataApi.getVisual).toHaveBeenLastCalledWith({
@@ -355,6 +345,7 @@ describe('TrendView', () => {
       boardCode: 'romance-push',
     });
     expect(analysisApi.streamTrend).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('甜宠爆款');
   });
 
   test('starts trend analysis only after explicit action and supports detail drawer', async () => {
@@ -391,19 +382,8 @@ describe('TrendView', () => {
     });
     vi.mocked(analysisApi.streamTrend).mockImplementation(createStreamTask(createTrendResult()) as never);
 
-    const router = createRouter({
-      history: createMemoryHistory(),
-      routes: [{ path: '/trend', component: TrendView }],
-    });
-    await router.push('/trend');
+    const wrapper = await mountTrendView();
 
-    const wrapper = mount(TrendView, {
-      global: {
-        plugins: [router, ElementPlus],
-      },
-    });
-
-    await flushPromises();
     await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
     await flushPromises();
 
