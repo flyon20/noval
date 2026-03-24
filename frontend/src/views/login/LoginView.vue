@@ -13,6 +13,9 @@ type AuthMode = 'login' | 'register';
 
 const PASSWORD_RULE_TEXT = '密码需至少 8 位，且包含大写字母、小写字母和数字';
 const PASSWORD_RULE_ITEMS = ['至少 8 位', '包含大写字母', '包含小写字母', '包含数字'];
+const REGISTER_UNAVAILABLE_MESSAGE = '注册入口暂时不可用，请稍后重试';
+const REGISTER_INVALID_MESSAGE = '注册信息有误，请检查用户名、密码和确认密码';
+const LOGIN_INVALID_MESSAGE = '登录信息有误，请检查用户名和密码';
 const AUTH_MESSAGE_MAP: Record<string, string> = {
   'username already exists': '用户名已存在，请更换后重试',
   'username or password is incorrect': '登录失败，请检查用户名和密码',
@@ -99,6 +102,14 @@ function resolveAuthErrorMessage(message: string | undefined, mode: AuthMode) {
 
   if (AUTH_MESSAGE_MAP[normalized]) {
     return AUTH_MESSAGE_MAP[normalized];
+  }
+
+  if (normalized === 'unauthorized') {
+    return mode === 'register' ? REGISTER_UNAVAILABLE_MESSAGE : '登录失败，请检查用户名和密码';
+  }
+
+  if (normalized === 'invalid request parameter' || normalized === 'request body is invalid') {
+    return mode === 'register' ? REGISTER_INVALID_MESSAGE : LOGIN_INVALID_MESSAGE;
   }
 
   if (/[\u4e00-\u9fa5]/.test(normalized)) {

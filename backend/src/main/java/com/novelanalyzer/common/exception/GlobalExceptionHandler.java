@@ -6,6 +6,7 @@ import com.novelanalyzer.common.result.HttpStatusMapper;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.MessageSourceResolvable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
@@ -38,7 +39,7 @@ public class GlobalExceptionHandler {
     })
     public ResponseEntity<Result<Void>> handleValidationException(Exception ex) {
         LOGGER.warn("validation exception: {}", ex.getMessage());
-        return buildResponse(ResultCode.BAD_REQUEST, "invalid request parameter");
+        return buildResponse(ResultCode.BAD_REQUEST, resolveValidationMessage(ex));
     }
 
     @ExceptionHandler(Exception.class)
@@ -51,5 +52,44 @@ public class GlobalExceptionHandler {
         return ResponseEntity
             .status(HttpStatusMapper.toHttpStatus(resultCode))
             .body(Result.fail(resultCode, message));
+    }
+
+    private String resolveValidationMessage(Exception ex) {
+        if (ex instanceof MethodArgumentNotValidException methodArgumentNotValidException) {
+            return firstObjectErrorMessage(methodArgumentNotValidException.getBindingResult().getAllErrors());
+        }
+        if (ex instanceof BindException bindException) {
+            return firstObjectErrorMessage(bindException.getBindingResult().getAllErrors());
+        }
+        if (ex instanceof ConstraintViolationException constraintViolationException) {
+            return constraintViolationException.getConstraintViolations().stream()
+                .map(violation -> violation == null ? null : violation.getMessage())
+                .filter(message -> message != null && !message.isBlank())
+                .findFirst()
+                .orElse("invalid request parameter");
+        }
+        if (ex instanceof MissingServletRequestParameterException missingServletRequestParameterException) {
+            return missingServletRequestParameterException.getParameterName() + " is required";
+        }
+        if (ex instanceof MethodArgumentTypeMismatchException methodArgumentTypeMismatchException) {
+            return methodArgumentTypeMismatchException.getName() + " type mismatch";
+        }
+        if (ex instanceof HttpMessageNotReadableException) {
+            return "request body is invalid";
+        }
+        if (ex instanceof HandlerMethodValidationException handlerMethodValidationException) {
+            return firstObjectErrorMessage(handlerMethodValidationException.getAllErrors());
+        }
+        return "invalid request parameter";
+    }
+
+    private String firstObjectErrorMessage(Iterable<? extends MessageSourceResolvable> errors) {
+        for (MessageSourceResolvable error : errors) {
+            String message = error == null ? null : error.getDefaultMessage();
+            if (message != null && !message.isBlank()) {
+                return message;
+            }
+        }
+        return "invalid request parameter";
     }
 }

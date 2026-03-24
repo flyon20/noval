@@ -196,9 +196,9 @@ describe('LoginView', () => {
     await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
 
     expect(wrapper.text()).toContain('密码需至少 8 位');
-    expect(wrapper.text()).toContain('大写字母');
-    expect(wrapper.text()).toContain('小写字母');
-    expect(wrapper.text()).toContain('数字');
+    expect(wrapper.text()).toContain('包含大写字母');
+    expect(wrapper.text()).toContain('包含小写字母');
+    expect(wrapper.text()).toContain('包含数字');
 
     await wrapper.get('input[autocomplete="username"]').setValue('new-user');
     await wrapper.get('input[autocomplete="new-password"]').setValue('secret123');
@@ -279,5 +279,41 @@ describe('LoginView', () => {
     expect(wrapper.text()).toContain('登录失败，请检查用户名和密码');
     expect(wrapper.text()).not.toContain('40101');
     expect(wrapper.text()).toContain('trace-odd');
+  });
+
+  test('failed register explains unauthorized backend response with a friendly reason', async () => {
+    const { authApi } = await import('@/api/auth');
+    vi.mocked((authApi as any).register).mockRejectedValue({
+      response: {
+        status: 401,
+        data: {
+          message: 'unauthorized',
+          traceId: 'trace-register-unauthorized',
+        },
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/login', component: LoginView }],
+    });
+    await router.push('/login');
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
+    await wrapper.get('input[autocomplete="username"]').setValue('new-user');
+    await wrapper.get('input[autocomplete="new-password"]').setValue('Password123');
+    await wrapper.get('input[data-test="register-confirm-password"]').setValue('Password123');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect((authApi as any).register).toHaveBeenCalled();
+    expect(wrapper.text()).toContain('注册入口暂时不可用，请稍后重试');
+    expect(wrapper.text()).toContain('trace-register-unauthorized');
   });
 });

@@ -156,6 +156,16 @@ class AuthControllerTest {
     }
 
     @Test
+    void shouldReturnSpecificValidationMessageWhenRegisterPasswordMissing() throws Exception {
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"missing-password\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.message").value("password is required"));
+    }
+
+    @Test
     void shouldRejectConfiguredDemoCredentialWhenDemoDisabled() throws Exception {
         mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
