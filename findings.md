@@ -122,3 +122,28 @@
   - chart and summary rendering still depended on removed platform-level fields like `analysisDailyTrend`
 - A safe migration path was to replace the trend page contract entirely rather than partially shim the old fields, because the user requirement is fundamentally board-scoped and click-to-run.
 - Mobile usability improved most by keeping the switchable board pills, shortening the default preview, and leaving the long-form result inside a closable drawer instead of in-page overflow blocks.
+
+## Session Addendum 2026-03-25
+
+### Confirmed Model Configuration Findings
+- `SystemConfigView.vue` still treats AI models as a plain comma-separated string stored in `ai.available-models`, which cannot carry per-model base URL, API key, or temperature metadata.
+- `AnalysisView.vue` already has a user-facing model dropdown backed by `user_config.ai.preferred-model`, but the available options are only raw strings without labels or model-specific runtime config.
+- `AiGatewayService` resolves the effective model name from prompt config, then user preference, then system default, but it still takes base URL and API key from one global OpenAI-compatible config source.
+- `LangGraphAnalysisService` in Python also uses a single global `openai_base_url` and `openai_api_key`, so it cannot currently honor different provider endpoints per selected model.
+
+### Confirmed Prompt / Contract Findings
+- `PromptConfigView.vue` already exposes output schema/example JSON and parse config, but there is no input contract JSON shown to admins.
+- `PromptConfigService` validates only `{{content}}` and saves prompt rows by `promptType + promptName`; it has no concept of guarded JSON-contract editing.
+- `PromptConfigEntity` has output-side fields only; there is no `input_json_schema` or `input_example_json` column yet.
+
+### Confirmed Trend Contract Findings
+- `AnalysisService.buildTrendInputText(...)` still injects a free-form English task string; the runtime mentions required fields, but the real source payload contract is not exposed in the admin UI.
+- `AnalysisService.normalizeTrendResultJson(...)` still manufactures placeholder `themeTable`, `historicalWordCloud`, `hotBooks`, `insightCards`, and summary text when the model response is incomplete, which hides contract drift instead of surfacing it.
+- `DataQueryService` still has a second layer of fallback synthesis for trend charts and cards, so the trend page is not yet truly rendering “what the model analyzed and stored”.
+- `TrendTagCloud.vue` is already tag-cloud-like, but the surrounding trend page still mixes fallback chart bars and summary cards that are not strictly derived from the intended schema.
+
+### Implementation Direction Locked
+- Introduce a structured model registry config and migrate available-model/user-selection flows to use model keys + labels instead of raw comma-separated strings.
+- Extend prompt config with input-contract JSON fields and guarded edit mode for JSON contract boxes.
+- Make trend analysis runtime inject a stable board-scoped source JSON contract and enforce a richer output JSON contract that includes board summary, representative works, word cloud, theme distribution, hot books, and insight cards.
+- Reduce backend trend fallbacks from “invent missing fields” to “normalize shape + preserve available data”, so stored JSON becomes the source of truth for the trend page.

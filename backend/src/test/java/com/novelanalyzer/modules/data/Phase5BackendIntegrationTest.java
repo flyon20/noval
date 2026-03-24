@@ -89,6 +89,79 @@ class Phase5BackendIntegrationTest {
     }
 
     @Test
+    void shouldManageAiModelRegistryAndExposeModelOptions() throws Exception {
+        String adminToken = loginAndGetToken("admin", "admin123");
+        String writerToken = loginAndGetToken("writer", "writer123");
+
+        mockMvc.perform(get("/api/config/system/model-registry")
+                .header("Authorization", "Bearer " + adminToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.defaultModelKey").isNotEmpty())
+            .andExpect(jsonPath("$.data.models.length()").value(1))
+            .andExpect(jsonPath("$.data.models[0].modelKey").value("deepseek-chat"));
+
+        mockMvc.perform(put("/api/config/system/model-registry")
+                .header("Authorization", "Bearer " + adminToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "defaultModelKey":"deepseek-chat",
+                      "models":[
+                        {
+                          "modelKey":"deepseek-chat",
+                          "displayName":"DeepSeek Chat",
+                          "providerType":"openai-compatible",
+                          "modelName":"deepseek-chat",
+                          "baseUrl":"https://api.deepseek.com/v1",
+                          "apiKey":"registry-key-1",
+                          "enabled":true,
+                          "isDefault":true,
+                          "defaultTemperature":1.0,
+                          "maxTokens":8192,
+                          "temperatureSpecJson":"{\\"min\\":0.0,\\"max\\":2.0,\\"step\\":0.1,\\"default\\":1.0}"
+                        },
+                        {
+                          "modelKey":"deepseek-reasoner",
+                          "displayName":"DeepSeek Reasoner",
+                          "providerType":"openai-compatible",
+                          "modelName":"deepseek-reasoner",
+                          "baseUrl":"https://api.deepseek.com/v1",
+                          "apiKey":"registry-key-2",
+                          "enabled":true,
+                          "isDefault":false,
+                          "defaultTemperature":0.7,
+                          "maxTokens":16384,
+                          "temperatureSpecJson":"{\\"min\\":0.0,\\"max\\":1.5,\\"step\\":0.1,\\"default\\":0.7}"
+                        }
+                      ]
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.models.length()").value(2))
+            .andExpect(jsonPath("$.data.models[1].modelKey").value("deepseek-reasoner"))
+            .andExpect(jsonPath("$.data.models[1].temperatureSpecJson").value("{\"min\":0.0,\"max\":1.5,\"step\":0.1,\"default\":0.7}"));
+
+        mockMvc.perform(get("/api/config/system/model-options")
+                .header("Authorization", "Bearer " + writerToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0].modelKey").value("deepseek-chat"))
+            .andExpect(jsonPath("$.data[0].displayName").value("DeepSeek Chat"))
+            .andExpect(jsonPath("$.data[1].modelKey").value("deepseek-reasoner"));
+
+        mockMvc.perform(get("/api/config/system/available-models")
+                .header("Authorization", "Bearer " + writerToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0]").value("deepseek-chat"))
+            .andExpect(jsonPath("$.data[1]").value("deepseek-reasoner"));
+    }
+
+    @Test
     void shouldReturn400WhenSystemConfigKeyMissing() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
 

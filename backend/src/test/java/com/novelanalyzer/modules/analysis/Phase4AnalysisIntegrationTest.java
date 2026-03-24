@@ -192,10 +192,12 @@ class Phase4AnalysisIntegrationTest {
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"promptType":"deconstruct","promptName":"default-deconstruct","promptContent":"UPDATED {{content}}","modelName":"deepseek-chat","outputJsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{\\"summary\\":{\\"type\\":\\"string\\"}}}","outputExampleJson":"{\\"summary\\":\\"example\\"}","postProcessType":"json_extract","parseConfigJson":"{\\"parser\\":\\"json\\",\\"trimMarkdownFence\\":true}"}
+                    {"promptType":"deconstruct","promptName":"default-deconstruct","promptContent":"UPDATED {{content}}","modelName":"deepseek-chat","inputJsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{\\"content\\":{\\"type\\":\\"string\\"}}}","inputExampleJson":"{\\"content\\":\\"example-input\\"}","outputJsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{\\"summary\\":{\\"type\\":\\"string\\"}}}","outputExampleJson":"{\\"summary\\":\\"example\\"}","postProcessType":"json_extract","parseConfigJson":"{\\"parser\\":\\"json\\",\\"trimMarkdownFence\\":true}"}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.inputJsonSchema").value("{\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\"}}}"))
+            .andExpect(jsonPath("$.data.inputExampleJson").value("{\"content\":\"example-input\"}"))
             .andExpect(jsonPath("$.data.outputJsonSchema").value("{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}}}"))
             .andExpect(jsonPath("$.data.outputExampleJson").value("{\"summary\":\"example\"}"))
             .andExpect(jsonPath("$.data.postProcessType").value("json_extract"))
@@ -206,6 +208,8 @@ class Phase4AnalysisIntegrationTest {
                 .param("promptType", "deconstruct"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.inputJsonSchema").value("{\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\"}}}"))
+            .andExpect(jsonPath("$.data.inputExampleJson").value("{\"content\":\"example-input\"}"))
             .andExpect(jsonPath("$.data.outputJsonSchema").value("{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"}}}"))
             .andExpect(jsonPath("$.data.outputExampleJson").value("{\"summary\":\"example\"}"))
             .andExpect(jsonPath("$.data.postProcessType").value("json_extract"))
@@ -314,6 +318,76 @@ class Phase4AnalysisIntegrationTest {
         assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
         assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"deconstruct\"");
         assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"platform\":\"fanqie\"");
+    }
+
+    @Test
+    void shouldUseSelectedModelRegistryRuntimeConfigForOpenAiCompatibleAnalysis() throws Exception {
+        String adminToken = loginAndGetToken("admin", "admin123");
+        String writerToken = loginAndGetToken("writer", "writer123");
+
+        mockMvc.perform(put("/api/config/system/model-registry")
+                .header("Authorization", "Bearer " + adminToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "defaultModelKey":"deepseek-chat",
+                      "models":[
+                        {
+                          "modelKey":"deepseek-chat",
+                          "displayName":"DeepSeek Chat",
+                          "providerType":"openai-compatible",
+                          "modelName":"deepseek-chat",
+                          "baseUrl":"http://127.0.0.1:%d/v1",
+                          "apiKey":"registry-key-1",
+                          "enabled":true,
+                          "isDefault":true,
+                          "defaultTemperature":1.0,
+                          "maxTokens":4096,
+                          "temperatureSpecJson":"{\\"min\\":0.0,\\"max\\":2.0,\\"step\\":0.1,\\"default\\":1.0}"
+                        },
+                        {
+                          "modelKey":"deepseek-reasoner",
+                          "displayName":"DeepSeek Reasoner",
+                          "providerType":"openai-compatible",
+                          "modelName":"deepseek-reasoner",
+                          "baseUrl":"http://127.0.0.1:%d/v1",
+                          "apiKey":"registry-key-2",
+                          "enabled":true,
+                          "isDefault":false,
+                          "defaultTemperature":0.7,
+                          "maxTokens":8192,
+                          "temperatureSpecJson":"{\\"min\\":0.0,\\"max\\":1.5,\\"step\\":0.1,\\"default\\":0.7}"
+                        }
+                      ]
+                    }
+                    """.formatted(
+                    MOCK_OPENAI_SERVER.getAddress().getPort(),
+                    MOCK_OPENAI_SERVER.getAddress().getPort()
+                )))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(put("/api/config/user")
+                .header("Authorization", "Bearer " + writerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"configKey":"ai.preferred-model","configValue":"deepseek-reasoner"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + writerToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.modelName").value("deepseek-reasoner"));
+
+        assertThat(LAST_OPENAI_REQUEST_BODY.get()).contains("\"model\":\"deepseek-reasoner\"");
+        assertThat(LAST_OPENAI_REQUEST_BODY.get()).contains("\"temperature\":0.7");
     }
 
     @Test

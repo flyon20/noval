@@ -113,3 +113,35 @@ Phase 6
 - Phase 4 complete: backend trend analysis and `/api/data/visual` now return board-scoped structured payloads.
 - Phase 5 complete: trend page no longer auto-runs, now loads rank context from crawler preference, supports manual run only, and keeps mobile-friendly preview/detail behavior.
 - Phase 6 in progress: verification is complete, remaining work is git hygiene and commit creation without including unrelated temp artifacts.
+
+## Session Addendum 2026-03-25
+
+### Goal
+- Rework AI model configuration from a single comma-separated list into a real model registry that supports multiple OpenAI-compatible models, per-model temperature ranges/defaults, and a single user-facing model selector shared by all analyses.
+- Rework trend analysis so the AI input/output JSON contract becomes explicit, visible, and editable from the admin prompt config page, while the runtime always enforces the required board-scoped structured fields.
+- Rebuild the trend page around the strict contract so charts, representative works, board summary, word cloud, theme distribution, and insight cards all render from stored structured JSON instead of fallback guesswork.
+
+### Current Phase
+- Phase 1: design and execution planning
+
+### Planned Phases
+- Phase 1: write the design spec and implementation plan for model registry + trend JSON contract rework
+- Phase 2: test-first backend model registry and prompt-config contract fields
+- Phase 3: implement backend model registry resolution for legacy Java gateway + LangGraph worker
+- Phase 4: implement admin configuration UI and guarded JSON contract editing
+- Phase 5: rework trend analysis contract, persistence, and trend page rendering/mobile layout
+- Phase 6: verification, local run, and final delivery summary
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Use a structured model registry JSON in system config instead of only `ai.available-models` | The product now needs per-model request settings, temperature metadata, and future expansion without adding more scattered keys |
+| Keep user-side model choice as one shared preference key | User explicitly requires that single-book analysis and trend analysis use the same selected model |
+| Extend prompt config with admin-visible input/output JSON contract fields | The AI chain must expose the request/response contract in the UI while still enforcing the contract at runtime |
+| Treat trend JSON fields such as `boardSummary`, `historicalWordCloud`, `themeDistribution`, `hotBooks`, and `insightCards` as mandatory contract outputs | The trend page should render directly from stored structured data instead of backend placeholder synthesis |
+| Preserve existing prompt专业性 but append runtime-enforced contract instructions | Admin prompt text remains expressive, while the required structured output becomes stable enough for parsing/storage/rendering |
+
+### Risks
+- The current LangGraph worker only knows global OpenAI-compatible base URL and API key, so per-model registry support requires coordinated Java + Python request changes.
+- Existing prompt config rows, system config seeds, and trend test fixtures all assume the old flat model list and shallow trend schema, so schema/data migration must stay incremental.
+- Trend page components currently mix result JSON and backend fallback data; this needs a careful migration to avoid blank panels during the transition.

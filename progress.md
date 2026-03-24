@@ -263,3 +263,22 @@
 - `frontend/src/types/trend.ts`
 - `frontend/src/api/data.ts`
 - `frontend/src/lib/trend-display.ts`
+
+## Session: 2026-03-25
+
+### Phase 1: 模型注册表与趋势 JSON 契约设计/计划
+- **Status:** in_progress
+- **Started:** 2026-03-25
+- Actions taken:
+  - Completed a local checkpoint commit before starting this rework: `5ec4812 chore: checkpoint langgraph and rank fetch updates`.
+  - Re-read current system config, prompt config, analysis view, trend view, trend data service, and LangGraph worker request/response flow.
+  - Confirmed the current AI model system is still based on flat string lists and global OpenAI-compatible credentials.
+  - Confirmed the current trend pipeline still depends on backend fallback synthesis instead of a strict stored JSON contract.
+  - Prepared the new design direction around model registry + guarded prompt contract editing + strict trend IO schema.
+- Files created/modified:
+  - `D:\Git\agent\noval\task_plan.md` (updated)
+  - `D:\Git\agent\noval\findings.md` (updated)
+  - `D:\Git\agent\noval\progress.md` (updated)
+
+## Current Focus
+- Write the dedicated spec and implementation-plan documents for this rework, then move into test-first backend changes.
