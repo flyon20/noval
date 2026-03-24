@@ -11,6 +11,7 @@ public class AiProperties {
     private String fallbackModel = "local-fallback";
     private int timeoutMillis = 15000;
     private OpenAiCompatible openAiCompatible = new OpenAiCompatible();
+    private LangGraphWorker langgraphWorker = new LangGraphWorker();
 
     public String getProviderType() {
         return providerType;
@@ -60,6 +61,14 @@ public class AiProperties {
         this.openAiCompatible = openAiCompatible;
     }
 
+    public LangGraphWorker getLanggraphWorker() {
+        return langgraphWorker;
+    }
+
+    public void setLanggraphWorker(LangGraphWorker langgraphWorker) {
+        this.langgraphWorker = langgraphWorker;
+    }
+
     public static class OpenAiCompatible {
 
         private String baseUrl = "https://api.deepseek.com/v1";
@@ -97,6 +106,37 @@ public class AiProperties {
 
         public void setStreamingEnabled(boolean streamingEnabled) {
             this.streamingEnabled = streamingEnabled;
+        }
+    }
+
+    public static class LangGraphWorker {
+
+        private String baseUrl = "http://127.0.0.1:8001";
+        private String internalApiKey = "";
+        private int timeoutMillis = 30000;
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public String getInternalApiKey() {
+            return internalApiKey;
+        }
+
+        public void setInternalApiKey(String internalApiKey) {
+            this.internalApiKey = internalApiKey;
+        }
+
+        public int getTimeoutMillis() {
+            return timeoutMillis;
+        }
+
+        public void setTimeoutMillis(int timeoutMillis) {
+            this.timeoutMillis = timeoutMillis;
         }
     }
 }

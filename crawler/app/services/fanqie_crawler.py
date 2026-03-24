@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from app.config import settings
 from app.models.book import BookDetail
@@ -15,6 +15,13 @@ from app.utils.parsers import extract_initial_state, html_to_text
 
 
 class FanqieCrawler(BaseCrawler):
+    RANK_API_URL = f"{settings.fanqie_base_url}/api/rank/category/list"
+    RANK_API_PAGE_SIZE = 10
+    RANK_API_BASE_PARAMS = {
+        "app_id": "2503",
+        "rank_list_type": "3",
+        "rank_version": "",
+    }
     CATEGORY_ALIAS = {
         "male-hot-a": "1_2_1141",
         "male-hot-b": "1_2_1140",
@@ -68,12 +75,17 @@ class FanqieCrawler(BaseCrawler):
             raise ValueError("board catalog parse failed")
         return channels
 
-    def fetch_rank(self, category_or_channel_code: str, board_code: str | None = None) -> List[RankItem]:
+    def fetch_rank(
+        self,
+        category_or_channel_code: str,
+        board_code: str | None = None,
+        rank_fetch_count: int | None = None,
+    ) -> List[RankItem]:
         rank_url = self._resolve_rank_url(category_or_channel_code, board_code)
         state = self._fetch_state(rank_url)
         css = str(state.get("common", {}).get("css") or "")
         rank_state = state.get("rank", {})
-        book_list = self._extract_rank_books(rank_state)
+        book_list = self._fetch_rank_books_via_api(rank_url, rank_fetch_count) or self._extract_rank_books(rank_state)
         if not book_list:
             locator = self._format_rank_locator(category_or_channel_code, board_code)
             raise ValueError(f"rank list is empty for {locator}")
@@ -99,6 +111,8 @@ class FanqieCrawler(BaseCrawler):
         if not items:
             locator = self._format_rank_locator(category_or_channel_code, board_code)
             raise ValueError(f"rank list parse failed for {locator}")
+        if rank_fetch_count is not None and rank_fetch_count > 0:
+            return items[:rank_fetch_count]
         return items
 
     def fetch_book(self, book_url: str) -> BookDetail:
@@ -251,6 +265,85 @@ class FanqieCrawler(BaseCrawler):
                 if book_list:
                     return book_list
         return []
+
+    def _fetch_rank_books_via_api(self, rank_url: str, rank_fetch_count: int | None = None) -> list[dict[str, Any]]:
+        params = self._build_rank_api_params(rank_url)
+        if params is None:
+            return []
+
+        books: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        offset = 0
+        total_num: int | None = None
+        target_count = rank_fetch_count if rank_fetch_count is not None and rank_fetch_count > 0 else None
+
+        try:
+            while True:
+                payload = self._http_client.get_json(
+                    self.RANK_API_URL,
+                    params={
+                        **params,
+                        "offset": str(offset),
+                        "limit": str(self.RANK_API_PAGE_SIZE),
+                    },
+                )
+                if not isinstance(payload, dict):
+                    return []
+                response_code = payload.get("code")
+                if response_code not in (None, 0, "0"):
+                    return []
+
+                data = payload.get("data") or {}
+                if not isinstance(data, dict):
+                    return []
+                page_books = data.get("book_list") or data.get("bookList") or []
+                if not isinstance(page_books, list):
+                    return []
+
+                if total_num is None:
+                    total_num = self._parse_positive_int(data.get("total_num"))
+
+                appended_count = 0
+                for book in page_books:
+                    if not isinstance(book, dict):
+                        continue
+                    book_id = str(book.get("bookId") or "").strip()
+                    rank_no = str(book.get("currentPos") or book.get("rankPos") or "").strip()
+                    dedupe_key = book_id or rank_no
+                    if not dedupe_key or dedupe_key in seen_keys:
+                        continue
+                    seen_keys.add(dedupe_key)
+                    books.append(book)
+                    appended_count += 1
+                    if target_count is not None and len(books) >= target_count:
+                        return books[:target_count]
+
+                if total_num is not None and len(books) >= total_num:
+                    if target_count is not None:
+                        return books[:min(total_num, target_count)]
+                    return books[:total_num]
+                if len(page_books) < self.RANK_API_PAGE_SIZE or appended_count == 0:
+                    if target_count is not None:
+                        return books[:target_count]
+                    return books
+
+                offset += self.RANK_API_PAGE_SIZE
+        except Exception:
+            return []
+
+    def _build_rank_api_params(self, rank_url: str) -> dict[str, str] | None:
+        rank_slug = urlparse(rank_url).path.rstrip("/").rsplit("/", maxsplit=1)[-1]
+        gender_code, rank_mold, category_id = (rank_slug.split("_") + ["", "", ""])[:3]
+        if not gender_code or not rank_mold or not category_id:
+            return None
+        if not (gender_code.isdigit() and rank_mold.isdigit() and category_id.isdigit()):
+            return None
+        return {
+            **self.RANK_API_BASE_PARAMS,
+            "category_id": category_id,
+            "gender": gender_code,
+            "rankMold": rank_mold,
+        }
 
     def _extract_rank_category_boards(self, board_list: Any) -> list[BoardCatalogBoard]:
         if not isinstance(board_list, list):

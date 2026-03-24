@@ -6,6 +6,7 @@ public class UserRankPreferenceVO {
     private String platform;
     private String channelCode;
     private String boardCode;
+    private Integer rankFetchCount;
 
     public Long getUserId() {
         return userId;
@@ -37,5 +38,13 @@ public class UserRankPreferenceVO {
 
     public void setBoardCode(String boardCode) {
         this.boardCode = boardCode;
+    }
+
+    public Integer getRankFetchCount() {
+        return rankFetchCount;
+    }
+
+    public void setRankFetchCount(Integer rankFetchCount) {
+        this.rankFetchCount = rankFetchCount;
     }
 }

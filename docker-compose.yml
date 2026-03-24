@@ -2,6 +2,12 @@ version: "3.8"
 
 # Copy .env.example to .env and replace every CHANGE_ME value before first start.
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   backend:
     build:
@@ -12,6 +18,7 @@ services:
       - mysql
       - redis
       - crawler
+      - langgraph-worker
     environment:
       SERVER_PORT: 8080
       MYSQL_HOST: mysql
@@ -27,6 +34,14 @@ services:
       JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_WITH_A_RANDOM_SECRET_AT_LEAST_32_CHARS}
       DIFY_BASE_URL: ${DIFY_BASE_URL:-https://api.dify.ai/v1}
       DIFY_API_KEY_REF: ${DIFY_API_KEY_REF:-DIFY_API_KEY}
+      AI_LANGGRAPH_WORKER_BASE_URL: http://langgraph-worker:8001
+      AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
+      JAVA_TOOL_OPTIONS: -Xms256m -Xmx640m -XX:+UseG1GC
+    cpus: 0.80
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 256
+    logging: *default-logging
     restart: unless-stopped
 
   crawler:
@@ -34,6 +49,29 @@ services:
       context: ./crawler
     environment:
       CRAWLER_INTERNAL_API_KEY: ${CRAWLER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_INTERNAL_API_KEY}
+    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+    logging: *default-logging
+    restart: unless-stopped
+
+  langgraph-worker:
+    build:
+      context: ./langgraph-worker
+    environment:
+      AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
+      AI_OPENAI_COMPATIBLE_BASE_URL: ${AI_OPENAI_COMPATIBLE_BASE_URL:-https://api.deepseek.com/v1}
+      AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-chat}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
+      AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS: ${AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS:-4}
+      PYTHONUNBUFFERED: "1"
+    cpus: 0.40
+    mem_limit: 384m
+    memswap_limit: 384m
+    pids_limit: 128
+    logging: *default-logging
     restart: unless-stopped
 
   mysql:
@@ -42,6 +80,8 @@ services:
       - --default-authentication-plugin=mysql_native_password
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=256M
+      - --max-connections=80
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_WITH_A_STRONG_ROOT_PASSWORD}
       MYSQL_DATABASE: novel_analyzer
@@ -52,6 +92,11 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/sql/mysql:/docker-entrypoint-initdb.d
+    cpus: 0.45
+    mem_limit: 640m
+    memswap_limit: 640m
+    pids_limit: 256
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
@@ -64,6 +109,11 @@ services:
     volumes:
       - redis_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    cpus: 0.10
+    mem_limit: 96m
+    memswap_limit: 96m
+    pids_limit: 64
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

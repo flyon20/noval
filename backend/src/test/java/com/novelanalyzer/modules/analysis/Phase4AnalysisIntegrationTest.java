@@ -68,8 +68,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class Phase4AnalysisIntegrationTest {
 
     private static final HttpServer MOCK_OPENAI_SERVER = startMockOpenAiServer();
+    private static final HttpServer MOCK_LANGGRAPH_SERVER = startMockLangGraphServer();
     private static final AtomicReference<String> LAST_OPENAI_REQUEST_BODY = new AtomicReference<>("");
+    private static final AtomicReference<String> LAST_LANGGRAPH_REQUEST_BODY = new AtomicReference<>("");
     private static final AtomicInteger OPENAI_REQUEST_COUNT = new AtomicInteger();
+    private static final AtomicInteger LANGGRAPH_REQUEST_COUNT = new AtomicInteger();
 
     static {
         System.setProperty("TEST_DEEPSEEK_API_KEY", "test-key");
@@ -93,11 +96,14 @@ class Phase4AnalysisIntegrationTest {
     @DynamicPropertySource
     static void registerAiProperties(DynamicPropertyRegistry registry) {
         registry.add("app.ai.openai-compatible.base-url", () -> "http://127.0.0.1:" + MOCK_OPENAI_SERVER.getAddress().getPort() + "/v1");
+        registry.add("app.ai.langgraph-worker.base-url", () -> "http://127.0.0.1:" + MOCK_LANGGRAPH_SERVER.getAddress().getPort());
+        registry.add("app.ai.langgraph-worker.internal-api-key", () -> "test-langgraph-key");
     }
 
     @AfterAll
     static void shutdownMockServer() {
         MOCK_OPENAI_SERVER.stop(0);
+        MOCK_LANGGRAPH_SERVER.stop(0);
         System.clearProperty("TEST_DEEPSEEK_API_KEY");
     }
 
@@ -105,6 +111,8 @@ class Phase4AnalysisIntegrationTest {
     void resetMockOpenAiCapture() {
         LAST_OPENAI_REQUEST_BODY.set("");
         OPENAI_REQUEST_COUNT.set(0);
+        LAST_LANGGRAPH_REQUEST_BODY.set("");
+        LANGGRAPH_REQUEST_COUNT.set(0);
     }
 
     @Test
@@ -284,6 +292,101 @@ class Phase4AnalysisIntegrationTest {
             String.class
         );
         assertThat(resultJson).contains("\"source\":\"mock-openai\"");
+    }
+
+    @Test
+    void shouldAnalyzeViaLangGraphRuntimeWhenSystemModeIsEnabled() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "langgraph");
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.modelName").value("langgraph-worker:deepseek-chat"))
+            .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
+            .andExpect(jsonPath("$.data.resultJson.analysisType").value("deconstruct"));
+
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"deconstruct\"");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"platform\":\"fanqie\"");
+    }
+
+    @Test
+    void shouldStreamDeconstructViaLangGraphRuntimeWhenSystemModeIsEnabled() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "langgraph");
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+
+        assertThat(body).contains("\"event\":\"start\"");
+        assertThat(body).contains("mock langgraph stream");
+        assertThat(body).contains("\"event\":\"done\"");
+        assertThat(body).contains("\"source\":\"mock-langgraph\"");
+        assertThat(body).contains("\"runtimeMode\":\"langgraph\"");
+        assertThat(body).contains("\"providerLatencyMillis\":321");
+        assertThat(body).doesNotContain("\"event\":\"metrics\"");
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void shouldAnalyzeTrendViaLangGraphRuntimeWhenSystemModeIsEnabled() throws Exception {
+        insertThemePromptConfig();
+        updateSystemConfig("analysis.runtime.mode", "langgraph");
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/analysis/trend")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.analysisType").value("theme"))
+            .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
+            .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"));
+
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"trend_theme\"");
+    }
+
+    @Test
+    void shouldStreamTrendViaLangGraphRuntimeWhenSystemModeIsEnabled() throws Exception {
+        insertThemePromptConfig();
+        updateSystemConfig("analysis.runtime.mode", "langgraph");
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/trend/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain"}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+
+        assertThat(body).contains("\"event\":\"start\"");
+        assertThat(body).contains("\"analysisType\":\"theme\"");
+        assertThat(body).contains("\"source\":\"mock-langgraph\"");
+        assertThat(body).contains("\"event\":\"done\"");
     }
 
     @Test
@@ -744,6 +847,74 @@ class Phase4AnalysisIntegrationTest {
             return server;
         } catch (IOException ex) {
             throw new IllegalStateException("failed to start mock OpenAI server", ex);
+        }
+    }
+
+    private static HttpServer startMockLangGraphServer() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+            server.createContext("/internal/analysis/run", exchange -> {
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                LAST_LANGGRAPH_REQUEST_BODY.set(requestBody);
+                LANGGRAPH_REQUEST_COUNT.incrementAndGet();
+                String analysisType = requestBody.contains("\"agentType\":\"trend_theme\"") ? "theme" : "deconstruct";
+                byte[] response = """
+                    {
+                      "taskId": "langgraph-task-1",
+                      "modelName": "langgraph-worker:deepseek-chat",
+                      "content": "langgraph %s content",
+                      "tokenUsed": 156,
+                      "resultJson": {
+                        "analysisType": "%s",
+                        "summary": "langgraph %s summary",
+                        "detailContent": "langgraph %s content",
+                        "source": "mock-langgraph",
+                        "historicalWordCloud": [],
+                        "themeTable": [],
+                        "hotBooks": [],
+                        "insightCards": [],
+                        "snapshotComparisons": []
+                      }
+                    }
+                    """.formatted(analysisType, analysisType, analysisType, analysisType).getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                try (OutputStream outputStream = exchange.getResponseBody()) {
+                    outputStream.write(response);
+                }
+            });
+            server.createContext("/internal/analysis/run/stream", exchange -> {
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                LAST_LANGGRAPH_REQUEST_BODY.set(requestBody);
+                LANGGRAPH_REQUEST_COUNT.incrementAndGet();
+                String analysisType = requestBody.contains("\"agentType\":\"trend_theme\"") ? "theme" : "deconstruct";
+                byte[] response = """
+                    event: start
+                    data: {"event":"start","analysisType":"%s","taskId":"langgraph-task-1"}
+
+                    event: delta
+                    data: {"event":"delta","delta":"mock langgraph stream "}
+
+                    event: delta
+                    data: {"event":"delta","delta":"payload"}
+
+                    event: metrics
+                    data: {"event":"metrics","metrics":{"runtimeMode":"langgraph","agentType":"%s","providerLatencyMillis":321,"queueWaitMillis":18,"totalDurationMillis":654}}
+
+                    event: done
+                    data: {"event":"done","data":{"taskId":"langgraph-task-1","modelName":"langgraph-worker:deepseek-chat","content":"mock langgraph stream payload","resultJson":{"analysisType":"%s","summary":"langgraph stream summary","detailContent":"mock langgraph stream payload","source":"mock-langgraph","historicalWordCloud":[],"themeTable":[],"hotBooks":[],"insightCards":[],"snapshotComparisons":[]},"tokenUsed":189}}
+
+                    """.formatted(analysisType, analysisType, analysisType).getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+                exchange.sendResponseHeaders(200, 0);
+                try (OutputStream outputStream = exchange.getResponseBody()) {
+                    outputStream.write(response);
+                }
+            });
+            server.start();
+            return server;
+        } catch (IOException ex) {
+            throw new IllegalStateException("failed to start mock LangGraph server", ex);
         }
     }
 

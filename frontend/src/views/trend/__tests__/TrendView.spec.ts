@@ -20,6 +20,7 @@ vi.mock('@/api/crawler', () => ({
   crawlerApi: {
     getBoards: vi.fn(),
     getPreference: vi.fn(),
+    savePreference: vi.fn(),
   },
 }));
 
@@ -44,12 +45,13 @@ function createBoardCatalog() {
   ];
 }
 
-function createPreference(boardCode = 'urban-brain', channelCode = 'male-new') {
+function createPreference(boardCode = 'urban-brain', channelCode = 'male-new', rankFetchCount = 40) {
   return {
     userId: 1,
     platform: 'fanqie',
     channelCode,
     boardCode,
+    rankFetchCount,
   };
 }
 
@@ -285,6 +287,114 @@ describe('TrendView', () => {
     expect(wrapper.get('[data-test="trend-snapshot-title"]').text()).toContain('1');
   });
 
+  test('extracts readable summary from stored json text when no fresh result is running', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload({
+          trendPreview: `\`\`\`json
+{
+  "summary": {
+    "overview": "基于两日榜单快照分析，榜单头部（Top 3）格局稳定，题材集中度继续抬升。"
+  },
+  "comparisonSummary": "当前榜单已经明显向头部题材收敛。"
+}
+\`\`\``,
+          detailContent: `\`\`\`json
+{
+  "summary": {
+    "overview": "基于两日榜单快照分析，榜单头部（Top 3）格局稳定，题材集中度继续抬升。"
+  },
+  "comparisonSummary": "当前榜单已经明显向头部题材收敛。"
+}
+\`\`\``,
+        }),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+
+    const wrapper = await mountTrendView();
+
+    expect(analysisApi.streamTrend).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain('榜单头部（Top 3）格局稳定');
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).not.toContain('"summary"');
+  });
+
+  test('falls back to json-like field extraction when stored preview text is truncated or malformed', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload({
+          trendPreview: '```json { "summary": { "overview": "这是一段被截断的预览',
+          detailContent: `\`\`\`json
+{
+  "summary": {
+    "overview": "即使 detailContent 不是严格 JSON，也要优先把这句结构化结论展示出来。"
+  },
+  "comparisonSummary": "趋势结论应该优先于原始 JSON 文本。"
+  "broken": “still malformed”
+}
+\`\`\``,
+        }),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+
+    const wrapper = await mountTrendView();
+
+    expect(analysisApi.streamTrend).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain('优先把这句结构化结论展示出来');
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).not.toContain('这是一段被截断的预览');
+  });
+
   test('switching board from select refreshes context but does not auto rerun trend analysis', async () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
@@ -306,6 +416,15 @@ describe('TrendView', () => {
         data: createPreference(),
         timestamp: 1,
         traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(crawlerApi.savePreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference('fantasy-rise', 'male-new', 40),
+        timestamp: 1,
+        traceId: 'trace-save-preference',
       },
     });
     vi.mocked(dataApi.getVisual)
@@ -342,6 +461,12 @@ describe('TrendView', () => {
       channelCode: 'male-new',
       boardCode: 'fantasy-rise',
     });
+    expect(crawlerApi.savePreference).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'fantasy-rise',
+      rankFetchCount: 40,
+    });
     expect(analysisApi.streamTrend).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('玄幻热升');
   });
@@ -367,6 +492,15 @@ describe('TrendView', () => {
         data: createPreference(),
         timestamp: 1,
         traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(crawlerApi.savePreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference('romance-push', 'female-hot', 40),
+        timestamp: 1,
+        traceId: 'trace-save-preference',
       },
     });
     vi.mocked(dataApi.getVisual)
@@ -403,6 +537,12 @@ describe('TrendView', () => {
       platform: 'fanqie',
       channelCode: 'female-hot',
       boardCode: 'romance-push',
+    });
+    expect(crawlerApi.savePreference).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'female-hot',
+      boardCode: 'romance-push',
+      rankFetchCount: 40,
     });
     expect(analysisApi.streamTrend).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('甜宠爆款');
@@ -465,5 +605,136 @@ describe('TrendView', () => {
     await wrapper.get('[data-test="trend-result-detail-close"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="trend-result-detail"]').exists()).toBe(false);
+  });
+
+  test('prefers structured trend sections over raw content after analysis completes', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload(),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createStreamTask(createTrendResult({
+      resultContent: '# 原始全文\n' + 'RAW-MARKER-ONLY '.repeat(80),
+      resultJson: {
+        summary: '最近三次样本快速向都市脑洞集中，系统流仍保留稳定基本盘。',
+        comparisonSummary: '榜单趋势已经从多题材并行转向都市高概念主导。',
+        insightCards: [
+          { label: '核心判断', value: '都市脑洞领跑', note: '近三次样本中热度和出现频率都更高。' },
+          { label: '副线题材', value: '系统流留存', note: '仍然是稳定补充题材。' },
+        ],
+        themeTable: [
+          { theme: '都市脑洞', count: 3, trend: '持续升温' },
+          { theme: '系统流', count: 2, trend: '稳定跟随' },
+        ],
+        hotBooks: [
+          { bookName: '脑洞之王', author: '作者甲', rankLabel: '第 1 名', reason: '概念强，书名识别度高。' },
+        ],
+        snapshotComparisons: [
+          { snapshotTime: '2026-03-18 11:30:00', topTheme: '系统流', change: '起点样本' },
+          { snapshotTime: '2026-03-20 11:30:00', topTheme: '都市脑洞', change: '完成反超' },
+        ],
+        historicalWordCloud: [
+          { name: '都市脑洞', value: 24 },
+          { name: '系统流', value: 15 },
+        ],
+      },
+    })) as never);
+
+    const wrapper = await mountTrendView();
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="trend-result-key-points"]').text()).toContain('都市脑洞领跑');
+    expect(wrapper.get('[data-test="trend-result-theme-table"]').text()).toContain('持续升温');
+    expect(wrapper.get('[data-test="trend-result-hot-books"]').text()).toContain('脑洞之王');
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).not.toContain('RAW-MARKER-ONLY');
+  });
+
+  test('renders structured companion panels to fill the desktop result column after analysis', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload(),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createStreamTask(createTrendResult({
+      resultJson: {
+        summary: '最近三次样本继续向都市脑洞聚焦。',
+        comparisonSummary: '频道切换不影响当前榜单趋势判断，当前结果应该补齐结构区。',
+        insightCards: [
+          { label: '当前赛道', value: '都市脑洞', note: '仍然是这一轮分析的头部主题。' },
+        ],
+        themeTable: [
+          { theme: '都市脑洞', count: 3, trend: '持续升温' },
+        ],
+        hotBooks: [
+          { bookName: '脑洞之王', author: '作者甲', rankLabel: '第 1 名', reason: '书名和题材识别都很强。' },
+        ],
+        historicalWordCloud: [
+          { name: '都市脑洞', value: 24 },
+        ],
+      },
+    })) as never);
+
+    const wrapper = await mountTrendView();
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('都市脑洞');
+    expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('脑洞之王');
+    expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('持续升温');
   });
 });

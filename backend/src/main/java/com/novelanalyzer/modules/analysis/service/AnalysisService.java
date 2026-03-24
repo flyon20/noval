@@ -7,6 +7,7 @@ import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.common.context.TraceIdHolder;
 import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.ResultCode;
+import com.novelanalyzer.modules.analysis.client.LangGraphWorkerClient;
 import com.novelanalyzer.modules.analysis.dto.AnalysisRequest;
 import com.novelanalyzer.modules.analysis.dto.TrendAnalysisRequest;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
@@ -26,7 +27,6 @@ import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import org.springframework.core.task.AsyncTaskExecutor;
-import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -72,9 +72,10 @@ public class AnalysisService {
     private final AnalysisRepository analysisRepository;
     private final CrawlerCacheService crawlerCacheService;
     private final CrawlerService crawlerService;
+    private final LangGraphWorkerClient langGraphWorkerClient;
     private final com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService;
     private final ObjectMapper objectMapper;
-    private final AsyncTaskExecutor streamTaskExecutor = new SimpleAsyncTaskExecutor("analysis-stream-");
+    private final AsyncTaskExecutor streamTaskExecutor;
 
     public AnalysisService(PromptConfigRepository promptConfigRepository,
                            CrawlerRepository crawlerRepository,
@@ -82,16 +83,20 @@ public class AnalysisService {
                            AnalysisRepository analysisRepository,
                            CrawlerCacheService crawlerCacheService,
                            CrawlerService crawlerService,
+                           LangGraphWorkerClient langGraphWorkerClient,
                            com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           AsyncTaskExecutor analysisStreamTaskExecutor) {
         this.promptConfigRepository = promptConfigRepository;
         this.crawlerRepository = crawlerRepository;
         this.aiGatewayService = aiGatewayService;
         this.analysisRepository = analysisRepository;
         this.crawlerCacheService = crawlerCacheService;
         this.crawlerService = crawlerService;
+        this.langGraphWorkerClient = langGraphWorkerClient;
         this.systemConfigService = systemConfigService;
         this.objectMapper = objectMapper;
+        this.streamTaskExecutor = analysisStreamTaskExecutor;
     }
 
     public AnalysisResultVO analyze(String analysisType, AnalysisRequest request) {
@@ -126,10 +131,9 @@ public class AnalysisService {
             throw new BusinessException(ResultCode.BAD_REQUEST, "chapter content not found");
         }
 
-        String inputText = buildBookInputText(book, chapters);
-        AiInvokeResult aiResult = shouldUseChunkedAnalysis(promptConfig, analysisType, inputText, chapters)
-            ? invokeChunkedAnalysis(promptConfig, book, chapters, analysisType)
-            : invokeAi(promptConfig, inputText, analysisType);
+        AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
+            ? invokeLangGraphBookAnalysis(promptConfig, book, chapters, analysisType)
+            : invokeLegacyBookAnalysis(promptConfig, book, chapters, analysisType);
         Long resultId = saveAnalysisResult(
             request.getPlatform(),
             request.getBookId(),
@@ -173,6 +177,21 @@ public class AnalysisService {
                 }
                 CrawlBookEntity book = crawlerRepository.findBookById(request.getBookId())
                     .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
+                if (isLangGraphRuntimeEnabled()) {
+                    AnalysisResultVO result = streamLangGraphBookAnalysis(
+                        emitter,
+                        request,
+                        promptConfig,
+                        book,
+                        chapters,
+                        analysisType,
+                        invocationHandle
+                    );
+                    ensureNotCancelled(invocationHandle);
+                    sendDoneEvent(emitter, result);
+                    emitter.complete();
+                    return;
+                }
                 String inputText = buildBookInputText(book, chapters);
                 boolean useChunk = shouldUseChunkedAnalysis(promptConfig, analysisType, inputText, chapters);
 
@@ -272,8 +291,9 @@ public class AnalysisService {
         }
 
         Map<Long, List<CrawlRankEntity>> ranksBySnapshot = loadBoardSnapshotRanks(snapshots);
-        String inputText = buildTrendInputText(board, snapshots, ranksBySnapshot);
-        AiInvokeResult aiResult = invokeAi(promptConfig, inputText, "theme");
+        AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
+            ? invokeLangGraphTrendAnalysis(promptConfig, board, snapshots, ranksBySnapshot)
+            : invokeAi(promptConfig, buildTrendInputText(board, snapshots, ranksBySnapshot), "theme");
         aiResult.setResultJson(normalizeTrendResultJson(aiResult, board, snapshots, ranksBySnapshot));
         Long anchorBookId = findAnchorBookId(ranksBySnapshot);
         saveAnalysisResult(
@@ -301,12 +321,17 @@ public class AnalysisService {
             try {
                 restoreContext(authUser, traceId);
                 sendStartEvent(emitter, traceId, "theme");
-                TrendAnalysisVO result = analyzeTrend(
-                    request.getPlatform(),
-                    request.getChannelCode(),
-                    request.getBoardCode()
-                );
-                sendDeltaEvents(emitter, result.getResultContent());
+                TrendAnalysisVO result;
+                if (isLangGraphRuntimeEnabled()) {
+                    result = streamLangGraphTrendAnalysis(emitter, request, traceId);
+                } else {
+                    result = analyzeTrend(
+                        request.getPlatform(),
+                        request.getChannelCode(),
+                        request.getBoardCode()
+                    );
+                    sendDeltaEvents(emitter, result.getResultContent());
+                }
                 sendDoneEvent(emitter, result);
                 emitter.complete();
             } catch (Exception ex) {
@@ -316,6 +341,253 @@ public class AnalysisService {
             }
         });
         return emitter;
+    }
+
+    private boolean isLangGraphRuntimeEnabled() {
+        return "langgraph".equalsIgnoreCase(
+            systemConfigService.getValueOrDefault("analysis.runtime.mode", "legacy")
+        );
+    }
+
+    private AiInvokeResult invokeLegacyBookAnalysis(PromptConfigEntity promptConfig,
+                                                    CrawlBookEntity book,
+                                                    List<ChapterVO> chapters,
+                                                    String analysisType) {
+        String inputText = buildBookInputText(book, chapters);
+        return shouldUseChunkedAnalysis(promptConfig, analysisType, inputText, chapters)
+            ? invokeChunkedAnalysis(promptConfig, book, chapters, analysisType)
+            : invokeAi(promptConfig, inputText, analysisType);
+    }
+
+    private AiInvokeResult invokeLangGraphBookAnalysis(PromptConfigEntity promptConfig,
+                                                       CrawlBookEntity book,
+                                                       List<ChapterVO> chapters,
+                                                       String analysisType) {
+        return langGraphWorkerClient.run(buildLangGraphBookRequest(
+            promptConfig,
+            book.getPlatform(),
+            book,
+            chapters,
+            analysisType,
+            false
+        ));
+    }
+
+    private AnalysisResultVO streamLangGraphBookAnalysis(SseEmitter emitter,
+                                                         AnalysisRequest request,
+                                                         PromptConfigEntity promptConfig,
+                                                         CrawlBookEntity book,
+                                                         List<ChapterVO> chapters,
+                                                         String analysisType,
+                                                         AiGatewayService.InvocationHandle invocationHandle) {
+        AiInvokeResult aiResult = langGraphWorkerClient.stream(
+            buildLangGraphBookRequest(promptConfig, request.getPlatform(), book, chapters, analysisType, true),
+            delta -> {
+                if (invocationHandle.isCancelled()) {
+                    return;
+                }
+                try {
+                    sendDeltaEvent(emitter, delta, null);
+                } catch (IOException ex) {
+                    invocationHandle.cancel();
+                }
+            },
+            invocationHandle::isCancelled
+        );
+        if (aiResult == null || invocationHandle.isCancelled()) {
+            throw new AnalysisCancelledException();
+        }
+
+        Long resultId = saveAnalysisResult(
+            request.getPlatform(),
+            request.getBookId(),
+            analysisType,
+            request.getChapterCount(),
+            promptConfig.getId(),
+            aiResult
+        );
+
+        AnalysisResultVO vo = new AnalysisResultVO();
+        vo.setId(resultId);
+        vo.setBookId(request.getBookId());
+        vo.setAnalysisType(analysisType);
+        vo.setModelName(aiResult.getModelName());
+        vo.setResultContent(aiResult.getContent());
+        vo.setResultJson(aiResult.getResultJson());
+        vo.setTokenUsed(aiResult.getTokenUsed());
+        crawlerCacheService.put(
+            buildAnalysisCacheKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount()),
+            vo,
+            ANALYSIS_TTL_SECONDS
+        );
+        return vo;
+    }
+
+    private AiInvokeResult invokeLangGraphTrendAnalysis(PromptConfigEntity promptConfig,
+                                                        RankBoardEntity board,
+                                                        List<RankSnapshotEntity> snapshots,
+                                                        Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
+        return langGraphWorkerClient.run(buildLangGraphTrendRequest(promptConfig, board, snapshots, ranksBySnapshot, false));
+    }
+
+    private TrendAnalysisVO streamLangGraphTrendAnalysis(SseEmitter emitter,
+                                                         TrendAnalysisRequest request,
+                                                         String traceId) {
+        RankBoardEntity board = crawlerRepository.findRankBoard(
+                request.getPlatform(),
+                request.getChannelCode(),
+                request.getBoardCode()
+            )
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank board not found"));
+        PromptConfigEntity promptConfig = promptConfigRepository.findDefaultByType("theme")
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "theme prompt config not found"));
+        List<RankSnapshotEntity> snapshots = crawlerRepository.findRecentBoardSnapshots(board.getId(), 3);
+        if (snapshots.isEmpty()) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found");
+        }
+        Map<Long, List<CrawlRankEntity>> ranksBySnapshot = loadBoardSnapshotRanks(snapshots);
+        AiInvokeResult aiResult = langGraphWorkerClient.stream(
+            buildLangGraphTrendRequest(promptConfig, board, snapshots, ranksBySnapshot, true),
+            delta -> {
+                try {
+                    sendDeltaEvent(emitter, delta, null);
+                } catch (IOException ex) {
+                    throw new IllegalStateException(ex);
+                }
+            },
+            () -> false
+        );
+        aiResult.setResultJson(normalizeTrendResultJson(aiResult, board, snapshots, ranksBySnapshot));
+        Long anchorBookId = findAnchorBookId(ranksBySnapshot);
+        saveAnalysisResult(
+            request.getPlatform(),
+            anchorBookId,
+            request.getChannelCode(),
+            request.getBoardCode(),
+            snapshots.get(0).getId(),
+            "theme",
+            0,
+            promptConfig.getId(),
+            aiResult
+        );
+        return buildTrendAnalysisVO(board, aiResult, snapshots.size());
+    }
+
+    private Map<String, Object> buildLangGraphBookRequest(PromptConfigEntity promptConfig,
+                                                          String platform,
+                                                          CrawlBookEntity book,
+                                                          List<ChapterVO> chapters,
+                                                          String analysisType,
+                                                          boolean stream) {
+        List<Map<String, Object>> chapterPayload = chapters.stream()
+            .map(chapter -> Map.<String, Object>of(
+                "chapterNo", chapter.getChapterNo(),
+                "chapterTitle", firstNonBlank(chapter.getChapterTitle(), ""),
+                "content", firstNonBlank(chapter.getContent(), "")
+            ))
+            .toList();
+        Map<String, Object> bookPayload = new LinkedHashMap<>();
+        bookPayload.put("platform", platform);
+        bookPayload.put("bookId", book.getId());
+        bookPayload.put("bookName", book.getBookName());
+        bookPayload.put("author", book.getAuthor());
+        bookPayload.put("intro", book.getIntro());
+        bookPayload.put("bookUrl", book.getBookUrl());
+
+        Map<String, Object> sourcePayload = new LinkedHashMap<>();
+        sourcePayload.put("kind", "book_analysis");
+        sourcePayload.put("platform", platform);
+        sourcePayload.put("analysisType", analysisType);
+        sourcePayload.put("inputText", buildBookInputText(book, chapters));
+        sourcePayload.put("book", bookPayload);
+        sourcePayload.put("chapters", chapterPayload);
+
+        return buildLangGraphRunRequest(promptConfig, analysisType, sourcePayload, stream);
+    }
+
+    private Map<String, Object> buildLangGraphTrendRequest(PromptConfigEntity promptConfig,
+                                                           RankBoardEntity board,
+                                                           List<RankSnapshotEntity> snapshots,
+                                                           Map<Long, List<CrawlRankEntity>> ranksBySnapshot,
+                                                           boolean stream) {
+        List<Map<String, Object>> snapshotPayload = snapshots.stream()
+            .map(snapshot -> {
+                List<Map<String, Object>> rankPayload = ranksBySnapshot.getOrDefault(snapshot.getId(), List.of()).stream()
+                    .map(item -> {
+                        Map<String, Object> rank = new LinkedHashMap<>();
+                        rank.put("rankNo", item.getRankNo());
+                        rank.put("bookId", item.getBookId());
+                        rank.put("bookName", item.getBookName());
+                        rank.put("author", item.getAuthor());
+                        rank.put("intro", item.getIntro());
+                        return rank;
+                    })
+                    .toList();
+                Map<String, Object> snapshotMap = new LinkedHashMap<>();
+                snapshotMap.put("snapshotId", snapshot.getId());
+                snapshotMap.put("snapshotTime", snapshot.getSnapshotTime().format(DATE_TIME_FORMATTER));
+                snapshotMap.put("recordCount", snapshot.getRecordCount());
+                snapshotMap.put("ranks", rankPayload);
+                return snapshotMap;
+            })
+            .toList();
+
+        Map<String, Object> sourcePayload = new LinkedHashMap<>();
+        sourcePayload.put("kind", "trend_analysis");
+        sourcePayload.put("analysisType", "theme");
+        sourcePayload.put("platform", board.getPlatform());
+        sourcePayload.put("channelCode", board.getChannelCode());
+        sourcePayload.put("boardCode", board.getBoardCode());
+        sourcePayload.put("boardName", board.getBoardName());
+        sourcePayload.put("inputText", buildTrendInputText(board, snapshots, ranksBySnapshot));
+        sourcePayload.put("snapshots", snapshotPayload);
+
+        return buildLangGraphRunRequest(promptConfig, "theme", sourcePayload, stream);
+    }
+
+    private Map<String, Object> buildLangGraphRunRequest(PromptConfigEntity promptConfig,
+                                                         String analysisType,
+                                                         Map<String, Object> sourcePayload,
+                                                         boolean stream) {
+        Map<String, Object> promptPayload = new LinkedHashMap<>();
+        promptPayload.put("promptType", promptConfig.getPromptType());
+        promptPayload.put("promptName", promptConfig.getPromptName());
+        promptPayload.put("promptContent", promptConfig.getPromptContent());
+        promptPayload.put("modelName", promptConfig.getModelName());
+        promptPayload.put("temperature", promptConfig.getTemperature());
+        promptPayload.put("maxTokens", promptConfig.getMaxTokens());
+        promptPayload.put("outputJsonSchema", promptConfig.getOutputJsonSchema());
+        promptPayload.put("outputExampleJson", promptConfig.getOutputExampleJson());
+        promptPayload.put("postProcessType", promptConfig.getPostProcessType());
+        promptPayload.put("parseConfigJson", promptConfig.getParseConfigJson());
+
+        Map<String, Object> limits = new LinkedHashMap<>();
+        limits.put("timeoutMillis", systemConfigService.getIntValueOrDefault("ai.timeout.millis", 15000));
+        limits.put("chunkMaxInputTokens", resolveChunkMaxInputTokens(promptConfig));
+        limits.put("chunkTargetInputTokens", resolveChunkTargetInputTokens(promptConfig));
+        limits.put("chunkParallelism", Math.min(2, resolveChunkParallelism()));
+
+        Map<String, Object> contextMeta = new LinkedHashMap<>();
+        contextMeta.put("runtimeMode", "langgraph");
+        contextMeta.put("traceId", TraceIdHolder.get());
+
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("taskId", java.util.UUID.randomUUID().toString());
+        request.put("traceId", TraceIdHolder.get());
+        request.put("agentType", resolveLangGraphAgentType(analysisType));
+        request.put("stream", stream);
+        request.put("promptConfig", promptPayload);
+        request.put("sourcePayload", sourcePayload);
+        request.put("limits", limits);
+        request.put("contextMeta", contextMeta);
+        return request;
+    }
+
+    private String resolveLangGraphAgentType(String analysisType) {
+        if ("theme".equals(analysisType)) {
+            return "trend_theme";
+        }
+        return analysisType;
     }
 
     private String buildAnalysisCacheKey(PromptConfigEntity promptConfig,
@@ -956,7 +1228,7 @@ public class AnalysisService {
                                     AiInvokeResult aiResult) {
         AuthUser authUser = AuthUserHolder.get();
         Long userId = authUser == null ? null : authUser.getUserId();
-        long costTime = Math.max(1L, aiResult.getContent() == null ? 1L : aiResult.getContent().length());
+        long costTime = resolveCostTime(aiResult);
         return analysisRepository.save(
             userId,
             platform,
@@ -1249,6 +1521,31 @@ public class AnalysisService {
         } catch (NumberFormatException ex) {
             return defaultValue;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private long resolveCostTime(AiInvokeResult aiResult) {
+        if (aiResult != null && aiResult.getResultJson() != null) {
+            Object meta = aiResult.getResultJson().get("meta");
+            if (meta instanceof Map<?, ?> metaMap) {
+                Object runtime = metaMap.get("runtime");
+                if (runtime instanceof Map<?, ?> runtimeMap) {
+                    Object totalDurationMillis = runtimeMap.get("totalDurationMillis");
+                    if (totalDurationMillis instanceof Number number && number.longValue() > 0L) {
+                        return number.longValue();
+                    }
+                    try {
+                        long parsed = Long.parseLong(String.valueOf(totalDurationMillis));
+                        if (parsed > 0L) {
+                            return parsed;
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // Fall through to the legacy approximation below.
+                    }
+                }
+            }
+        }
+        return Math.max(1L, aiResult == null || aiResult.getContent() == null ? 1L : aiResult.getContent().length());
     }
 
     private String firstNonBlank(String... values) {

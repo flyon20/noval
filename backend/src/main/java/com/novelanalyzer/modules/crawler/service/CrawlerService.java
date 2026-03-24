@@ -52,6 +52,9 @@ public class CrawlerService {
     private static final List<Integer> SUPPORTED_CHAPTER_CACHE_COUNTS = List.of(1, 3, 5, 10);
     private static final int DEFAULT_CRAWLER_HTTP_TIMEOUT_SECONDS = 20;
     private static final int DEFAULT_CHAPTER_FETCH_WORKERS = 3;
+    private static final int DEFAULT_RANK_FETCH_COUNT = 30;
+    private static final int MIN_RANK_FETCH_COUNT = 10;
+    private static final int MAX_RANK_FETCH_COUNT = 100;
 
     private final PythonCrawlerClient pythonCrawlerClient;
     private final CrawlerRepository crawlerRepository;
@@ -128,7 +131,8 @@ public class CrawlerService {
             authUser.getUserId(),
             request.getPlatform(),
             request.getChannelCode(),
-            request.getBoardCode()
+            request.getBoardCode(),
+            resolveRankFetchCount(request.getPlatform(), request.getRankFetchCount(), true)
         );
     }
 
@@ -436,12 +440,14 @@ public class CrawlerService {
                                                          RankSnapshotEntity latestSnapshot) {
         LocalDateTime startTime = LocalDateTime.now();
         try {
-            List<ExternalRankItem> rankItems = pythonCrawlerClient.fetchRank(
+            int requestedRankFetchCount = resolveRankFetchCount(request.getPlatform(), request.getRankFetchCount(), true);
+            List<ExternalRankItem> rankItems = limitRankItems(pythonCrawlerClient.fetchRank(
                 request.getPlatform(),
                 request.getChannelCode(),
                 request.getBoardCode(),
+                requestedRankFetchCount,
                 resolveCrawlerHttpTimeoutSeconds()
-            );
+            ), requestedRankFetchCount);
             LocalDateTime snapshotTime = LocalDateTime.now();
             RankSnapshotEntity snapshot = crawlerRepository.saveRankSnapshot(board.getId(), snapshotTime, rankItems.size());
             for (ExternalRankItem item : rankItems) {
@@ -479,8 +485,8 @@ public class CrawlerService {
                 startTime,
                 LocalDateTime.now()
             );
-            LOGGER.info("rank.refresh platform={} channelCode={} boardCode={} reused=false limited=false total={}",
-                request.getPlatform(), request.getChannelCode(), request.getBoardCode(), rankItems.size());
+            LOGGER.info("rank.refresh platform={} channelCode={} boardCode={} reused=false limited=false requestedCount={} total={}",
+                request.getPlatform(), request.getChannelCode(), request.getBoardCode(), requestedRankFetchCount, rankItems.size());
             return toRefreshResult(request.getChannelCode(), request.getBoardCode(), snapshot, false, false);
         } catch (RuntimeException ex) {
             crawlerRepository.saveRankRefreshTask(
@@ -779,6 +785,48 @@ public class CrawlerService {
             return request.getCategory();
         }
         return request.getChannelCode() + ":" + request.getBoardCode();
+    }
+
+    private int resolveRankFetchCount(String platform, Integer requestedRankFetchCount, boolean useUserPreferenceFallback) {
+        Integer normalizedRequested = normalizeRankFetchCount(requestedRankFetchCount);
+        if (normalizedRequested != null) {
+            return normalizedRequested;
+        }
+        if (useUserPreferenceFallback) {
+            AuthUser authUser = AuthUserHolder.get();
+            if (authUser != null) {
+                Integer preferredCount = crawlerRepository.findUserRankPreference(authUser.getUserId(), platform)
+                    .map(UserRankPreferenceVO::getRankFetchCount)
+                    .orElse(null);
+                Integer normalizedPreferred = normalizeRankFetchCount(preferredCount);
+                if (normalizedPreferred != null) {
+                    return normalizedPreferred;
+                }
+            }
+        }
+        return DEFAULT_RANK_FETCH_COUNT;
+    }
+
+    private Integer normalizeRankFetchCount(Integer rankFetchCount) {
+        if (rankFetchCount == null) {
+            return null;
+        }
+        if (rankFetchCount < MIN_RANK_FETCH_COUNT || rankFetchCount > MAX_RANK_FETCH_COUNT) {
+            return null;
+        }
+        if (rankFetchCount % 10 != 0) {
+            return null;
+        }
+        return rankFetchCount;
+    }
+
+    private List<ExternalRankItem> limitRankItems(List<ExternalRankItem> rankItems, int rankFetchCount) {
+        if (rankItems == null || rankItems.isEmpty()) {
+            return List.of();
+        }
+        return rankItems.stream()
+            .limit(rankFetchCount)
+            .toList();
     }
 
     private String defaultIfBlank(String value, String defaultValue) {

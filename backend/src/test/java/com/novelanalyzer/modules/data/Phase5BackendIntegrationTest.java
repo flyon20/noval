@@ -1,11 +1,14 @@
 package com.novelanalyzer.modules.data;
 
 import com.jayway.jsonpath.JsonPath;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
@@ -25,6 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
+        "spring.data.redis.database=14",
         "spring.sql.init.mode=never",
         "app.security.rate-limit-per-minute=100"
     }
@@ -48,6 +52,18 @@ class Phase5BackendIntegrationTest {
     private MockMvc mockMvc;
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    @BeforeEach
+    void clearRedisCache() {
+        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
+        try {
+            connection.serverCommands().flushDb();
+        } finally {
+            connection.close();
+        }
+    }
 
     @Test
     void shouldManageSystemConfig() throws Exception {

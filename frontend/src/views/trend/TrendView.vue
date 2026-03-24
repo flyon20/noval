@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { analysisApi } from '@/api/analysis';
 import { crawlerApi } from '@/api/crawler';
 import { dataApi } from '@/api/data';
+import { DEFAULT_RANK_FETCH_COUNT } from '@/constants/crawler';
 import AnalysisToolbar from '@/components/analysis/AnalysisToolbar.vue';
 import TrendChartCard from '@/components/trend/TrendChartCard.vue';
 import TrendComparisonList from '@/components/trend/TrendComparisonList.vue';
@@ -13,10 +14,10 @@ import TrendSnapshotTable from '@/components/trend/TrendSnapshotTable.vue';
 import TrendSummaryCards from '@/components/trend/TrendSummaryCards.vue';
 import TrendTagCloud from '@/components/trend/TrendTagCloud.vue';
 import { useTrendRun } from '@/composables/useTrendRun';
-import { buildPreviewText, extractTrendSummary } from '@/lib/trend-display';
+import { buildPreviewText, buildTrendDisplayModel, localizeTrendText } from '@/lib/trend-display';
 import { getErrorPayload } from '@/lib/http-error';
-import type { HotBook, InsightCard, SnapshotThemeComparison, ThemeTableItem, ThemeWordCloudItem, VisualData } from '@/types/data';
-import type { RankBoardCatalog, UserRankPreference } from '@/types/crawler';
+import type { SnapshotThemeComparison, ThemeWordCloudItem, VisualData } from '@/types/data';
+import type { RankBoardCatalog, RankFetchCount, UserRankPreference } from '@/types/crawler';
 import type { TrendAnalysisResult } from '@/types/trend';
 
 const PLATFORM = 'fanqie' as const;
@@ -34,6 +35,7 @@ const PHASE_LABELS: Record<string, string> = {
 const boardCatalog = ref<RankBoardCatalog[]>([]);
 const selectedChannelCode = ref('');
 const selectedBoardCode = ref('');
+const selectedRankFetchCount = ref<RankFetchCount>(DEFAULT_RANK_FETCH_COUNT);
 const contextLoading = ref(false);
 const contextError = ref('');
 const visualLoading = ref(false);
@@ -67,18 +69,19 @@ const isRunning = computed(() =>
   ['preparing', 'streaming', 'fallback-blocking'].includes(trend.state.phase),
 );
 const phaseLabel = computed(() => PHASE_LABELS[trend.state.phase] ?? PHASE_LABELS.idle);
+const structuredTrend = computed(() => buildTrendDisplayModel({
+  resultJson: trend.state.result?.resultJson,
+  resultContent: trend.state.result?.resultContent ?? visualData.value?.detailContent ?? visualData.value?.trendPreview,
+  detailContent: visualData.value?.detailContent,
+  comparisonSummary: visualData.value?.comparisonSummary,
+  trendPreview: visualData.value?.trendPreview,
+  insightCards: visualData.value?.insightCards,
+  themeTable: visualData.value?.themeTable,
+  hotBooks: visualData.value?.hotBooks,
+}));
 
-const displaySummary = computed(() => {
-  if (trend.state.result) {
-    return extractTrendSummary(trend.state.result.resultJson, trend.state.result.resultContent);
-  }
-
-  return visualData.value?.trendPreview || visualData.value?.comparisonSummary || '';
-});
-
-const displayContent = computed(() => {
-  return trend.state.result?.resultContent || visualData.value?.detailContent || visualData.value?.trendPreview || '';
-});
+const displaySummary = computed(() => structuredTrend.value.summaryText);
+const displayContent = computed(() => structuredTrend.value.detailContent);
 
 const displayPhase = computed(() => {
   if (['preparing', 'streaming', 'fallback-blocking', 'done', 'error'].includes(trend.state.phase)) {
@@ -93,7 +96,10 @@ const displayMeta = computed(() => ({
   modelName: trend.state.result?.modelName,
 }));
 
-const tagCloudItems = computed<ThemeWordCloudItem[]>(() => visualData.value?.historicalWordCloud ?? []);
+const tagCloudItems = computed<ThemeWordCloudItem[]>(() => (visualData.value?.historicalWordCloud ?? []).map((item) => ({
+  ...item,
+  name: localizeTrendText(item.name),
+})));
 const availableSnapshotCount = computed(() => Math.max(
   visualData.value?.latestSnapshots?.length ?? 0,
   visualData.value?.sourceSnapshotCount ?? 0,
@@ -154,7 +160,7 @@ const themeTableOption = computed(() => ({
       type: 'pie',
       radius: ['40%', '70%'],
       data: (visualData.value?.themeTable ?? []).map((item) => ({
-        name: item.theme,
+        name: localizeTrendText(item.theme),
         value: item.count,
       })),
     },
@@ -232,6 +238,13 @@ function ensureVisualShell() {
 function mergeVisualFromResult(result: TrendAnalysisResult) {
   const current = ensureVisualShell();
   const resultJson = result.resultJson as Record<string, unknown>;
+  const structured = buildTrendDisplayModel({
+    resultJson,
+    resultContent: result.resultContent,
+  });
+  const hasThemeTable = Object.prototype.hasOwnProperty.call(resultJson, 'themeTable');
+  const hasHotBooks = Object.prototype.hasOwnProperty.call(resultJson, 'hotBooks');
+  const hasInsightCards = Object.prototype.hasOwnProperty.call(resultJson, 'insightCards');
 
   current.platform = result.platform;
   current.channelCode = result.channelCode;
@@ -244,25 +257,15 @@ function mergeVisualFromResult(result: TrendAnalysisResult) {
   current.historicalWordCloud = Array.isArray(resultJson.historicalWordCloud)
     ? (resultJson.historicalWordCloud as ThemeWordCloudItem[])
     : current.historicalWordCloud;
-  current.themeTable = Array.isArray(resultJson.themeTable)
-    ? (resultJson.themeTable as ThemeTableItem[])
-    : current.themeTable;
-  current.hotBooks = Array.isArray(resultJson.hotBooks)
-    ? (resultJson.hotBooks as HotBook[])
-    : current.hotBooks;
-  current.insightCards = Array.isArray(resultJson.insightCards)
-    ? (resultJson.insightCards as InsightCard[])
-    : current.insightCards;
+  current.themeTable = hasThemeTable ? structured.themeTable : current.themeTable;
+  current.hotBooks = hasHotBooks ? structured.hotBooks : current.hotBooks;
+  current.insightCards = hasInsightCards ? structured.insightCards : current.insightCards;
   current.snapshotComparisons = Array.isArray(resultJson.snapshotComparisons)
     ? (resultJson.snapshotComparisons as SnapshotThemeComparison[])
     : current.snapshotComparisons;
-  current.comparisonSummary = typeof resultJson.comparisonSummary === 'string'
-    ? resultJson.comparisonSummary
-    : current.comparisonSummary;
-  current.trendPreview = typeof resultJson.summary === 'string'
-    ? resultJson.summary
-    : current.trendPreview;
-  current.detailContent = result.resultContent || current.detailContent;
+  current.comparisonSummary = structured.comparisonSummary || current.comparisonSummary;
+  current.trendPreview = structured.summaryText || current.trendPreview;
+  current.detailContent = structured.detailContent || current.detailContent;
   visualData.value = {
     ...current,
   };
@@ -300,6 +303,7 @@ async function maybeSavePreference(channelCode: string, boardCode: string) {
       platform: PLATFORM,
       channelCode,
       boardCode,
+      rankFetchCount: selectedRankFetchCount.value,
     });
   } catch {
     // Ignore preference persistence errors so the page stays responsive.
@@ -326,6 +330,7 @@ async function initializePage() {
 
     selectedChannelCode.value = selection.channelCode;
     selectedBoardCode.value = selection.boardCode;
+    selectedRankFetchCount.value = preferenceResponse?.data.data?.rankFetchCount ?? DEFAULT_RANK_FETCH_COUNT;
     trend.setContext({
       platform: PLATFORM,
       channelCode: selection.channelCode,
@@ -428,11 +433,57 @@ onBeforeUnmount(() => {
           <TrendResultPreview
             :error-message="trend.state.errorMessage"
             :phase="displayPhase"
+            :comparison-summary="structuredTrend.comparisonSummary"
             :result-content="displayContent"
             :result-meta="displayMeta"
             :result-summary="displaySummary"
+            :key-points="structuredTrend.keyPoints"
             :streaming-text="trend.state.streamingText"
           />
+        </div>
+
+        <div
+          v-if="structuredTrend.themeTable.length || structuredTrend.hotBooks.length"
+          class="trend-page__result-support"
+          data-test="trend-result-support-grid"
+        >
+          <article v-if="structuredTrend.themeTable.length" class="trend-page__support-card">
+            <div class="trend-page__support-card-head">
+              <h3>题材表</h3>
+              <span>{{ structuredTrend.themeTable.length }} 项</span>
+            </div>
+            <ul class="trend-page__support-list" data-test="trend-result-theme-table">
+              <li
+                v-for="item in structuredTrend.themeTable.slice(0, 4)"
+                :key="`${item.theme}-${item.trend}`"
+              >
+                <div class="trend-page__support-copy">
+                  <strong>{{ item.theme }}</strong>
+                  <span>出现 {{ item.count }} 次</span>
+                </div>
+                <em>{{ item.trend || '保持稳定' }}</em>
+              </li>
+            </ul>
+          </article>
+
+          <article v-if="structuredTrend.hotBooks.length" class="trend-page__support-card">
+            <div class="trend-page__support-card-head">
+              <h3>代表热书</h3>
+              <span>{{ structuredTrend.hotBooks.length }} 本</span>
+            </div>
+            <ul class="trend-page__support-list" data-test="trend-result-hot-books">
+              <li
+                v-for="item in structuredTrend.hotBooks.slice(0, 4)"
+                :key="`${item.bookName}-${item.rankLabel || 'rankless'}`"
+              >
+                <div class="trend-page__support-copy">
+                  <strong>{{ item.bookName }}</strong>
+                  <span>{{ item.rankLabel || '当前热书样本' }}</span>
+                </div>
+                <em>{{ item.reason || item.author || '已进入当前榜单重点关注范围。' }}</em>
+              </li>
+            </ul>
+          </article>
         </div>
       </section>
 
@@ -448,9 +499,13 @@ onBeforeUnmount(() => {
         />
         <TrendTagCloud :items="tagCloudItems" />
         <TrendComparisonList
-          :comparisons="visualData?.snapshotComparisons ?? []"
-          :insight-cards="visualData?.insightCards ?? []"
-          :summary="visualData?.comparisonSummary ?? displaySummary"
+          :comparisons="(visualData?.snapshotComparisons ?? []).map((item) => ({
+            ...item,
+            topTheme: localizeTrendText(item.topTheme),
+            change: localizeTrendText(item.change),
+          }))"
+          :insight-cards="structuredTrend.insightCards"
+          :summary="structuredTrend.comparisonSummary || displaySummary"
         />
       </aside>
     </div>
@@ -565,6 +620,75 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
+.trend-page__result-support {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.trend-page__support-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem 1.05rem;
+  border-radius: 1.2rem;
+  border: 1px solid var(--color-border);
+  background:
+    linear-gradient(145deg, rgba(255, 250, 243, 0.94), rgba(247, 249, 243, 0.9)),
+    rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow-soft);
+}
+
+.trend-page__support-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.trend-page__support-card-head h3,
+.trend-page__support-list,
+.trend-page__support-copy strong,
+.trend-page__support-copy span,
+.trend-page__support-list em {
+  margin: 0;
+}
+
+.trend-page__support-card-head span,
+.trend-page__support-copy span,
+.trend-page__support-list em {
+  color: var(--color-text-muted);
+}
+
+.trend-page__support-card-head span {
+  font-size: 0.82rem;
+}
+
+.trend-page__support-list {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.trend-page__support-list li {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 1rem;
+  background: rgba(35, 65, 58, 0.05);
+}
+
+.trend-page__support-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.trend-page__support-list em {
+  font-style: normal;
+  line-height: 1.65;
+}
+
 .trend-page__visual {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -617,6 +741,10 @@ onBeforeUnmount(() => {
 
   .trend-page__toolbar {
     padding: 0.95rem;
+  }
+
+  .trend-page__result-support {
+    grid-template-columns: 1fr;
   }
 }
 </style>

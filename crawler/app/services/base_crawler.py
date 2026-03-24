@@ -8,7 +8,12 @@ from app.models.rank import RankItem
 
 
 class BaseCrawler:
-    def fetch_rank(self, category: str) -> List[RankItem]:
+    def fetch_rank(
+        self,
+        category: str,
+        board_code: str | None = None,
+        rank_fetch_count: int | None = None,
+    ) -> List[RankItem]:
         raise NotImplementedError
 
     def fetch_book(self, book_url: str) -> BookDetail:

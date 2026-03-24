@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 
 from app.config import settings
@@ -23,6 +25,16 @@ class HttpClient:
         response = self._client.get(url)
         response.raise_for_status()
         return response.text
+
+    def get_json(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        response = self._client.get(url, params=params, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
     def close(self) -> None:
         self._client.close()

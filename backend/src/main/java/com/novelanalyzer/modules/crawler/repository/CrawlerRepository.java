@@ -507,6 +507,7 @@ public class CrawlerRepository {
         List<UserRankPreferenceVO> results = jdbcTemplate.query(
             """
                 SELECT user_id, platform, channel_code, board_code
+                     , COALESCE(rank_fetch_count, 30) AS rank_fetch_count
                 FROM user_rank_preference
                 WHERE user_id = ? AND platform = ? AND deleted = 0
                 LIMIT 1
@@ -517,6 +518,7 @@ public class CrawlerRepository {
                 vo.setPlatform(rs.getString("platform"));
                 vo.setChannelCode(rs.getString("channel_code"));
                 vo.setBoardCode(rs.getString("board_code"));
+                vo.setRankFetchCount(rs.getInt("rank_fetch_count"));
                 return vo;
             },
             userId,
@@ -528,28 +530,31 @@ public class CrawlerRepository {
     public UserRankPreferenceVO saveUserRankPreference(Long userId,
                                                        String platform,
                                                        String channelCode,
-                                                       String boardCode) {
+                                                       String boardCode,
+                                                       Integer rankFetchCount) {
         int updated = jdbcTemplate.update(
             """
                 UPDATE user_rank_preference
-                SET channel_code = ?, board_code = ?, update_time = CURRENT_TIMESTAMP, deleted = 0
+                SET channel_code = ?, board_code = ?, rank_fetch_count = ?, update_time = CURRENT_TIMESTAMP, deleted = 0
                 WHERE user_id = ? AND platform = ?
                 """,
             channelCode,
             boardCode,
+            rankFetchCount,
             userId,
             platform
         );
         if (updated == 0) {
             jdbcTemplate.update(
                 """
-                    INSERT INTO user_rank_preference(user_id, platform, channel_code, board_code, create_time, update_time, deleted)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                    INSERT INTO user_rank_preference(user_id, platform, channel_code, board_code, rank_fetch_count, create_time, update_time, deleted)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
                     """,
                 userId,
                 platform,
                 channelCode,
-                boardCode
+                boardCode,
+                rankFetchCount
             );
         }
         return findUserRankPreference(userId, platform)

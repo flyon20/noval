@@ -5,8 +5,11 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.http.HttpClient;
 import java.time.Duration;
 
 @Configuration
@@ -53,6 +56,25 @@ public class AiConfig {
                 return 0;
             }
         };
+    }
+
+    @Bean
+    public HttpClient aiHttpClient(AiProperties properties) {
+        return HttpClient.newBuilder()
+            .connectTimeout(Duration.ofMillis(properties.getTimeoutMillis()))
+            .build();
+    }
+
+    @Bean(name = "analysisStreamTaskExecutor")
+    public AsyncTaskExecutor analysisStreamTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("analysis-stream-");
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(32);
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.initialize();
+        return executor;
     }
 }
 

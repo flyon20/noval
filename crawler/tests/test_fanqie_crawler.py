@@ -12,9 +12,15 @@ from app.utils.parsers import extract_initial_state, html_to_text
 
 
 class StubHttpClient:
-    def __init__(self, responses: dict[str, str]) -> None:
+    def __init__(
+        self,
+        responses: dict[str, str],
+        json_responses: dict[tuple[str, tuple[tuple[str, str], ...]], dict] | None = None,
+    ) -> None:
         self._responses = responses
+        self._json_responses = json_responses or {}
         self.calls: list[str] = []
+        self.json_calls: list[tuple[str, dict[str, str]]] = []
         self.timeout_seconds = 20
 
     def get_text(self, url: str) -> str:
@@ -22,6 +28,20 @@ class StubHttpClient:
         if url not in self._responses:
             raise AssertionError(f"unexpected url: {url}")
         return self._responses[url]
+
+    def get_json(self, url: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> dict:
+        normalized_params = {
+            str(key): str(value)
+            for key, value in (params or {}).items()
+        }
+        self.json_calls.append((url, normalized_params))
+        key = (
+            url,
+            tuple(sorted(normalized_params.items())),
+        )
+        if key not in self._json_responses:
+            raise AssertionError(f"unexpected json request: {url} {normalized_params}")
+        return self._json_responses[key]
 
 
 class SlowTrackingHttpClient(StubHttpClient):
@@ -45,6 +65,9 @@ class SlowTrackingHttpClient(StubHttpClient):
         finally:
             with self._lock:
                 self._inflight -= 1
+
+    def get_json(self, url: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> dict:
+        raise AssertionError(f"unexpected json request: {url}")
 
 
 class StubDecoder:
@@ -133,6 +156,21 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertEqual("fanqie", request.platform)
         self.assertEqual("male-hot-a", request.category)
 
+    def test_rank_request_accepts_rank_fetch_count_payload(self) -> None:
+        request = RankRequest.model_validate(
+            {
+                "platform": "fanqie",
+                "channelCode": "male-new",
+                "boardCode": "262",
+                "rankFetchCount": 30,
+            }
+        )
+
+        self.assertEqual("fanqie", request.platform)
+        self.assertEqual("male-new", request.channelCode)
+        self.assertEqual("262", request.boardCode)
+        self.assertEqual(30, request.rankFetchCount)
+
     def test_fetch_rank_supports_legacy_category_alias(self) -> None:
         crawler = FanqieCrawler(
             StubHttpClient(
@@ -162,6 +200,23 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertEqual([("male-hot-a",)], crawler.calls)
         self.assertEqual([{"ok": True}], response.data)
 
+    def test_rank_api_passes_rank_fetch_count_to_board_crawler(self) -> None:
+        crawler = StubRankCrawler()
+        request = RankRequest.model_validate(
+            {
+                "platform": "fanqie",
+                "channelCode": "male-new",
+                "boardCode": "262",
+                "rankFetchCount": 30,
+            }
+        )
+
+        with patch("app.api.rank.build_crawler", return_value=crawler):
+            response = rank_api.rank(request)
+
+        self.assertEqual([("male-new", "262", 30)], crawler.calls)
+        self.assertEqual([{"ok": True}], response.data)
+
     def test_fetch_rank_uses_channel_code_and_board_code(self) -> None:
         crawler = FanqieCrawler(
             StubHttpClient(
@@ -186,6 +241,248 @@ class FanqieCrawlerTest(unittest.TestCase):
         self.assertEqual("https://fanqienovel.com/page/101", result[0].bookUrl)
         self.assertEqual("101", result[0].platformBookId)
         self.assertEqual(2, result[1].rankNo)
+
+    def test_fetch_rank_should_merge_paginated_rank_api_results_for_board_pages(self) -> None:
+        rank_page_url = "https://fanqienovel.com/rank/1_1_262"
+        rank_api_url = "https://fanqienovel.com/api/rank/category/list"
+        page0_params = (
+            rank_api_url,
+            (
+                ("app_id", "2503"),
+                ("category_id", "262"),
+                ("gender", "1"),
+                ("limit", "10"),
+                ("offset", "0"),
+                ("rankMold", "1"),
+                ("rank_list_type", "3"),
+                ("rank_version", ""),
+            ),
+        )
+        page1_params = (
+            rank_api_url,
+            (
+                ("app_id", "2503"),
+                ("category_id", "262"),
+                ("gender", "1"),
+                ("limit", "10"),
+                ("offset", "10"),
+                ("rankMold", "1"),
+                ("rank_list_type", "3"),
+                ("rank_version", ""),
+            ),
+        )
+        page2_params = (
+            rank_api_url,
+            (
+                ("app_id", "2503"),
+                ("category_id", "262"),
+                ("gender", "1"),
+                ("limit", "10"),
+                ("offset", "20"),
+                ("rankMold", "1"),
+                ("rank_list_type", "3"),
+                ("rank_version", ""),
+            ),
+        )
+        crawler = FanqieCrawler(
+            StubHttpClient(
+                {
+                    rank_page_url: (
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
+                        '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"}'
+                        ']}};})()</script>'
+                    )
+                },
+                json_responses={
+                    page0_params: {
+                        "code": 0,
+                        "data": {
+                            "total_num": 30,
+                            "book_list": [
+                                {
+                                    "currentPos": index,
+                                    "bookId": str(100 + index),
+                                    "bookName": f"Book {index}",
+                                    "author": f"Author {index}",
+                                    "abstract": f"Intro {index}",
+                                }
+                                for index in range(1, 11)
+                            ],
+                        },
+                    },
+                    page1_params: {
+                        "code": 0,
+                        "data": {
+                            "total_num": 30,
+                            "book_list": [
+                                {
+                                    "currentPos": index,
+                                    "bookId": str(100 + index),
+                                    "bookName": f"Book {index}",
+                                    "author": f"Author {index}",
+                                    "abstract": f"Intro {index}",
+                                }
+                                for index in range(11, 21)
+                            ],
+                        },
+                    },
+                    page2_params: {
+                        "code": 0,
+                        "data": {
+                            "total_num": 30,
+                            "book_list": [
+                                {
+                                    "currentPos": index,
+                                    "bookId": str(100 + index),
+                                    "bookName": f"Book {index}",
+                                    "author": f"Author {index}",
+                                    "abstract": f"Intro {index}",
+                                }
+                                for index in range(21, 31)
+                            ],
+                        },
+                    },
+                },
+            )
+        )
+
+        result = crawler.fetch_rank("male-new", "262")
+
+        self.assertEqual(30, len(result))
+        self.assertEqual(1, result[0].rankNo)
+
+    def test_fetch_rank_should_stop_paginated_rank_api_results_at_requested_limit(self) -> None:
+        rank_page_url = "https://fanqienovel.com/rank/1_1_262"
+        rank_api_url = "https://fanqienovel.com/api/rank/category/list"
+        page0_params = (
+            rank_api_url,
+            (
+                ("app_id", "2503"),
+                ("category_id", "262"),
+                ("gender", "1"),
+                ("limit", "10"),
+                ("offset", "0"),
+                ("rankMold", "1"),
+                ("rank_list_type", "3"),
+                ("rank_version", ""),
+            ),
+        )
+        page1_params = (
+            rank_api_url,
+            (
+                ("app_id", "2503"),
+                ("category_id", "262"),
+                ("gender", "1"),
+                ("limit", "10"),
+                ("offset", "10"),
+                ("rankMold", "1"),
+                ("rank_list_type", "3"),
+                ("rank_version", ""),
+            ),
+        )
+        page2_params = (
+            rank_api_url,
+            (
+                ("app_id", "2503"),
+                ("category_id", "262"),
+                ("gender", "1"),
+                ("limit", "10"),
+                ("offset", "20"),
+                ("rankMold", "1"),
+                ("rank_list_type", "3"),
+                ("rank_version", ""),
+            ),
+        )
+        http_client = StubHttpClient(
+            {
+                rank_page_url: (
+                    '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
+                    '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"}'
+                    ']}};})()</script>'
+                )
+            },
+            json_responses={
+                page0_params: {
+                    "code": 0,
+                    "data": {
+                        "total_num": 30,
+                        "book_list": [
+                            {
+                                "currentPos": index,
+                                "bookId": str(100 + index),
+                                "bookName": f"Book {index}",
+                                "author": f"Author {index}",
+                                "abstract": f"Intro {index}",
+                            }
+                            for index in range(1, 11)
+                        ],
+                    },
+                },
+                page1_params: {
+                    "code": 0,
+                    "data": {
+                        "total_num": 30,
+                        "book_list": [
+                            {
+                                "currentPos": index,
+                                "bookId": str(100 + index),
+                                "bookName": f"Book {index}",
+                                "author": f"Author {index}",
+                                "abstract": f"Intro {index}",
+                            }
+                            for index in range(11, 21)
+                        ],
+                    },
+                },
+                page2_params: {
+                    "code": 0,
+                    "data": {
+                        "total_num": 30,
+                        "book_list": [
+                            {
+                                "currentPos": index,
+                                "bookId": str(100 + index),
+                                "bookName": f"Book {index}",
+                                "author": f"Author {index}",
+                                "abstract": f"Intro {index}",
+                            }
+                            for index in range(21, 31)
+                        ],
+                    },
+                },
+            },
+        )
+        crawler = FanqieCrawler(http_client)
+
+        result = crawler.fetch_rank("male-new", "262", 20)
+
+        self.assertEqual(20, len(result))
+        self.assertEqual(2, len(http_client.json_calls))
+        self.assertEqual(page0_params[0], http_client.json_calls[0][0])
+        self.assertEqual(page1_params[0], http_client.json_calls[1][0])
+        self.assertEqual(20, result[-1].rankNo)
+        self.assertEqual("Book 20", result[-1].bookName)
+        self.assertEqual("120", result[-1].platformBookId)
+
+    def test_fetch_rank_should_fallback_to_initial_state_when_rank_api_paging_fails(self) -> None:
+        crawler = FanqieCrawler(
+            StubHttpClient(
+                {
+                    "https://fanqienovel.com/rank/1_1_262": (
+                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
+                        '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"},'
+                        '{"currentPos":2,"bookId":"102","bookName":"Book B","author":"Author B","abstract":"Intro B"}'
+                        ']}};})()</script>'
+                    )
+                }
+            )
+        )
+
+        result = crawler.fetch_rank("male-new", "262")
+
+        self.assertEqual(2, len(result))
+        self.assertEqual("Book A", result[0].bookName)
+        self.assertEqual("Book B", result[1].bookName)
 
     def test_fetch_rank_should_decode_obfuscated_fields(self) -> None:
         raw_name = "\ue4e9\ue3ea\ue4f3\ue4e7"

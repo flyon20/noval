@@ -9,6 +9,8 @@ const props = defineProps<{
   streamingText?: string;
   resultContent?: string;
   resultSummary?: string;
+  comparisonSummary?: string;
+  keyPoints?: string[];
   resultMeta?: {
     traceId?: string;
     modelName?: string;
@@ -20,8 +22,10 @@ const detailVisible = ref(false);
 const isMobile = ref(false);
 
 const previewText = computed(() =>
-  buildPreviewText(props.resultSummary || props.resultContent, 300) || '暂无趋势结果',
+  buildPreviewText(props.resultSummary || props.comparisonSummary || props.resultContent, 300) || '暂无趋势结果',
 );
+const normalizedKeyPoints = computed(() => (props.keyPoints ?? []).filter(Boolean));
+const drawerSummary = computed(() => props.comparisonSummary || props.resultSummary || '');
 const fullText = computed(() => stripMarkdownToText(props.resultContent));
 const fullHtml = computed(() => (props.resultContent ? renderAnalysisMarkdown(props.resultContent) : ''));
 const canOpenDetail = computed(() => Boolean(props.resultContent));
@@ -64,8 +68,8 @@ onBeforeUnmount(() => {
     <article v-else class="trend-result-preview__card">
       <div class="trend-result-preview__head">
         <div class="trend-result-preview__copy">
-          <p class="trend-result-preview__eyebrow">300 字预览</p>
-          <h3 class="trend-result-preview__title">趋势结论</h3>
+          <p class="trend-result-preview__eyebrow">结构化结论</p>
+          <h3 class="trend-result-preview__title">趋势判断</h3>
         </div>
         <el-button
           v-if="canOpenDetail"
@@ -81,6 +85,22 @@ onBeforeUnmount(() => {
       <p class="trend-result-preview__body" data-test="trend-result-preview">
         {{ previewText }}
       </p>
+
+      <section
+        v-if="normalizedKeyPoints.length"
+        class="trend-result-preview__section"
+        data-test="trend-result-key-points"
+      >
+        <div class="trend-result-preview__section-head">
+          <h4>重点判断</h4>
+          <span>{{ normalizedKeyPoints.length }} 条</span>
+        </div>
+        <ul class="trend-result-preview__list">
+          <li v-for="point in normalizedKeyPoints" :key="point">
+            {{ point }}
+          </li>
+        </ul>
+      </section>
 
       <div class="trend-result-preview__meta">
         <span v-if="resultMeta?.modelName">模型：{{ resultMeta.modelName }}</span>
@@ -101,7 +121,7 @@ onBeforeUnmount(() => {
       <div class="trend-result-drawer" data-test="trend-result-detail">
         <div class="trend-result-drawer__topbar">
           <div class="trend-result-drawer__heading">
-            <p>趋势全文</p>
+            <p>趋势详情</p>
             <h3>完整分析结果</h3>
           </div>
           <el-button
@@ -115,7 +135,21 @@ onBeforeUnmount(() => {
           </el-button>
         </div>
 
-        <div class="trend-result-drawer__content" v-html="fullHtml" />
+        <section
+          v-if="drawerSummary || normalizedKeyPoints.length"
+          class="trend-result-drawer__summary"
+        >
+          <p v-if="drawerSummary" class="trend-result-drawer__summary-copy">
+            {{ drawerSummary }}
+          </p>
+          <ul v-if="normalizedKeyPoints.length" class="trend-result-drawer__list">
+            <li v-for="point in normalizedKeyPoints" :key="point">
+              {{ point }}
+            </li>
+          </ul>
+        </section>
+
+        <div v-if="fullHtml" class="trend-result-drawer__content" v-html="fullHtml" />
 
         <div class="trend-result-drawer__meta">
           <span v-if="resultMeta?.modelName">模型：{{ resultMeta.modelName }}</span>
@@ -143,7 +177,8 @@ onBeforeUnmount(() => {
 }
 
 .trend-result-preview__head,
-.trend-result-drawer__topbar {
+.trend-result-drawer__topbar,
+.trend-result-preview__section-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -159,13 +194,16 @@ onBeforeUnmount(() => {
 .trend-result-preview__eyebrow,
 .trend-result-preview__title,
 .trend-result-preview__body,
+.trend-result-preview__section-head h4,
 .trend-result-drawer__heading p,
-.trend-result-drawer__heading h3 {
+.trend-result-drawer__heading h3,
+.trend-result-drawer__summary-copy {
   margin: 0;
 }
 
 .trend-result-preview__eyebrow,
-.trend-result-drawer__heading p {
+.trend-result-drawer__heading p,
+.trend-result-preview__section-head span {
   color: var(--color-text-muted);
   font-size: 0.84rem;
 }
@@ -179,6 +217,47 @@ onBeforeUnmount(() => {
   color: var(--color-text);
   line-height: 1.85;
   white-space: pre-wrap;
+}
+
+.trend-result-preview__section,
+.trend-result-drawer__summary {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  background:
+    linear-gradient(135deg, rgba(247, 248, 242, 0.95), rgba(255, 250, 243, 0.92)),
+    rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(35, 65, 58, 0.08);
+}
+
+.trend-result-preview__list,
+.trend-result-drawer__list {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trend-result-preview__list li,
+.trend-result-drawer__list li {
+  position: relative;
+  padding-left: 1rem;
+  color: var(--color-text);
+  line-height: 1.75;
+}
+
+.trend-result-preview__list li::before,
+.trend-result-drawer__list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.78rem;
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 999px;
+  background: rgba(190, 108, 28, 0.78);
 }
 
 .trend-result-preview__meta,
@@ -200,8 +279,12 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.trend-result-drawer__summary-copy,
 .trend-result-drawer__content {
   line-height: 1.8;
+}
+
+.trend-result-drawer__content {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -212,7 +295,8 @@ onBeforeUnmount(() => {
 
 @media (max-width: 768px) {
   .trend-result-preview__head,
-  .trend-result-drawer__topbar {
+  .trend-result-drawer__topbar,
+  .trend-result-preview__section-head {
     flex-wrap: wrap;
   }
 

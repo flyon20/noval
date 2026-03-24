@@ -46,6 +46,7 @@ CREATE TABLE user_rank_preference (
     platform VARCHAR(20) NOT NULL,
     channel_code VARCHAR(50) NOT NULL,
     board_code VARCHAR(50) NOT NULL,
+    rank_fetch_count INT DEFAULT 30,
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0

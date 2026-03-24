@@ -7,8 +7,10 @@ import BookDetailDrawer from '@/components/rank/BookDetailDrawer.vue';
 import ChapterPreviewDrawer from '@/components/rank/ChapterPreviewDrawer.vue';
 import {
   CHAPTER_COUNT_OPTIONS,
+  DEFAULT_RANK_FETCH_COUNT,
   DEFAULT_PLATFORM,
   DEFAULT_RANK_PAGE_SIZE,
+  RANK_FETCH_COUNT_OPTIONS,
   RANK_PAGE_SIZE_OPTIONS,
 } from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
@@ -19,6 +21,7 @@ import type {
   RankBoardCatalog,
   RankBoardOption,
   RankBookItem,
+  RankFetchCount,
   RankPageResult,
   RankRefreshResult,
   UiChapterCount,
@@ -33,6 +36,7 @@ const filters = reactive({
   channelCode: '',
   boardCode: '',
   chapterCount: 3 as UiChapterCount,
+  rankFetchCount: DEFAULT_RANK_FETCH_COUNT as RankFetchCount,
 });
 
 const state = reactive({
@@ -103,6 +107,13 @@ function getIntroPreview(content: string) {
   return truncateText(content || '', INTRO_PREVIEW_LENGTH);
 }
 
+function normalizeRankFetchCount(rankFetchCount?: number | null): RankFetchCount {
+  if (RANK_FETCH_COUNT_OPTIONS.includes(rankFetchCount as RankFetchCount)) {
+    return rankFetchCount as RankFetchCount;
+  }
+  return DEFAULT_RANK_FETCH_COUNT;
+}
+
 async function initializePage() {
   state.listLoading = true;
   state.errorMessage = '';
@@ -134,6 +145,7 @@ async function initializePage() {
       : null;
     filters.channelCode = preferredChannel?.channelCode ?? firstChannel.channelCode;
     filters.boardCode = preferredBoard?.boardCode ?? preferredChannel?.boards[0]?.boardCode ?? firstBoard.boardCode;
+    filters.rankFetchCount = normalizeRankFetchCount(preference?.rankFetchCount);
     await loadCurrentBoard();
   } catch (error) {
     applyListError(error, '榜单目录加载失败');
@@ -197,11 +209,12 @@ async function refreshCurrentBoard(refreshMode: 'AUTO' | 'FORCE') {
       channelCode: filters.channelCode,
       boardCode: filters.boardCode,
       refreshMode,
+      rankFetchCount: filters.rankFetchCount,
     });
     state.refreshInfo = refreshResponse.data.data;
     state.traceId = refreshResponse.data.traceId;
     state.page = 1;
-    await fetchRankPage(1, true);
+    await loadCurrentBoard();
   } catch (error) {
     applyListError(error, '榜单抓取失败');
   } finally {
@@ -264,6 +277,14 @@ async function handlePageSizeChange(pageSize: number) {
   state.pageSize = pageSize;
   state.page = 1;
   await fetchRankPage(1);
+}
+
+async function handleRankFetchCountChange(rankFetchCount: RankFetchCount) {
+  if (filters.rankFetchCount === rankFetchCount) {
+    return;
+  }
+  filters.rankFetchCount = rankFetchCount;
+  await saveUserPreference();
 }
 
 async function openDetail(row: RankBookItem) {
@@ -388,6 +409,7 @@ async function saveUserPreference() {
       platform: filters.platform,
       channelCode: filters.channelCode,
       boardCode: filters.boardCode,
+      rankFetchCount: filters.rankFetchCount,
     });
   } catch {
     // Ignore preference write failures to avoid blocking rank browsing.
@@ -455,6 +477,23 @@ onMounted(() => {
         </div>
 
         <div class="rank-page__toolbar-group">
+          <label class="rank-page__label">抓榜样本</label>
+          <el-select
+            v-model="filters.rankFetchCount"
+            class="rank-page__select"
+            data-testid="rank-fetch-count-select"
+            @change="handleRankFetchCountChange"
+          >
+            <el-option
+              v-for="option in RANK_FETCH_COUNT_OPTIONS"
+              :key="option"
+              :label="`${option} 本`"
+              :value="option"
+            />
+          </el-select>
+        </div>
+
+        <div class="rank-page__toolbar-group">
           <label class="rank-page__label">每页显示</label>
           <div class="rank-page__page-size" data-testid="rank-page-size">
             <button
@@ -500,6 +539,11 @@ onMounted(() => {
           <span>当前状态</span>
           <strong>{{ refreshStatusText }}</strong>
         </article>
+      </div>
+
+      <div class="rank-page__snapshot-note">
+        <span data-testid="rank-current-total">当前快照 {{ state.total }} 本</span>
+        <span data-testid="rank-next-fetch-count">下次重新抓取按 {{ filters.rankFetchCount }} 本执行</span>
       </div>
 
       <el-alert
@@ -732,6 +776,24 @@ onMounted(() => {
   gap: 0.9rem;
 }
 
+.rank-page__snapshot-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+}
+
+.rank-page__snapshot-note span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid rgba(35, 65, 58, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
 .rank-page__snapshot-card {
   display: grid;
   gap: 0.35rem;
@@ -865,6 +927,15 @@ onMounted(() => {
 
   .rank-page__snapshot {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rank-page__snapshot-note {
+    flex-direction: column;
+  }
+
+  .rank-page__snapshot-note span {
+    width: 100%;
+    justify-content: center;
   }
 }
 

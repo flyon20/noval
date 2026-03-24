@@ -48,12 +48,16 @@ CREATE TABLE IF NOT EXISTS user_rank_preference (
     platform VARCHAR(20) NOT NULL COMMENT 'platform',
     channel_code VARCHAR(50) NOT NULL COMMENT 'channel code',
     board_code VARCHAR(50) NOT NULL COMMENT 'board code',
+    rank_fetch_count INT DEFAULT 30 COMMENT 'preferred rank fetch count',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
     deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
     UNIQUE KEY uk_user_platform (user_id, platform),
     INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='user rank preference';
+
+ALTER TABLE user_rank_preference
+    ADD COLUMN IF NOT EXISTS rank_fetch_count INT DEFAULT 30 COMMENT 'preferred rank fetch count';
 
 ALTER TABLE crawl_rank
     ADD COLUMN IF NOT EXISTS snapshot_id BIGINT COMMENT 'rank snapshot id',

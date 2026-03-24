@@ -7,6 +7,7 @@ import type {
   CrawlerChapterRequest,
   CrawlerRankRequest,
   Platform,
+  RankFetchCount,
   RankBoardCatalog,
   RankBookItem,
   RankPageRequest,
@@ -29,7 +30,7 @@ export const crawlerApi = {
       params,
     });
   },
-  savePreference(payload: { platform: Platform; channelCode: string; boardCode: string }) {
+  savePreference(payload: { platform: Platform; channelCode: string; boardCode: string; rankFetchCount: RankFetchCount }) {
     return httpClient.post<ApiResponse<UserRankPreference>>('/api/crawler/preference', payload);
   },
   refreshRankBoard(payload: CrawlerRankRequest) {

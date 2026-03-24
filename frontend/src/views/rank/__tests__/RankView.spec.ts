@@ -161,6 +161,7 @@ describe('RankView', () => {
           platform: 'fanqie',
           channelCode: 'male-new',
           boardCode: 'urban-power',
+          rankFetchCount: 40,
         },
         timestamp: 1,
         traceId: 'trace-preference',
@@ -294,6 +295,7 @@ describe('RankView', () => {
       channelCode: 'male-new',
       boardCode: 'urban-brain',
       refreshMode: 'AUTO',
+      rankFetchCount: 30,
     });
     expect(crawlerApi.getRankPage).toHaveBeenNthCalledWith(2, {
       platform: 'fanqie',
@@ -373,9 +375,26 @@ describe('RankView', () => {
           platform: 'fanqie',
           channelCode: 'male-new',
           boardCode: 'urban-brain',
+          rankFetchCount: 50,
         },
         timestamp: 1,
         traceId: 'trace-save-preference',
+      },
+    });
+
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          userId: 2,
+          platform: 'fanqie',
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+          rankFetchCount: 50,
+        },
+        timestamp: 1,
+        traceId: 'trace-preference',
       },
     });
 
@@ -403,6 +422,7 @@ describe('RankView', () => {
       channelCode: 'male-new',
       boardCode: 'urban-brain',
       refreshMode: 'FORCE',
+      rankFetchCount: 50,
     });
     expect(crawlerApi.getRankPage).toHaveBeenCalledWith({
       platform: 'fanqie',
@@ -471,6 +491,189 @@ describe('RankView', () => {
       pageSize: 5,
     });
 
+  });
+
+  test('shows current snapshot total and next fetch count beside the toolbar state', async () => {
+    const { crawlerApi } = await import('@/api/crawler');
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          {
+            channelCode: 'male-new',
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
+          },
+        ],
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+          page: 1,
+          pageSize: 10,
+          items: buildPageItems(),
+        },
+        timestamp: 1,
+        traceId: 'trace-page',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          userId: 2,
+          platform: 'fanqie',
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+          rankFetchCount: 50,
+        },
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: RankView }],
+    });
+    await router.push('/rank');
+
+    const wrapper = mount(RankView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="rank-current-total"]').text()).toContain('12');
+    expect(wrapper.get('[data-testid="rank-next-fetch-count"]').text()).toContain('50');
+  });
+
+  test('uses the updated fetch count when manual refresh is triggered after selection', async () => {
+    const { crawlerApi } = await import('@/api/crawler');
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          {
+            channelCode: 'male-new',
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
+          },
+        ],
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+          page: 1,
+          pageSize: 10,
+          items: buildPageItems(),
+        },
+        timestamp: 1,
+        traceId: 'trace-page',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          userId: 2,
+          platform: 'fanqie',
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+          rankFetchCount: 100,
+        },
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(crawlerApi.savePreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          userId: 2,
+          platform: 'fanqie',
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+          rankFetchCount: 20,
+        },
+        timestamp: 1,
+        traceId: 'trace-save-preference',
+      },
+    });
+    vi.mocked(crawlerApi.refreshRankBoard).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          channelCode: 'male-new',
+          boardCode: 'urban-brain',
+          snapshotId: 6002,
+          snapshotTime: '2026-03-22T10:10:00',
+          total: 20,
+          reused: false,
+          refreshLimited: false,
+          analysisTriggered: false,
+        },
+        timestamp: 1,
+        traceId: 'trace-refresh',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: RankView }],
+    });
+    await router.push('/rank');
+
+    const wrapper = mount(RankView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    const fetchCountSelect = wrapper.findAllComponents({ name: 'ElSelect' })[2];
+    await fetchCountSelect.setValue(20);
+    fetchCountSelect.vm.$emit('change', 20);
+    await flushPromises();
+
+    vi.mocked(crawlerApi.refreshRankBoard).mockClear();
+
+    await wrapper.get('[data-testid="rank-force-refresh"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="rank-next-fetch-count"]').text()).toContain('20');
+    expect(crawlerApi.refreshRankBoard).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+      refreshMode: 'FORCE',
+      rankFetchCount: 20,
+    });
   });
 
   test('opens detail, refreshes chapters, then navigates to analysis', async () => {

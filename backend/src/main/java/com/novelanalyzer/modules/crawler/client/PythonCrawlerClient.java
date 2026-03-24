@@ -47,10 +47,18 @@ public class PythonCrawlerClient {
     }
 
     public List<ExternalRankItem> fetchRank(String platform, String category, Integer timeoutSeconds) {
+        return fetchRank(platform, category, (Integer) null, timeoutSeconds);
+    }
+
+    public List<ExternalRankItem> fetchRank(String platform,
+                                            String category,
+                                            Integer rankFetchCount,
+                                            Integer timeoutSeconds) {
         try {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("category", category);
+            putIfPositive(request, "rankFetchCount", rankFetchCount);
             putIfPositive(request, "timeoutSeconds", timeoutSeconds);
             PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/rank",
@@ -72,11 +80,20 @@ public class PythonCrawlerClient {
     }
 
     public List<ExternalRankItem> fetchRank(String platform, String channelCode, String boardCode, Integer timeoutSeconds) {
+        return fetchRank(platform, channelCode, boardCode, null, timeoutSeconds);
+    }
+
+    public List<ExternalRankItem> fetchRank(String platform,
+                                            String channelCode,
+                                            String boardCode,
+                                            Integer rankFetchCount,
+                                            Integer timeoutSeconds) {
         try {
             Map<String, Object> request = new HashMap<>();
             request.put("platform", platform);
             request.put("channelCode", channelCode);
             request.put("boardCode", boardCode);
+            putIfPositive(request, "rankFetchCount", rankFetchCount);
             putIfPositive(request, "timeoutSeconds", timeoutSeconds);
             PythonResult result = crawlerRestTemplate.postForEntity(
                 crawlerProperties.getBaseUrl() + "/internal/rank",
