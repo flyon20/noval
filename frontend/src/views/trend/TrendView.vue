@@ -94,6 +94,40 @@ const displayMeta = computed(() => ({
 }));
 
 const tagCloudItems = computed<ThemeWordCloudItem[]>(() => visualData.value?.historicalWordCloud ?? []);
+const availableSnapshotCount = computed(() => Math.max(
+  visualData.value?.latestSnapshots?.length ?? 0,
+  visualData.value?.sourceSnapshotCount ?? 0,
+  trend.state.result?.sourceSnapshotCount ?? 0,
+  0,
+));
+const visualSummaryText = computed(() => {
+  if (availableSnapshotCount.value > 0) {
+    return `图表只围绕当前榜单展示，优先展示当前可用的 ${availableSnapshotCount.value} 次快照和已落库的结构化趋势结果，手机端会自动切成单列。`;
+  }
+
+  return '图表只围绕当前榜单展示，待抓到快照后这里会自动补上结构化趋势数据，手机端会自动切成单列。';
+});
+const wordCloudSubtitle = computed(() => {
+  if (availableSnapshotCount.value > 0) {
+    return `基于当前可用的 ${availableSnapshotCount.value} 次样本，先展示已经拿到的题材关键词。`;
+  }
+
+  return '当前还没有可用样本，待抓到快照后这里会自动补上题材关键词。';
+});
+const snapshotChartTitle = computed(() => {
+  if (availableSnapshotCount.value > 0) {
+    return `最近 ${availableSnapshotCount.value} 次快照书籍数`;
+  }
+
+  return '快照书籍数';
+});
+const snapshotChartSubtitle = computed(() => {
+  if (availableSnapshotCount.value > 0) {
+    return `先观察最近 ${availableSnapshotCount.value} 次榜单快照的样本规模，不再等待凑满三次。`;
+  }
+
+  return '当前还没有可用快照，待抓取后这里会展示样本规模变化。';
+});
 
 const wordCloudOption = computed(() => ({
   tooltip: { trigger: 'axis' },
@@ -428,13 +462,13 @@ onBeforeUnmount(() => {
           <h3 class="trend-page__visual-title">榜单图表</h3>
         </div>
         <p class="trend-page__visual-summary">
-          图表只围绕当前榜单展示，优先用历史三次快照和已落库的结构化趋势结果，手机端会自动切成单列。
+          {{ visualSummaryText }}
         </p>
       </header>
 
       <TrendChartCard
         title="历史题材词云"
-        subtitle="展示该榜单最近三次趋势样本里最稳定出现的题材关键词。"
+        :subtitle="wordCloudSubtitle"
         :height="260"
         :option="wordCloudOption"
       />
@@ -445,12 +479,15 @@ onBeforeUnmount(() => {
         :option="themeTableOption"
       />
       <TrendChartCard
-        title="快照书籍数"
-        subtitle="观察最近三次榜单快照的样本规模是否稳定。"
+        :title="snapshotChartTitle"
+        :subtitle="snapshotChartSubtitle"
         :height="260"
         :option="snapshotOption"
       />
-      <TrendSnapshotTable :snapshots="visualData?.latestSnapshots ?? []" />
+      <TrendSnapshotTable
+        :sample-count="availableSnapshotCount"
+        :snapshots="visualData?.latestSnapshots ?? []"
+      />
     </section>
 
     <el-alert

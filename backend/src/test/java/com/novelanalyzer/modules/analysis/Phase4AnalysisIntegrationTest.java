@@ -584,20 +584,13 @@ class Phase4AnalysisIntegrationTest {
     @Test
     void shouldStreamTrendAnalysisWithSseProtocol() throws Exception {
         insertThemePromptConfig();
-        insertRankSnapshot("fanqie", "male-hot-a", 1, 1001L, "Book One", "Author One", "Intro One",
-            LocalDateTime.of(2026, 3, 18, 10, 0));
-        insertRankSnapshot("fanqie", "male-hot-a", 1, 1001L, "Book One", "Author One", "Intro One",
-            LocalDateTime.of(2026, 3, 19, 10, 0));
-        insertRankSnapshot("fanqie", "male-hot-a", 1, 1001L, "Book One", "Author One", "Intro One",
-            LocalDateTime.of(2026, 3, 20, 10, 0));
-
         String token = loginAndGetToken("admin", "admin123");
 
         MvcResult streamStart = mockMvc.perform(post("/api/analysis/trend/stream")
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"platform":"fanqie","category":"male-hot-a"}
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain"}
                     """))
             .andExpect(request().asyncStarted())
             .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))

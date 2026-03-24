@@ -225,6 +225,66 @@ describe('TrendView', () => {
     expect(wrapper.text()).toContain('都市脑洞');
   });
 
+  test('shows the available snapshot count instead of waiting for three samples', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload({
+          sourceSnapshotCount: 1,
+          historyAnalysisCount: 1,
+          latestSnapshots: [
+            {
+              snapshotTime: '2026-03-20 11:30:00',
+              bookCount: 20,
+              topBookName: '脑洞之王',
+              topBookAuthor: '作者甲',
+            },
+          ],
+          historicalWordCloud: [{ name: '都市脑洞', value: 1 }],
+          themeTable: [{ theme: '都市脑洞', count: 1, trend: '样本积累中' }],
+          snapshotComparisons: [
+            { snapshotTime: '2026-03-20 11:30:00', topTheme: '都市脑洞', change: '单次快照' },
+          ],
+          insightCards: [
+            { label: '当前焦点', value: '都市脑洞', note: '先基于现有 1 次快照展示' },
+            { label: '代表作品', value: '脑洞之王', note: '先按已抓到的榜首作品展示' },
+          ],
+        }),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+
+    const wrapper = await mountTrendView();
+
+    expect(analysisApi.streamTrend).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="trend-summary-snapshot-count"]').text()).toBe('1');
+    expect(wrapper.get('[data-test="trend-snapshot-title"]').text()).toContain('1');
+  });
+
   test('switching board from select refreshes context but does not auto rerun trend analysis', async () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');

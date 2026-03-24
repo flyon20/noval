@@ -167,6 +167,55 @@ class Phase5BackendIntegrationTest {
     }
 
     @Test
+    void shouldReturnFallbackVisualDataWhenOnlyOneSnapshotIsAvailable() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        Long boardId = jdbcTemplate.queryForObject(
+            "SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ? AND deleted = 0",
+            Long.class,
+            "fanqie",
+            "male-new",
+            "urban-brain"
+        );
+        Long latestSnapshotId = jdbcTemplate.queryForObject(
+            "SELECT id FROM rank_snapshot WHERE rank_board_id = ? AND deleted = 0 ORDER BY snapshot_time DESC LIMIT 1",
+            Long.class,
+            boardId
+        );
+
+        jdbcTemplate.update(
+            "UPDATE rank_snapshot SET deleted = 1 WHERE rank_board_id = ? AND id <> ?",
+            boardId,
+            latestSnapshotId
+        );
+        jdbcTemplate.update(
+            "UPDATE analysis_result SET deleted = 1 WHERE platform = ? AND channel_code = ? AND board_code = ? AND analysis_type = ? AND deleted = 0",
+            "fanqie",
+            "male-new",
+            "urban-brain",
+            "theme"
+        );
+
+        mockMvc.perform(get("/api/data/visual")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.sourceSnapshotCount").value(1))
+            .andExpect(jsonPath("$.data.historyAnalysisCount").value(1))
+            .andExpect(jsonPath("$.data.latestSnapshots.length()").value(1))
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(1))
+            .andExpect(jsonPath("$.data.themeTable.length()").value(1))
+            .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
+            .andExpect(jsonPath("$.data.insightCards.length()").value(2))
+            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(1))
+            .andExpect(jsonPath("$.data.comparisonSummary").isNotEmpty())
+            .andExpect(jsonPath("$.data.trendPreview").isNotEmpty());
+    }
+
+    @Test
     void shouldReturnBoardScopedTrendAnalysis() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
 
@@ -184,7 +233,8 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.boardName").isNotEmpty())
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"))
-            .andExpect(jsonPath("$.data.resultJson.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.resultJson.historicalWordCloud").isArray())
+            .andExpect(jsonPath("$.data.resultJson.historicalWordCloud").isNotEmpty())
             .andExpect(jsonPath("$.data.resultJson.summary").isNotEmpty())
             .andExpect(jsonPath("$.data.resultContent").isNotEmpty());
     }

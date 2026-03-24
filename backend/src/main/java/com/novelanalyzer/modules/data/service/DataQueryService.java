@@ -73,6 +73,30 @@ public class DataQueryService {
         if (snapshotComparisons.isEmpty()) {
             snapshotComparisons = buildSnapshotComparisons(snapshots, ranksBySnapshot);
         }
+        List<RankSnapshotVO> latestSnapshots = toLatestSnapshots(snapshots, ranksBySnapshot);
+        List<ThemeTableItemVO> themeTable = toThemeTable(latestThemeResult.get("themeTable"));
+        if (themeTable.isEmpty()) {
+            themeTable = buildThemeTable(board, snapshotComparisons, snapshots.size());
+        }
+        List<ThemeWordCloudItemVO> historicalWordCloud = toWordCloud(coalesce(
+            latestThemeResult.get("historicalWordCloud"),
+            latestThemeResult.get("wordCloud")
+        ));
+        if (historicalWordCloud.isEmpty()) {
+            historicalWordCloud = buildWordCloud(themeTable, board, snapshots.size());
+        }
+        List<HotBookVO> hotBooks = toHotBooks(latestThemeResult.get("hotBooks"));
+        if (hotBooks.isEmpty()) {
+            hotBooks = buildHotBooks(snapshots, ranksBySnapshot);
+        }
+        List<InsightCardVO> insightCards = toInsightCards(latestThemeResult.get("insightCards"));
+        if (insightCards.isEmpty()) {
+            insightCards = buildInsightCards(board, themeTable, hotBooks, snapshots.size());
+        }
+        String comparisonSummary = firstNonBlank(
+            asString(latestThemeResult.get("comparisonSummary")),
+            buildComparisonSummary(board, snapshotComparisons, snapshots.size())
+        );
 
         VisualDataVO vo = new VisualDataVO();
         vo.setPlatform(platform);
@@ -81,23 +105,17 @@ public class DataQueryService {
         vo.setBoardName(board.getBoardName());
         vo.setSourceSnapshotCount(snapshots.size());
         vo.setHistoryAnalysisCount(asInteger(latestThemeResult.get("historyAnalysisCount"), snapshots.size()));
-        vo.setLatestSnapshots(toLatestSnapshots(snapshots, ranksBySnapshot));
-        vo.setHistoricalWordCloud(toWordCloud(coalesce(
-            latestThemeResult.get("historicalWordCloud"),
-            latestThemeResult.get("wordCloud")
-        )));
-        vo.setThemeTable(toThemeTable(latestThemeResult.get("themeTable")));
-        vo.setHotBooks(toHotBooks(latestThemeResult.get("hotBooks")));
-        vo.setInsightCards(toInsightCards(latestThemeResult.get("insightCards")));
-        vo.setComparisonSummary(firstNonBlank(
-            asString(latestThemeResult.get("comparisonSummary")),
-            buildComparisonSummary(snapshotComparisons)
-        ));
+        vo.setLatestSnapshots(latestSnapshots);
+        vo.setHistoricalWordCloud(historicalWordCloud);
+        vo.setThemeTable(themeTable);
+        vo.setHotBooks(hotBooks);
+        vo.setInsightCards(insightCards);
+        vo.setComparisonSummary(comparisonSummary);
         vo.setSnapshotComparisons(snapshotComparisons);
         vo.setTrendPreview(firstNonBlank(
             asString(latestThemeResult.get("trendPreview")),
             asString(latestThemeResult.get("summary")),
-            vo.getComparisonSummary()
+            comparisonSummary
         ));
         vo.setDetailContent(firstNonBlank(
             asString(latestThemeResult.get("detailContent")),
@@ -172,6 +190,23 @@ public class DataQueryService {
             .toList();
     }
 
+    private List<ThemeTableItemVO> buildThemeTable(RankBoardEntity board,
+                                                   List<SnapshotThemeComparisonVO> snapshotComparisons,
+                                                   int snapshotCount) {
+        if (snapshotCount <= 0) {
+            return List.of();
+        }
+
+        ThemeTableItemVO vo = new ThemeTableItemVO();
+        vo.setTheme(firstNonBlank(
+            snapshotComparisons.isEmpty() ? null : snapshotComparisons.get(0).getTopTheme(),
+            board.getBoardName()
+        ));
+        vo.setCount((long) Math.max(snapshotCount, 1));
+        vo.setTrend(snapshotCount > 1 ? "样本积累中" : "单次快照");
+        return List.of(vo);
+    }
+
     private List<HotBookVO> toHotBooks(Object rawValue) {
         return asListOfMap(rawValue).stream()
             .map(item -> {
@@ -186,6 +221,28 @@ public class DataQueryService {
             .toList();
     }
 
+    private List<HotBookVO> buildHotBooks(List<RankSnapshotEntity> snapshots,
+                                          Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
+        if (snapshots.isEmpty()) {
+            return List.of();
+        }
+
+        List<CrawlRankEntity> latestRanks = ranksBySnapshot.getOrDefault(snapshots.get(0).getId(), List.of());
+        CrawlRankEntity topItem = latestRanks.stream()
+            .min(Comparator.comparing(CrawlRankEntity::getRankNo, Comparator.nullsLast(Integer::compareTo)))
+            .orElse(null);
+        if (topItem == null) {
+            return List.of();
+        }
+
+        HotBookVO vo = new HotBookVO();
+        vo.setBookName(topItem.getBookName());
+        vo.setAuthor(topItem.getAuthor());
+        vo.setRankLabel("#" + (topItem.getRankNo() == null ? 0 : topItem.getRankNo()));
+        vo.setReason("基于当前可用快照的榜首作品");
+        return List.of(vo);
+    }
+
     private List<InsightCardVO> toInsightCards(Object rawValue) {
         return asListOfMap(rawValue).stream()
             .map(item -> {
@@ -197,6 +254,33 @@ public class DataQueryService {
             })
             .filter(item -> item.getLabel() != null && item.getValue() != null)
             .toList();
+    }
+
+    private List<InsightCardVO> buildInsightCards(RankBoardEntity board,
+                                                  List<ThemeTableItemVO> themeTable,
+                                                  List<HotBookVO> hotBooks,
+                                                  int snapshotCount) {
+        if (snapshotCount <= 0) {
+            return List.of();
+        }
+
+        InsightCardVO themeCard = new InsightCardVO();
+        themeCard.setLabel("当前焦点");
+        themeCard.setValue(firstNonBlank(
+            themeTable.isEmpty() ? null : themeTable.get(0).getTheme(),
+            board.getBoardName()
+        ));
+        themeCard.setNote("先基于现有 " + snapshotCount + " 次快照展示，后续会随着样本增加继续补全");
+
+        InsightCardVO hotBookCard = new InsightCardVO();
+        hotBookCard.setLabel("代表作品");
+        hotBookCard.setValue(firstNonBlank(
+            hotBooks.isEmpty() ? null : hotBooks.get(0).getBookName(),
+            board.getBoardName()
+        ));
+        hotBookCard.setNote("当前按已抓到的榜首作品先展示，不再等待满三次");
+
+        return List.of(themeCard, hotBookCard);
     }
 
     private List<SnapshotThemeComparisonVO> toSnapshotComparisons(Object rawValue) {
@@ -230,12 +314,39 @@ public class DataQueryService {
         }).filter(item -> item.getSnapshotTime() != null).toList();
     }
 
-    private String buildComparisonSummary(List<SnapshotThemeComparisonVO> comparisons) {
+    private List<ThemeWordCloudItemVO> buildWordCloud(List<ThemeTableItemVO> themeTable,
+                                                      RankBoardEntity board,
+                                                      int snapshotCount) {
+        if (!themeTable.isEmpty()) {
+            return themeTable.stream()
+                .filter(item -> item.getTheme() != null && item.getCount() != null)
+                .map(item -> {
+                    ThemeWordCloudItemVO vo = new ThemeWordCloudItemVO();
+                    vo.setName(item.getTheme());
+                    vo.setValue(item.getCount());
+                    return vo;
+                })
+                .toList();
+        }
+        if (snapshotCount <= 0) {
+            return List.of();
+        }
+
+        ThemeWordCloudItemVO vo = new ThemeWordCloudItemVO();
+        vo.setName(board.getBoardName());
+        vo.setValue((long) snapshotCount);
+        return List.of(vo);
+    }
+
+    private String buildComparisonSummary(RankBoardEntity board,
+                                          List<SnapshotThemeComparisonVO> comparisons,
+                                          int snapshotCount) {
         if (comparisons.isEmpty()) {
             return null;
         }
         SnapshotThemeComparisonVO latest = comparisons.get(0);
-        return "Latest tracked snapshot focus: " + firstNonBlank(latest.getTopTheme(), "unknown");
+        String focus = firstNonBlank(latest.getTopTheme(), board.getBoardName());
+        return "当前已展示 " + snapshotCount + " 次可用快照，最近一次聚焦在 " + focus + "。";
     }
 
     private int normalizeLimit(Integer limit, int defaultValue, int maxValue) {

@@ -1,16 +1,39 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { RankSnapshot } from '@/types/data';
 
-defineProps<{
-  snapshots: RankSnapshot[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    snapshots: RankSnapshot[];
+    sampleCount?: number;
+  }>(),
+  {
+    sampleCount: 0,
+  },
+);
+
+const availableCount = computed(() => {
+  return props.sampleCount > 0 ? props.sampleCount : props.snapshots.length;
+});
+
+const snapshotTitle = computed(() => {
+  return availableCount.value > 0 ? `最近${availableCount.value}次快照` : '最近快照';
+});
+
+const snapshotDescription = computed(() => {
+  if (availableCount.value > 0) {
+    return `按时间倒序展示当前可用的${availableCount.value}次榜单样本，先看已有数据，不再等待凑满三次。`;
+  }
+
+  return '按时间倒序展示榜单样本，抓到快照后这里会自动补上。';
+});
 </script>
 
 <template>
   <article class="trend-snapshot-table" data-test="trend-snapshot-table">
     <header class="trend-snapshot-table__header">
-      <h3>最近三次快照</h3>
-      <p>按时间倒序展示榜单样本，方便你直接核对最新抓到的数量和代表作品。</p>
+      <h3 data-test="trend-snapshot-title">{{ snapshotTitle }}</h3>
+      <p>{{ snapshotDescription }}</p>
     </header>
 
     <div class="trend-snapshot-table__table-wrap">

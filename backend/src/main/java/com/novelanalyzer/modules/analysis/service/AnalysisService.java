@@ -889,10 +889,13 @@ public class AnalysisService {
                                        List<RankSnapshotEntity> snapshots,
                                        Map<Long, List<CrawlRankEntity>> ranksBySnapshot) {
         StringBuilder builder = new StringBuilder();
+        int snapshotCount = snapshots.size();
         builder.append("Platform: ").append(board.getPlatform()).append("\n");
         builder.append("Channel: ").append(board.getChannelCode()).append("\n");
         builder.append("Board: ").append(board.getBoardCode()).append(" / ").append(board.getBoardName()).append("\n");
-        builder.append("Task: Analyze this exact rank board using the last three captured snapshots. ")
+        builder.append("Task: Analyze this exact rank board using the latest available captured snapshots (")
+            .append(snapshotCount)
+            .append(" in total). If fewer than three snapshots are available, use the available data directly instead of refusing. ")
             .append("Return structured JSON with summary, historicalWordCloud, themeTable, hotBooks, insightCards, and snapshotComparisons.\n\n");
         int index = 1;
         for (RankSnapshotEntity snapshot : snapshots) {
