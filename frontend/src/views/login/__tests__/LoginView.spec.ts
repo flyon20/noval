@@ -92,7 +92,7 @@ describe('LoginView', () => {
   test('successful register triggers bootstrap and navigates to /rank', async () => {
     const { authApi } = await import('@/api/auth');
     const { systemApi } = await import('@/api/system');
-    vi.mocked((authApi as any).register).mockResolvedValue({
+    vi.mocked(authApi.register).mockResolvedValue({
       data: {
         code: 200,
         message: 'success',
@@ -144,7 +144,7 @@ describe('LoginView', () => {
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
-    expect((authApi as any).register).toHaveBeenCalledWith({
+    expect(authApi.register).toHaveBeenCalledWith({
       username: 'new-user',
       password: 'Password123',
     });
@@ -174,11 +174,11 @@ describe('LoginView', () => {
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
-    expect((authApi as any).register).not.toHaveBeenCalled();
+    expect(authApi.register).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('两次输入的密码不一致');
   });
 
-  test('register mode shows password rules and blocks weak passwords before request', async () => {
+  test('register mode hides the password rules panel and still blocks weak passwords before request', async () => {
     const { authApi } = await import('@/api/auth');
 
     const router = createRouter({
@@ -195,10 +195,8 @@ describe('LoginView', () => {
 
     await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
 
-    expect(wrapper.text()).toContain('密码需至少 8 位');
-    expect(wrapper.text()).toContain('包含大写字母');
-    expect(wrapper.text()).toContain('包含小写字母');
-    expect(wrapper.text()).toContain('包含数字');
+    expect(wrapper.text()).not.toContain('密码设置要求');
+    expect(wrapper.text()).not.toContain('包含大写字母');
 
     await wrapper.get('input[autocomplete="username"]').setValue('new-user');
     await wrapper.get('input[autocomplete="new-password"]').setValue('secret123');
@@ -206,8 +204,29 @@ describe('LoginView', () => {
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
-    expect((authApi as any).register).not.toHaveBeenCalled();
+    expect(authApi.register).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('密码需至少 8 位，且包含大写字母、小写字母和数字');
+  });
+
+  test('register mode upgrades placeholders to explain username and password requirements', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/login', component: LoginView }],
+    });
+    await router.push('/login');
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('input[autocomplete="username"]').attributes('placeholder')).toBe('创建用户名，用于后续登录');
+    expect(wrapper.get('input[autocomplete="new-password"]').attributes('placeholder')).toBe('设置密码，至少 8 位，含大小写字母和数字');
+    expect(wrapper.get('input[data-test="register-confirm-password"]').attributes('placeholder')).toBe('再次输入密码，需与上方一致');
   });
 
   test('failed login displays backend message', async () => {
@@ -283,7 +302,7 @@ describe('LoginView', () => {
 
   test('failed register explains unauthorized backend response with a friendly reason', async () => {
     const { authApi } = await import('@/api/auth');
-    vi.mocked((authApi as any).register).mockRejectedValue({
+    vi.mocked(authApi.register).mockRejectedValue({
       response: {
         status: 401,
         data: {
@@ -312,7 +331,7 @@ describe('LoginView', () => {
     await wrapper.get('form').trigger('submit');
     await flushPromises();
 
-    expect((authApi as any).register).toHaveBeenCalled();
+    expect(authApi.register).toHaveBeenCalled();
     expect(wrapper.text()).toContain('注册入口暂时不可用，请稍后重试');
     expect(wrapper.text()).toContain('trace-register-unauthorized');
   });

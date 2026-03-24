@@ -12,7 +12,6 @@ import { useAuthStore } from '@/stores/auth';
 type AuthMode = 'login' | 'register';
 
 const PASSWORD_RULE_TEXT = '密码需至少 8 位，且包含大写字母、小写字母和数字';
-const PASSWORD_RULE_ITEMS = ['至少 8 位', '包含大写字母', '包含小写字母', '包含数字'];
 const REGISTER_UNAVAILABLE_MESSAGE = '注册入口暂时不可用，请稍后重试';
 const REGISTER_INVALID_MESSAGE = '注册信息有误，请检查用户名、密码和确认密码';
 const LOGIN_INVALID_MESSAGE = '登录信息有误，请检查用户名和密码';
@@ -41,6 +40,13 @@ const state = reactive({
 });
 
 const isRegisterMode = computed(() => state.mode === 'register');
+const usernamePlaceholder = computed(() => (
+  isRegisterMode.value ? '创建用户名，用于后续登录' : '用户名'
+));
+const passwordPlaceholder = computed(() => (
+  isRegisterMode.value ? '设置密码，至少 8 位，含大小写字母和数字' : '密码'
+));
+const confirmPasswordPlaceholder = '再次输入密码，需与上方一致';
 
 function triggerLoginBootstrap() {
   try {
@@ -211,20 +217,6 @@ async function handleSubmit() {
           </p>
         </div>
 
-        <div v-if="isRegisterMode" class="login-card__password-rules">
-          <p class="login-card__password-rules-title">密码设置要求</p>
-          <p class="login-card__password-rules-copy">{{ PASSWORD_RULE_TEXT }}</p>
-          <div class="login-card__password-rule-list">
-            <span
-              v-for="item in PASSWORD_RULE_ITEMS"
-              :key="item"
-              class="login-card__password-rule"
-            >
-              {{ item }}
-            </span>
-          </div>
-        </div>
-
         <el-alert
           v-if="state.errorMessage"
           :title="state.errorMessage"
@@ -238,7 +230,7 @@ async function handleSubmit() {
           <el-form-item>
             <el-input
               v-model="form.username"
-              placeholder="用户名"
+              :placeholder="usernamePlaceholder"
               size="large"
               :prefix-icon="User"
               autocomplete="username"
@@ -248,7 +240,7 @@ async function handleSubmit() {
           <el-form-item>
             <el-input
               v-model="form.password"
-              placeholder="密码"
+              :placeholder="passwordPlaceholder"
               type="password"
               size="large"
               :prefix-icon="Lock"
@@ -260,7 +252,7 @@ async function handleSubmit() {
           <el-form-item v-if="isRegisterMode">
             <el-input
               v-model="form.confirmPassword"
-              placeholder="确认密码"
+              :placeholder="confirmPasswordPlaceholder"
               type="password"
               size="large"
               :prefix-icon="Lock"
@@ -467,43 +459,6 @@ async function handleSubmit() {
   font-size: 0.92rem;
 }
 
-.login-card__password-rules {
-  display: grid;
-  gap: 0.75rem;
-  padding: 0.95rem 1rem;
-  border-radius: 1rem;
-  background: rgba(199, 146, 92, 0.08);
-  border: 1px solid rgba(199, 146, 92, 0.18);
-}
-
-.login-card__password-rules-title {
-  margin: 0;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--color-primary);
-}
-
-.login-card__password-rules-copy {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 0.84rem;
-  line-height: 1.65;
-}
-
-.login-card__password-rule-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.login-card__password-rule {
-  padding: 0.4rem 0.7rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: var(--color-text-muted);
-  font-size: 0.82rem;
-}
-
 .login-card__form {
   display: grid;
   gap: 0.5rem;
@@ -554,10 +509,6 @@ async function handleSubmit() {
     width: 100%;
     padding: 1.5rem;
     border-radius: 1.25rem;
-  }
-
-  .login-card__password-rule-list {
-    gap: 0.45rem;
   }
 }
 
