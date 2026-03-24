@@ -19,6 +19,15 @@ const platformLabel = computed(() => (props.platform === 'fanqie' ? '番茄小�
 const activeChannel = computed(() => props.channels.find((item) => item.channelCode === props.activeChannelCode));
 const activeBoard = computed(() => activeChannel.value?.boards.find((item) => item.boardCode === props.activeBoardCode));
 const activeBoardName = computed(() => activeBoard.value?.boardName ?? '未选择榜单');
+
+function handleChannelChange(channelCode: string) {
+  const channel = props.channels.find((item) => item.channelCode === channelCode);
+
+  emit('select', {
+    channelCode,
+    boardCode: channel?.boards[0]?.boardCode ?? '',
+  });
+}
 </script>
 
 <template>
@@ -32,25 +41,30 @@ const activeBoardName = computed(() => activeBoard.value?.boardName ?? '未选�
       <div class="trend-context__chips">
         <span class="trend-context__chip">平台：{{ platformLabel }}</span>
         <span class="trend-context__chip">榜单：{{ activeBoardName }}</span>
-        <span class="trend-context__chip">{{ running ? '状态：分析中' : loading ? '状态：加载中' : '状态：待命' }}</span>
+        <span class="trend-context__chip">
+          {{ running ? '状态：分析中' : loading ? '状态：加载中' : '状态：待命' }}
+        </span>
       </div>
     </div>
 
     <div class="trend-context__selectors">
       <div class="trend-context__group">
         <p class="trend-context__group-title">频道</p>
-        <div class="trend-context__pill-list">
-          <button
+        <el-select
+          :model-value="activeChannelCode"
+          class="trend-context__channel-select"
+          :loading="loading"
+          placeholder="选择频道"
+          data-test="trend-channel-select"
+          @update:model-value="handleChannelChange"
+        >
+          <el-option
             v-for="channel in channels"
             :key="channel.channelCode"
-            class="trend-context__pill"
-            :class="{ 'is-active': channel.channelCode === activeChannelCode }"
-            type="button"
-            @click="emit('select', { channelCode: channel.channelCode, boardCode: channel.boards[0]?.boardCode ?? '' })"
-          >
-            {{ channel.channelName }}
-          </button>
-        </div>
+            :label="channel.channelName"
+            :value="channel.channelCode"
+          />
+        </el-select>
       </div>
 
       <div class="trend-context__group">
@@ -125,6 +139,18 @@ const activeBoardName = computed(() => activeBoard.value?.boardName ?? '未选�
   flex-wrap: wrap;
 }
 
+.trend-context__channel-select {
+  width: min(100%, 18rem);
+}
+
+:deep(.trend-context__channel-select .el-select__wrapper) {
+  min-height: 44px;
+  border-radius: 1rem;
+  border: 1px solid rgba(35, 65, 58, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: none;
+}
+
 .trend-context__chip,
 .trend-context__pill {
   min-height: 44px;
@@ -167,6 +193,10 @@ const activeBoardName = computed(() => activeBoard.value?.boardName ?? '未选�
 @media (max-width: 768px) {
   .trend-context {
     padding: 1rem;
+  }
+
+  .trend-context__channel-select {
+    width: 100%;
   }
 
   .trend-context__pill-list {

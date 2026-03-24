@@ -33,14 +33,22 @@ function createBoardCatalog() {
         { boardCode: 'fantasy-rise', boardName: '玄幻热升' },
       ],
     },
+    {
+      channelCode: 'female-hot',
+      channelName: '女频热门榜',
+      boards: [
+        { boardCode: 'romance-push', boardName: '甜宠爆款' },
+        { boardCode: 'ancient-love', boardName: '古言热推' },
+      ],
+    },
   ];
 }
 
-function createPreference(boardCode = 'urban-brain') {
+function createPreference(boardCode = 'urban-brain', channelCode = 'male-new') {
   return {
     userId: 1,
     platform: 'fanqie',
-    channelCode: 'male-new',
+    channelCode,
     boardCode,
   };
 }
@@ -69,7 +77,7 @@ function createVisualPayload(overrides: Record<string, unknown> = {}) {
       {
         snapshotTime: '2026-03-18 11:30:00',
         bookCount: 20,
-        topBookName: '都市升级论',
+        topBookName: '都市升级记',
         topBookAuthor: '作者丙',
       },
     ],
@@ -274,6 +282,77 @@ describe('TrendView', () => {
       platform: 'fanqie',
       channelCode: 'male-new',
       boardCode: 'fantasy-rise',
+    });
+    expect(analysisApi.streamTrend).not.toHaveBeenCalled();
+  });
+
+  test('switching channel from select loads the first board without auto rerunning analysis', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual)
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: createVisualPayload(),
+          timestamp: 1,
+          traceId: 'trace-visual-1',
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: createVisualPayload({
+            channelCode: 'female-hot',
+            boardCode: 'romance-push',
+            boardName: '甜宠爆款',
+          }),
+          timestamp: 1,
+          traceId: 'trace-visual-2',
+        },
+      });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/trend', component: TrendView }],
+    });
+    await router.push('/trend');
+
+    const wrapper = mount(TrendView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 'female-hot');
+    await flushPromises();
+
+    expect(dataApi.getVisual).toHaveBeenLastCalledWith({
+      platform: 'fanqie',
+      channelCode: 'female-hot',
+      boardCode: 'romance-push',
     });
     expect(analysisApi.streamTrend).not.toHaveBeenCalled();
   });
