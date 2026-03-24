@@ -1,6 +1,8 @@
 # IDE
 .idea/
 *.iml
+.claude/
+.superpowers/
 
 # OS
 .DS_Store
@@ -9,8 +11,23 @@ Thumbs.db
 # Build
 backend/target/
 /.cache/
+backend/.cache/
+frontend/.vite/
 __pycache__/
 
 # Logs
 *.log
+*.out.log
+*.err.log
 logs/
+
+# Local env
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+
+# Local debug artifacts
+login-body.json
+redis_help_test.txt
+start_test*.txt
