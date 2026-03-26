@@ -934,7 +934,11 @@ watch(
 .rank-page__panel {
   border: 1px solid var(--color-border);
   border-radius: 1.5rem;
-  background: rgba(255, 252, 247, 0.9);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  backdrop-filter: blur(20px) saturate(1.12);
+  -webkit-backdrop-filter: blur(20px) saturate(1.12);
   box-shadow: var(--shadow-soft);
 }
 
@@ -944,8 +948,9 @@ watch(
   gap: 1rem;
   padding: 1.65rem 1.8rem;
   background:
-    radial-gradient(circle at top right, rgba(183, 135, 87, 0.18), transparent 24%),
-    linear-gradient(135deg, rgba(255, 252, 247, 0.98), rgba(244, 236, 225, 0.92));
+    radial-gradient(circle at top right, rgba(92, 124, 250, 0.18), transparent 24%),
+    radial-gradient(circle at top left, rgba(255, 147, 186, 0.14), transparent 22%),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-surface) 96%, transparent), color-mix(in srgb, var(--color-bg-secondary) 92%, transparent));
 }
 
 .rank-page__hero-copy,
@@ -982,9 +987,11 @@ watch(
   align-content: start;
   justify-items: end;
   padding: 1rem 1.15rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.2rem;
-  background: rgba(255, 255, 255, 0.56);
+  background: color-mix(in srgb, var(--color-glass) 82%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .rank-page__hero-badge span {
@@ -1034,9 +1041,11 @@ watch(
   display: inline-flex;
   gap: 0.4rem;
   padding: 0.25rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
+  background: color-mix(in srgb, var(--color-glass) 78%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .rank-page__page-size-button {
@@ -1078,18 +1087,24 @@ watch(
   align-items: center;
   min-height: 2.25rem;
   padding: 0.5rem 0.85rem;
-  border: 1px solid rgba(35, 65, 58, 0.08);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.78);
+  background: color-mix(in srgb, var(--color-glass) 82%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .rank-page__snapshot-card {
   display: grid;
   gap: 0.35rem;
   padding: 1rem 1.05rem;
-  border: 1px solid rgba(35, 65, 58, 0.1);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.15rem;
-  background: rgba(255, 255, 255, 0.72);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
 }
 
 .rank-page__snapshot-card span {
@@ -1113,16 +1128,20 @@ watch(
   gap: 1rem;
   align-items: start;
   padding: 1.15rem 1.2rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.72);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .rank-page__item:hover {
   transform: translateY(-2px);
-  border-color: rgba(35, 65, 58, 0.2);
-  box-shadow: var(--shadow-soft);
+  border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+  box-shadow: var(--shadow-glow);
 }
 
 .rank-page__item-rank {

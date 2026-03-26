@@ -40,7 +40,7 @@ const uiText = {
     :with-header="false"
     size="440px"
   >
-    <div class="rank-drawer">
+    <div class="rank-drawer" data-testid="rank-detail-surface">
       <div class="rank-drawer__topbar">
         <div class="rank-drawer__heading" data-testid="rank-detail-heading">
           <h3 data-testid="rank-detail-title">{{ detail?.bookName ?? uiText.loadingTitle }}</h3>
@@ -76,6 +76,7 @@ const uiText = {
   display: grid;
   gap: 1rem;
   min-width: 0;
+  color: var(--color-text);
 }
 
 .rank-drawer__topbar {
@@ -83,6 +84,8 @@ const uiText = {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
 }
 
 .rank-drawer__heading {
@@ -113,6 +116,7 @@ const uiText = {
   gap: 1rem;
   color: var(--color-text-muted);
   font-size: 0.92rem;
+  padding: 0.25rem 0.1rem 0;
 }
 
 .rank-drawer__meta a,
@@ -125,15 +129,23 @@ const uiText = {
   flex-shrink: 0;
   min-height: 2.5rem;
   padding-inline: 0.95rem;
+  border-color: color-mix(in srgb, var(--color-border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--color-glass) 72%, transparent);
+  backdrop-filter: blur(14px);
 }
 
 .rank-drawer__section {
   display: grid;
   gap: 0.6rem;
   padding: 1rem 1.1rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.1rem;
-  background: rgba(255, 255, 255, 0.74);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  box-shadow: var(--shadow-card);
 }
 
 .rank-drawer__body {

@@ -622,6 +622,7 @@ describe('RankView', () => {
     await router.push('/rank');
 
     const wrapper = mount(RankView, {
+      attachTo: document.body,
       global: {
         plugins: [router, ElementPlus],
       },
@@ -884,10 +885,12 @@ describe('RankView', () => {
     await wrapper.get('[data-testid="rank-chapters-1001"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.text()).toContain('Long intro');
-    expect(wrapper.text()).toContain('Chapter 1');
+    expect(document.body.textContent).toContain('Long intro');
+    expect(document.body.textContent).toContain('Chapter 1');
 
-    await wrapper.get('[data-testid="refresh-chapters"]').trigger('click');
+    const refreshButton = document.body.querySelector('[data-testid="refresh-chapters"]') as HTMLElement | null;
+    expect(refreshButton).not.toBeNull();
+    refreshButton?.click();
     await flushPromises();
 
     expect(crawlerApi.refreshChapters).toHaveBeenCalledWith({
@@ -895,10 +898,12 @@ describe('RankView', () => {
       bookId: 1001,
       chapterCount: 3,
     });
-    expect(wrapper.text()).toContain('Chapter 1 Refreshed');
-    expect(wrapper.text()).toContain('剩余 2');
+    expect(document.body.textContent).toContain('Chapter 1 Refreshed');
+    expect(document.body.textContent).toContain('剩余 2');
 
-    await wrapper.get('[data-testid="go-analysis"]').trigger('click');
+    const goAnalysisButton = document.body.querySelector('[data-testid="go-analysis"]') as HTMLElement | null;
+    expect(goAnalysisButton).not.toBeNull();
+    goAnalysisButton?.click();
 
     expect(push).toHaveBeenCalledWith({
       path: '/analysis',

@@ -90,7 +90,7 @@ onBeforeUnmount(() => {
     :direction="drawerDirection"
     :size="drawerSize"
   >
-    <div class="chapter-drawer">
+    <div class="chapter-drawer" data-testid="chapter-drawer-surface">
       <div class="chapter-drawer__header">
         <div class="chapter-drawer__header-main">
           <h3>{{ selectedChapter ? selectedChapter.chapterTitle : `已加载 ${chapters.length} 章` }}</h3>
@@ -180,6 +180,7 @@ onBeforeUnmount(() => {
   gap: 1rem;
   height: 100%;
   min-height: 0;
+  color: var(--color-text);
 }
 
 .chapter-drawer__header,
@@ -209,12 +210,20 @@ onBeforeUnmount(() => {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 0.75rem 0;
-  background: rgba(255, 252, 247, 0.96);
+  padding: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  border-radius: 1.15rem;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-glass) 84%, transparent);
+  backdrop-filter: blur(18px) saturate(1.16);
+  -webkit-backdrop-filter: blur(18px) saturate(1.16);
+  box-shadow: var(--shadow-card);
 }
 
 .chapter-drawer__actions--meta {
   justify-content: space-between;
+  padding-inline: 0.1rem;
 }
 
 .chapter-drawer__back-wrap {
@@ -253,9 +262,14 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 0.75rem;
   padding: 1rem 1.1rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.1rem;
-  background: rgba(255, 255, 255, 0.72);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(16px) saturate(1.12);
+  -webkit-backdrop-filter: blur(16px) saturate(1.12);
+  box-shadow: var(--shadow-card);
 }
 
 .chapter-detail {
@@ -270,8 +284,8 @@ onBeforeUnmount(() => {
 
 .chapter-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(35, 65, 58, 0.22);
-  box-shadow: var(--shadow-soft);
+  border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+  box-shadow: var(--shadow-glow);
 }
 
 .chapter-card__heading,
