@@ -156,7 +156,6 @@ onMounted(() => {
       <div>
         <p class="prompt-config-page__eyebrow">Current Page</p>
         <h2 class="prompt-config-page__title">提示词配置</h2>
-        <p class="prompt-config-page__subtitle">管理员提示词保留专业性，输入输出 JSON 契约由框架侧强约束并在这里可见。</p>
       </div>
       <div class="prompt-config-page__meta">
         <span>当前类型：{{ activeType }}</span>
@@ -381,10 +380,14 @@ onMounted(() => {
 .prompt-config-page__hero,
 .prompt-config-page__types,
 .prompt-config-page__form {
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: var(--shadow-soft);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
 }
 
 .prompt-config-page__hero {

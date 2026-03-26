@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { SwitchButton } from '@element-plus/icons-vue';
+import { Moon, Sunny, SwitchButton } from '@element-plus/icons-vue';
+import { getCurrentTheme, THEME_EVENT_NAME, toggleTheme, type AppTheme } from '@/lib/theme';
 
 defineProps<{
   username: string;
@@ -13,6 +14,7 @@ const emit = defineEmits<{
 }>();
 
 const route = useRoute();
+const currentTheme = ref<AppTheme>('light');
 
 const pageCopy = computed(() => {
   if (route.path.startsWith('/rank')) {
@@ -40,6 +42,27 @@ const userInitial = computed(() => {
   // props.username not directly accessible in computed without defineProps ref
   return '';
 });
+
+function syncTheme(theme?: AppTheme) {
+  currentTheme.value = theme ?? getCurrentTheme();
+}
+
+function handleThemeToggle() {
+  syncTheme(toggleTheme());
+}
+
+function handleThemeChange(event: Event) {
+  syncTheme((event as CustomEvent<AppTheme>).detail);
+}
+
+onMounted(() => {
+  syncTheme();
+  document.addEventListener(THEME_EVENT_NAME, handleThemeChange as EventListener);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener(THEME_EVENT_NAME, handleThemeChange as EventListener);
+});
 </script>
 
 <template>
@@ -61,11 +84,26 @@ const userInitial = computed(() => {
         >
           {{ role }}
         </el-tag>
+        <el-button
+          class="app-header__theme-toggle"
+          circle
+          plain
+          :icon="currentTheme === 'dark' ? Sunny : Moon"
+          @click="handleThemeToggle"
+        />
         <el-button plain type="primary" @click="emit('logout')">退出登录</el-button>
       </template>
       <!-- Mobile: compact avatar + icon button -->
       <div class="app-header__mobile-actions">
         <div class="app-header__avatar">{{ username ? username.charAt(0).toUpperCase() : 'U' }}</div>
+        <el-button
+          class="app-header__mobile-theme"
+          circle
+          plain
+          :icon="currentTheme === 'dark' ? Sunny : Moon"
+          size="small"
+          @click="handleThemeToggle"
+        />
         <el-button
           class="app-header__mobile-logout"
           circle
@@ -129,6 +167,15 @@ const userInitial = computed(() => {
   color: var(--color-accent-strong);
 }
 
+.app-header__theme-toggle,
+.app-header__mobile-theme,
+.app-header__mobile-logout {
+  border-color: color-mix(in srgb, var(--color-border-strong) 76%, transparent);
+  background: color-mix(in srgb, var(--color-glass) 76%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
 /* Mobile: hide desktop elements, show compact ones */
 .app-header__desktop-only {
   display: contents;
@@ -151,10 +198,6 @@ const userInitial = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.app-header__mobile-logout {
-  border-color: rgba(36, 61, 54, 0.2);
 }
 
 @media (max-width: 768px) {

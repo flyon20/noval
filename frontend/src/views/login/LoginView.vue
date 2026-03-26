@@ -212,9 +212,6 @@ async function handleSubmit() {
         <div class="login-card__heading">
           <p class="login-card__eyebrow">{{ isRegisterMode ? '快速注册' : '账号登录' }}</p>
           <h2 class="login-card__title">{{ isRegisterMode ? '创建新账号' : '进入工作台' }}</h2>
-          <p class="login-card__subtitle">
-            {{ isRegisterMode ? '当前为免验证码注册，注册成功后将自动进入系统。' : '使用已有账号直接进入工作台。' }}
-          </p>
         </div>
 
         <el-alert
@@ -283,8 +280,8 @@ async function handleSubmit() {
   grid-template-columns: 1fr 1fr;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgba(199, 146, 92, 0.18), transparent 40%),
-    radial-gradient(circle at bottom right, rgba(36, 61, 54, 0.12), transparent 36%),
+    radial-gradient(circle at top left, rgba(92, 124, 250, 0.22), transparent 40%),
+    radial-gradient(circle at bottom right, rgba(255, 147, 186, 0.18), transparent 36%),
     linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
 }
 
@@ -297,8 +294,9 @@ async function handleSubmit() {
 .login-page__hero {
   padding: 3rem;
   background:
-    radial-gradient(circle at 20% 30%, rgba(199, 146, 92, 0.22), transparent 50%),
-    linear-gradient(160deg, rgba(36, 61, 54, 0.06), transparent);
+    radial-gradient(circle at 20% 30%, rgba(92, 124, 250, 0.18), transparent 50%),
+    radial-gradient(circle at 72% 18%, rgba(255, 147, 186, 0.16), transparent 34%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.12), transparent);
   position: relative;
   overflow: hidden;
 }
@@ -311,7 +309,7 @@ async function handleSubmit() {
   width: 320px;
   height: 320px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(199, 146, 92, 0.15), transparent 70%);
+  background: radial-gradient(circle, rgba(92, 124, 250, 0.18), transparent 70%);
   pointer-events: none;
 }
 
@@ -323,7 +321,7 @@ async function handleSubmit() {
   width: 240px;
   height: 240px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(36, 61, 54, 0.1), transparent 70%);
+  background: radial-gradient(circle, rgba(255, 147, 186, 0.16), transparent 70%);
   pointer-events: none;
 }
 
@@ -384,8 +382,9 @@ async function handleSubmit() {
 
 .login-page__form-wrap {
   padding: 2rem;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--color-glass) 34%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .login-card {
@@ -393,10 +392,14 @@ async function handleSubmit() {
   gap: 1.5rem;
   width: min(100%, 420px);
   padding: 2.25rem;
-  border: 1px solid rgba(35, 65, 58, 0.1);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.5rem;
-  background: rgba(255, 255, 255, 0.95);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 94%, transparent);
   box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(20px) saturate(1.14);
+  -webkit-backdrop-filter: blur(20px) saturate(1.14);
 }
 
 .login-card__mode {
@@ -405,7 +408,8 @@ async function handleSubmit() {
   gap: 0.5rem;
   padding: 0.35rem;
   border-radius: 999px;
-  background: rgba(35, 65, 58, 0.06);
+  background: color-mix(in srgb, var(--color-glass) 72%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .login-card__mode-item {

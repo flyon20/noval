@@ -168,8 +168,10 @@ onUnmounted(() => {
 .history-error {
   padding: 1.5rem;
   border-radius: 1.25rem;
-  border: 1px solid rgba(191, 83, 54, 0.2);
-  background: rgba(255, 246, 243, 0.88);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 32%, transparent);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
   color: var(--color-danger);
 }
 
