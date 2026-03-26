@@ -871,9 +871,13 @@ onBeforeUnmount(() => {
   gap: 1rem;
   padding: 1rem 1.1rem;
   border-radius: 1.25rem;
-  border: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: var(--shadow-soft);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -906,18 +910,20 @@ onBeforeUnmount(() => {
   gap: 0.85rem;
   padding: 1rem 1.05rem;
   border-radius: 1.2rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   background:
-    linear-gradient(145deg, rgba(255, 250, 243, 0.94), rgba(247, 249, 243, 0.9)),
-    rgba(255, 255, 255, 0.92);
-  box-shadow: var(--shadow-soft);
+    linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
   min-width: 0;
 }
 
 .trend-page__support-card--summary {
   background:
-    linear-gradient(145deg, rgba(248, 245, 238, 0.94), rgba(245, 248, 242, 0.92)),
-    rgba(255, 255, 255, 0.92);
+    radial-gradient(circle at top right, rgba(92, 124, 250, 0.14), transparent 26%),
+    linear-gradient(145deg, color-mix(in srgb, var(--color-surface) 94%, transparent), color-mix(in srgb, var(--color-bg-secondary) 88%, transparent));
 }
 
 .trend-page__support-card-head {
@@ -1019,9 +1025,13 @@ onBeforeUnmount(() => {
   gap: 0.4rem;
   padding: 1rem 1.1rem;
   border-radius: 1.25rem;
-  border: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: var(--shadow-soft);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
 }
 
 .trend-page__visual-eyebrow,

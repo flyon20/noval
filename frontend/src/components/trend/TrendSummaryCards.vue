@@ -71,16 +71,20 @@ const stats = computed(() => [
   gap: 0.5rem;
   padding: 1.1rem 1.15rem;
   border-radius: 1.2rem;
-  border: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: var(--shadow-soft);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
 }
 
 .trend-summary__card--wide {
   grid-column: 1 / -1;
   background:
-    linear-gradient(135deg, rgba(255, 249, 240, 0.95), rgba(245, 248, 242, 0.9)),
-    rgba(255, 255, 255, 0.92);
+    radial-gradient(circle at top right, rgba(92, 124, 250, 0.14), transparent 26%),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-surface) 94%, transparent), color-mix(in srgb, var(--color-bg-secondary) 88%, transparent));
 }
 
 .trend-summary__summary-head {
@@ -124,13 +128,13 @@ const stats = computed(() => [
 .trend-summary__badge {
   padding: 0.4rem 0.75rem;
   border-radius: 999px;
-  background: rgba(190, 108, 28, 0.14);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: var(--color-text);
   font-size: 0.82rem;
 }
 
 .trend-summary__badge--soft {
-  background: rgba(35, 65, 58, 0.08);
+  background: color-mix(in srgb, var(--color-glass) 72%, transparent);
 }
 
 @media (max-width: 760px) {

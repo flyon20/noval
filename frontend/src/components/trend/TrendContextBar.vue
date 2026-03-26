@@ -110,12 +110,16 @@ function handleBoardChange(boardCode: string) {
   gap: 0.9rem;
   align-items: center;
   padding: 1rem 1.1rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.35rem;
   background:
-    radial-gradient(circle at top right, rgba(204, 121, 36, 0.16), transparent 26%),
-    linear-gradient(135deg, rgba(251, 246, 237, 0.98), rgba(240, 246, 239, 0.94));
-  box-shadow: var(--shadow-soft);
+    radial-gradient(circle at top right, rgba(92, 124, 250, 0.18), transparent 26%),
+    radial-gradient(circle at bottom left, rgba(255, 147, 186, 0.16), transparent 22%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
 }
 
 .trend-context__copy,
@@ -156,7 +160,7 @@ function handleBoardChange(boardCode: string) {
   min-height: 32px;
   padding: 0.3rem 0.8rem;
   border-radius: 999px;
-  background: rgba(190, 108, 28, 0.12);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: var(--color-text);
   font-size: 0.88rem;
   font-weight: 600;
@@ -173,8 +177,10 @@ function handleBoardChange(boardCode: string) {
   min-height: 34px;
   padding: 0.35rem 0.8rem;
   border-radius: 999px;
-  border: 1px solid rgba(35, 65, 58, 0.1);
-  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  background: color-mix(in srgb, var(--color-glass) 80%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   color: var(--color-text);
   font-size: 0.9rem;
 }

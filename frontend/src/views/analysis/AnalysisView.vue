@@ -599,24 +599,30 @@ async function goBack() {
 .analysis-page {
   display: grid;
   gap: 1.5rem;
+  min-width: 0;
 }
 
 .analysis-page__hero,
 .analysis-page__panel {
   display: grid;
   gap: 1rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.35rem;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: var(--shadow-soft);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
 }
 
 .analysis-page__hero {
   grid-template-columns: 1fr;
   padding: 1.25rem;
   background:
-    radial-gradient(circle at top right, rgba(210, 136, 61, 0.16), transparent 26%),
-    linear-gradient(180deg, rgba(255, 251, 245, 0.96), rgba(248, 244, 236, 0.92));
+    radial-gradient(circle at top right, rgba(92, 124, 250, 0.18), transparent 26%),
+    radial-gradient(circle at top left, rgba(255, 147, 186, 0.14), transparent 22%),
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 96%, transparent), color-mix(in srgb, var(--color-bg-secondary) 92%, transparent));
 }
 
 .analysis-page__panel {
@@ -629,6 +635,7 @@ async function goBack() {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .analysis-page__summary {
@@ -667,6 +674,7 @@ async function goBack() {
   display: grid;
   gap: 0.85rem;
   align-content: start;
+  min-width: 0;
 }
 
 .analysis-mode-panel__header {
@@ -680,6 +688,7 @@ async function goBack() {
   justify-content: space-between;
   gap: 0.75rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .analysis-mode-panel__eyebrow {

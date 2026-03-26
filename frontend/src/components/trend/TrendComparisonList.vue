@@ -63,9 +63,13 @@ defineProps<{
   gap: 1rem;
   padding: 1rem;
   border-radius: 1.25rem;
-  border: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: var(--shadow-soft);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
 }
 
 .trend-comparison-list__header,
@@ -110,7 +114,7 @@ defineProps<{
   gap: 0.2rem;
   padding: 0.85rem 0.95rem;
   border-radius: 1rem;
-  background: rgba(35, 65, 58, 0.05);
+  background: color-mix(in srgb, var(--color-primary-soft) 72%, transparent);
 }
 
 .trend-comparison-list__items span,

@@ -167,10 +167,14 @@ onBeforeUnmount(() => {
   gap: 1rem;
   min-height: 240px;
   padding: 1.25rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: var(--shadow-soft);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
 }
 
 .trend-result-preview__head,
@@ -220,10 +224,8 @@ onBeforeUnmount(() => {
   gap: 0.75rem;
   padding: 0.95rem 1rem;
   border-radius: 1rem;
-  background:
-    linear-gradient(135deg, rgba(247, 248, 242, 0.95), rgba(255, 250, 243, 0.92)),
-    rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(35, 65, 58, 0.08);
+  background: color-mix(in srgb, var(--color-primary-soft) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
 }
 
 .trend-result-preview__list,
@@ -277,7 +279,10 @@ onBeforeUnmount(() => {
   top: 0;
   z-index: 2;
   padding-bottom: 0.5rem;
-  background: rgba(255, 252, 247, 0.96);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 96%, transparent), color-mix(in srgb, var(--color-surface) 88%, transparent));
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
 }
 
 .trend-result-drawer__summary-copy,
