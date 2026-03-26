@@ -12,7 +12,7 @@ defineProps<{
   <article class="trend-comparison-list" data-test="trend-comparison-list">
     <header class="trend-comparison-list__header">
       <h3>趋势洞察</h3>
-      <p>{{ summary || '当前没有额外的趋势补充说明，先用结构化洞察和快照对比帮助你快速判断榜单方向。' }}</p>
+      <p>{{ summary || '结构化洞察' }}</p>
     </header>
 
     <section class="trend-comparison-list__group">
@@ -27,7 +27,7 @@ defineProps<{
           <em>{{ item.note }}</em>
         </li>
       </ul>
-      <p v-else class="trend-comparison-list__empty">暂无洞察卡片。</p>
+      <p v-else class="trend-comparison-list__empty">暂无洞察</p>
     </section>
 
     <section class="trend-comparison-list__group">
@@ -38,11 +38,21 @@ defineProps<{
       <ul v-if="comparisons?.length" class="trend-comparison-list__items">
         <li v-for="item in comparisons" :key="item.snapshotTime">
           <span>{{ item.snapshotTime }}</span>
-          <strong>{{ item.topTheme }}</strong>
-          <em>{{ item.change }}</em>
+          <strong>
+            {{ item.topTheme }}
+            <template v-if="typeof item.topThemeRatio === 'number'">
+              · {{ item.topThemeRatio }}%
+            </template>
+          </strong>
+          <em>
+            {{ item.change }}
+            <template v-if="item.leadBookName">
+              · 代表书 {{ item.leadBookName }}
+            </template>
+          </em>
         </li>
       </ul>
-      <p v-else class="trend-comparison-list__empty">暂无快照对比数据。</p>
+      <p v-else class="trend-comparison-list__empty">暂无对比</p>
     </section>
   </article>
 </template>
@@ -97,7 +107,7 @@ defineProps<{
 
 .trend-comparison-list__items li {
   display: grid;
-  gap: 0.15rem;
+  gap: 0.2rem;
   padding: 0.85rem 0.95rem;
   border-radius: 1rem;
   background: rgba(35, 65, 58, 0.05);
@@ -110,5 +120,6 @@ defineProps<{
 
 .trend-comparison-list__items em {
   font-style: normal;
+  line-height: 1.65;
 }
 </style>

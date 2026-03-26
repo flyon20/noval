@@ -66,3 +66,5 @@ ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS output_json_schema CLOB;
 ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS output_example_json CLOB;
 ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS post_process_type VARCHAR(50);
 ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS parse_config_json CLOB;
+ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS input_json_schema CLOB;
+ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS input_example_json CLOB;

@@ -217,6 +217,78 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldBackfillDefaultContractsForLegacyDeconstructPromptConfig() throws Exception {
+        jdbcTemplate.update("""
+            UPDATE prompt_config
+            SET input_json_schema = NULL,
+                input_example_json = NULL,
+                output_json_schema = NULL,
+                output_example_json = NULL,
+                post_process_type = NULL,
+                parse_config_json = NULL
+            WHERE prompt_type = 'deconstruct'
+            """);
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .param("promptType", "deconstruct"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.inputJsonSchema").value(org.hamcrest.Matchers.containsString("\"chapters\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"sellingPoints\"")))
+            .andExpect(jsonPath("$.data.outputExampleJson").value(org.hamcrest.Matchers.containsString("\"analysisType\": \"deconstruct\"")));
+
+        String inputJsonSchema = jdbcTemplate.queryForObject(
+            "SELECT input_json_schema FROM prompt_config WHERE prompt_type = 'deconstruct' AND deleted = 0 LIMIT 1",
+            String.class
+        );
+        String outputJsonSchema = jdbcTemplate.queryForObject(
+            "SELECT output_json_schema FROM prompt_config WHERE prompt_type = 'deconstruct' AND deleted = 0 LIMIT 1",
+            String.class
+        );
+        assertThat(inputJsonSchema).contains("\"chapters\"");
+        assertThat(outputJsonSchema).contains("\"sellingPoints\"");
+    }
+
+    @Test
+    void shouldBackfillThemePromptContractWithBoardScopedFields() throws Exception {
+        jdbcTemplate.update("""
+            UPDATE prompt_config
+            SET input_json_schema = NULL,
+                input_example_json = NULL,
+                output_json_schema = NULL,
+                output_example_json = NULL,
+                post_process_type = NULL,
+                parse_config_json = NULL
+            WHERE prompt_type = 'theme'
+            """);
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/config/prompt")
+                .header("Authorization", "Bearer " + token)
+                .param("promptType", "theme"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.inputJsonSchema").value(org.hamcrest.Matchers.containsString("\"snapshotCount\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"boardSummary\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"historicalWordCloud\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"themeDistribution\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"representativeBooks\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"hotBooks\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"insightCards\"")))
+            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"snapshotComparisons\"")))
+            .andExpect(jsonPath("$.data.postProcessType").value("json_extract"))
+            .andExpect(jsonPath("$.data.parseConfigJson").value(org.hamcrest.Matchers.containsString("\"parser\": \"json\"")));
+
+        String parseConfigJson = jdbcTemplate.queryForObject(
+            "SELECT parse_config_json FROM prompt_config WHERE prompt_type = 'theme' AND deleted = 0 LIMIT 1",
+            String.class
+        );
+        assertThat(parseConfigJson).contains("\"parser\": \"json\"");
+    }
+
+    @Test
     void shouldAllowUserRoleToUpdatePromptConfig() throws Exception {
         String token = loginAndGetToken("writer", "writer123");
         mockMvc.perform(put("/api/config/prompt")
@@ -386,8 +458,9 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.modelName").value("deepseek-reasoner"));
 
-        assertThat(LAST_OPENAI_REQUEST_BODY.get()).contains("\"model\":\"deepseek-reasoner\"");
-        assertThat(LAST_OPENAI_REQUEST_BODY.get()).contains("\"temperature\":0.7");
+        String normalizedRequestBody = LAST_OPENAI_REQUEST_BODY.get().replaceAll("\\s+", "");
+        assertThat(normalizedRequestBody).contains("\"model\":\"deepseek-reasoner\"");
+        assertThat(normalizedRequestBody).contains("\"temperature\":0.7");
     }
 
     @Test
@@ -435,6 +508,54 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"));
 
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"trend_theme\"");
+    }
+
+    @Test
+    void shouldSkipBrokenPersistedTrendResultAndReinvokeLangGraph() throws Exception {
+        insertThemePromptConfig();
+        updateSystemConfig("analysis.runtime.mode", "langgraph");
+        clearCrawlerLocalCache();
+        jdbcTemplate.update("""
+            UPDATE analysis_result
+            SET result_content = ?,
+                result_json = ?,
+                create_time = CURRENT_TIMESTAMP,
+                update_time = CURRENT_TIMESTAMP
+            WHERE id = 3004
+            """,
+            "{\"summary\":\"broken",
+            """
+                {
+                  "analysisType":"theme",
+                  "summary":"",
+                  "boardSummary":"",
+                  "trendPreview":"{\\"summary\\":\\"broken",
+                  "detailContent":"{\\"summary\\":\\"broken",
+                  "historicalWordCloud":[],
+                  "themeDistribution":[],
+                  "themeTable":[],
+                  "hotBooks":[],
+                  "insightCards":[],
+                  "snapshotComparisons":[],
+                  "comparisonSummary":"",
+                  "historyAnalysisCount":3
+                }
+                """
+        );
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/analysis/trend")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
+            .andExpect(jsonPath("$.data.resultJson.summary").value("langgraph theme summary"));
+
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
         assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"trend_theme\"");
     }
 
@@ -674,6 +795,29 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldEmitProgressEventBeforeSlowStreamingProviderReturnsFirstDelta() throws Exception {
+        updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
+        updatePromptConfigDirectly(1L, "SLOW_STREAM {{content}}", "deepseek-chat");
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+
+        assertThat(body).contains("[analysis-progress]");
+        assertThat(body).contains("mock summary STREAM");
+    }
+
+    @Test
     void shouldTreatAppStreamingFlagAsGlobalKillSwitch() throws Exception {
         updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
         boolean original = aiProperties.getOpenAiCompatible().isStreamingEnabled();
@@ -871,7 +1015,14 @@ class Phase4AnalysisIntegrationTest {
                 String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 LAST_OPENAI_REQUEST_BODY.set(requestBody);
                 OPENAI_REQUEST_COUNT.incrementAndGet();
-                if (requestBody.contains("\"stream\":true")) {
+                if (requestBody.contains("\"stream\":true") || requestBody.contains("\"stream\" : true")) {
+                    if (requestBody.contains("SLOW_STREAM")) {
+                        try {
+                            Thread.sleep(2500L);
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
                     byte[] response = """
                         data: {"id":"chatcmpl-stream-1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"{\\"summary\\":\\"mock summary STREAM\\","},"finish_reason":null}]}
 

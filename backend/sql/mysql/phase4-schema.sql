@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS prompt_config (
     prompt_content TEXT NOT NULL COMMENT 'prompt content',
     model_name VARCHAR(50) DEFAULT 'dify' COMMENT 'model name',
     temperature DECIMAL(3,2) DEFAULT 0.70 COMMENT 'temperature',
-    max_tokens INT DEFAULT 2000 COMMENT 'max tokens',
+    max_tokens INT DEFAULT 6000 COMMENT 'max tokens',
     status TINYINT DEFAULT 1 COMMENT '0 disabled 1 enabled',
     is_default TINYINT DEFAULT 0 COMMENT '0 no 1 yes',
     dify_workflow_id VARCHAR(100) COMMENT 'dify workflow id',

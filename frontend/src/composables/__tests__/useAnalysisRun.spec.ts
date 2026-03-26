@@ -16,6 +16,10 @@ function createResult(analysisType: AnalysisType, overrides: Partial<AnalysisRes
 }
 
 describe('useAnalysisRun', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   test('runs the default mode and stores the completed result', async () => {
     const runner = vi.fn().mockResolvedValue(createResult('deconstruct'));
     const analysis = useAnalysisRun({
@@ -197,5 +201,125 @@ describe('useAnalysisRun', () => {
     await expect(analysis.runAnalysis('deconstruct')).rejects.toThrow();
     expect(analysis.state.modes.deconstruct.streamingText).toBe('partial-output');
     expect(analysis.state.modes.deconstruct.errorMessage).toBe('stream broken');
+  });
+
+  test('progressively reveals large streaming chunks instead of painting the full result immediately', async () => {
+    vi.useFakeTimers();
+    let completeStream: ((value: AnalysisResult) => void) | null = null;
+
+    const runner = vi.fn().mockImplementation((_mode, _payload, callbacks) => {
+      callbacks.onStart({
+        event: 'start',
+        traceId: 'trace-1',
+        analysisType: 'deconstruct',
+      });
+      callbacks.onDelta({
+        event: 'delta',
+        delta: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.repeat(12),
+        chunkIndex: 0,
+      });
+
+      return {
+        abort() {},
+        result: new Promise<AnalysisResult>((resolve) => {
+          completeStream = resolve;
+        }),
+      };
+    });
+
+    const analysis = useAnalysisRun({
+      context: {
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 3,
+      },
+      runMode: runner,
+      copyText: vi.fn(),
+    });
+
+    const runPromise = analysis.runAnalysis('deconstruct');
+    await nextTick();
+
+    const fullText = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.repeat(12);
+    expect(analysis.state.modes.deconstruct.streamingText.length).toBeGreaterThan(0);
+    expect(analysis.state.modes.deconstruct.streamingText.length).toBeLessThan(fullText.length);
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(analysis.state.modes.deconstruct.streamingText).toBe(fullText);
+
+    completeStream?.(createResult('deconstruct', { resultContent: fullText }));
+    await runPromise;
+    expect(analysis.state.modes.deconstruct.phase).toBe('done');
+  });
+
+  test('finishes long playback quickly enough that large analysis results do not stay stuck in streaming state', async () => {
+    vi.useFakeTimers();
+    let completeStream: ((value: AnalysisResult) => void) | null = null;
+
+    const runner = vi.fn().mockImplementation((_mode, _payload, callbacks) => {
+      callbacks.onStart({
+        event: 'start',
+        traceId: 'trace-long',
+        analysisType: 'deconstruct',
+      });
+      callbacks.onDelta({
+        event: 'delta',
+        delta: 'LONG-CONTENT-SEGMENT-'.repeat(1200),
+        chunkIndex: 0,
+      });
+
+      return {
+        abort() {},
+        result: new Promise<AnalysisResult>((resolve) => {
+          completeStream = resolve;
+        }),
+      };
+    });
+
+    const analysis = useAnalysisRun({
+      context: {
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 10,
+      },
+      runMode: runner,
+      copyText: vi.fn(),
+    });
+
+    const fullText = 'LONG-CONTENT-SEGMENT-'.repeat(1200);
+    const runPromise = analysis.runAnalysis('deconstruct');
+    await nextTick();
+    completeStream?.(createResult('deconstruct', { resultContent: fullText }));
+
+    await vi.advanceTimersByTimeAsync(1800);
+    await runPromise;
+
+    expect(analysis.state.modes.deconstruct.phase).toBe('done');
+    expect(analysis.state.modes.deconstruct.streamingText).toBe(fullText);
+  });
+
+  test('hydrates persisted results without rerunning analysis', () => {
+    const runner = vi.fn();
+    const analysis = useAnalysisRun({
+      context: {
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 3,
+      },
+      runMode: runner,
+      copyText: vi.fn(),
+    });
+
+    analysis.hydrateModes({
+      deconstruct: createResult('deconstruct'),
+      plot: createResult('plot'),
+    });
+
+    expect(runner).not.toHaveBeenCalled();
+    expect(analysis.state.modes.deconstruct.phase).toBe('done');
+    expect(analysis.state.modes.deconstruct.result?.analysisType).toBe('deconstruct');
+    expect(analysis.state.modes.plot.phase).toBe('done');
+    expect(analysis.state.modes.plot.result?.analysisType).toBe('plot');
+    expect(analysis.state.modes.structure.phase).toBe('idle');
   });
 });

@@ -1,6 +1,9 @@
 import { httpClient } from '@/lib/http';
 import type { ApiResponse } from '@/types/api';
 import type {
+  AiModelOption,
+  AiModelRegistry,
+  AiModelRegistryUpdateRequest,
   PromptConfig,
   PromptConfigUpdateRequest,
   PromptType,
@@ -29,6 +32,15 @@ export const systemConfigApi = {
   },
   update(payload: SystemConfigUpdateRequest) {
     return httpClient.put<ApiResponse<SystemConfig>>('/api/config/system', payload);
+  },
+  getModelRegistry() {
+    return httpClient.get<ApiResponse<AiModelRegistry>>('/api/config/system/model-registry');
+  },
+  updateModelRegistry(payload: AiModelRegistryUpdateRequest) {
+    return httpClient.put<ApiResponse<AiModelRegistry>>('/api/config/system/model-registry', payload);
+  },
+  getModelOptions() {
+    return httpClient.get<ApiResponse<AiModelOption[]>>('/api/config/system/model-options');
   },
   getAvailableModels() {
     return httpClient.get<ApiResponse<string[]>>('/api/config/system/available-models');

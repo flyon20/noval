@@ -47,6 +47,19 @@ describe('AnalysisResultCard', () => {
     expect(wrapper.text()).toContain('abcdefghijklmnopqrstuvwxyz');
   });
 
+  test('does not expose raw analysis progress markers inside preserved partial text after an error', () => {
+    const wrapper = mount(AnalysisResultCard, {
+      props: {
+        phase: 'error',
+        errorMessage: 'internal server error',
+        streamingText: '[analysis-progress] 正在分析中，请稍候...\n[analysis-progress] 正在分析中，请稍候...\n# 正文片段',
+      },
+    });
+
+    expect(wrapper.text()).toContain('正文片段');
+    expect(wrapper.text()).not.toContain('[analysis-progress]');
+  });
+
   test('displays markdown result when done', () => {
     const result = '# 生成成功\n- 第一条';
     const wrapper = mount(AnalysisResultCard, {
@@ -69,6 +82,19 @@ describe('AnalysisResultCard', () => {
     expect(wrapper.text()).toContain('章节数：10');
     expect(wrapper.text()).toContain('总 Token：120');
   });
+});
+
+test('also strips preserved progress markers when they use a space separator', () => {
+  const wrapper = mount(AnalysisResultCard, {
+    props: {
+      phase: 'error',
+      errorMessage: 'internal server error',
+      streamingText: '[analysis progress] 正在分析中，请稍候...\n# 正文片段',
+    },
+  });
+
+  expect(wrapper.text()).toContain('正文片段');
+  expect(wrapper.text()).not.toContain('[analysis progress]');
 });
 
 describe('AnalysisContextBar', () => {

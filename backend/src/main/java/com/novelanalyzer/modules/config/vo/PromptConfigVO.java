@@ -9,6 +9,8 @@ public class PromptConfigVO {
     private String modelName;
     private Double temperature;
     private Integer maxTokens;
+    private String inputJsonSchema;
+    private String inputExampleJson;
     private String outputJsonSchema;
     private String outputExampleJson;
     private String postProcessType;
@@ -68,6 +70,22 @@ public class PromptConfigVO {
 
     public void setMaxTokens(Integer maxTokens) {
         this.maxTokens = maxTokens;
+    }
+
+    public String getInputJsonSchema() {
+        return inputJsonSchema;
+    }
+
+    public void setInputJsonSchema(String inputJsonSchema) {
+        this.inputJsonSchema = inputJsonSchema;
+    }
+
+    public String getInputExampleJson() {
+        return inputExampleJson;
+    }
+
+    public void setInputExampleJson(String inputExampleJson) {
+        this.inputExampleJson = inputExampleJson;
     }
 
     public String getOutputJsonSchema() {

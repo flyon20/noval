@@ -71,6 +71,8 @@ ALTER TABLE analysis_result
     ADD COLUMN IF NOT EXISTS result_json JSON COMMENT 'structured result json';
 
 ALTER TABLE prompt_config
+    ADD COLUMN IF NOT EXISTS input_json_schema JSON COMMENT 'input json schema',
+    ADD COLUMN IF NOT EXISTS input_example_json JSON COMMENT 'input example json',
     ADD COLUMN IF NOT EXISTS output_json_schema JSON COMMENT 'output json schema',
     ADD COLUMN IF NOT EXISTS output_example_json JSON COMMENT 'output example json',
     ADD COLUMN IF NOT EXISTS post_process_type VARCHAR(50) COMMENT 'post process type',

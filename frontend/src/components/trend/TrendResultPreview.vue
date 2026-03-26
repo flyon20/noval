@@ -104,7 +104,6 @@ onBeforeUnmount(() => {
 
       <div class="trend-result-preview__meta">
         <span v-if="resultMeta?.modelName">模型：{{ resultMeta.modelName }}</span>
-        <span v-if="resultMeta?.traceId" class="trend-result-preview__trace">traceId: {{ resultMeta.traceId }}</span>
         <span>全文长度：{{ fullText.length || 0 }} 字</span>
       </div>
     </article>
@@ -112,7 +111,7 @@ onBeforeUnmount(() => {
     <el-drawer
       v-if="detailVisible"
       v-model="detailVisible"
-      :append-to-body="false"
+      :append-to-body="true"
       :destroy-on-close="false"
       :with-header="false"
       :direction="drawerDirection"
@@ -121,8 +120,7 @@ onBeforeUnmount(() => {
       <div class="trend-result-drawer" data-test="trend-result-detail">
         <div class="trend-result-drawer__topbar">
           <div class="trend-result-drawer__heading">
-            <p>趋势详情</p>
-            <h3>完整分析结果</h3>
+            <h3>趋势详情</h3>
           </div>
           <el-button
             class="trend-result-drawer__close"
@@ -151,9 +149,8 @@ onBeforeUnmount(() => {
 
         <div v-if="fullHtml" class="trend-result-drawer__content" v-html="fullHtml" />
 
-        <div class="trend-result-drawer__meta">
-          <span v-if="resultMeta?.modelName">模型：{{ resultMeta.modelName }}</span>
-          <span v-if="resultMeta?.traceId" class="trend-result-preview__trace">traceId: {{ resultMeta.traceId }}</span>
+        <div v-if="resultMeta?.modelName" class="trend-result-drawer__meta">
+          <span>模型：{{ resultMeta.modelName }}</span>
         </div>
       </div>
     </el-drawer>
@@ -195,14 +192,12 @@ onBeforeUnmount(() => {
 .trend-result-preview__title,
 .trend-result-preview__body,
 .trend-result-preview__section-head h4,
-.trend-result-drawer__heading p,
 .trend-result-drawer__heading h3,
 .trend-result-drawer__summary-copy {
   margin: 0;
 }
 
 .trend-result-preview__eyebrow,
-.trend-result-drawer__heading p,
 .trend-result-preview__section-head span {
   color: var(--color-text-muted);
   font-size: 0.84rem;
@@ -269,14 +264,20 @@ onBeforeUnmount(() => {
   font-size: 0.84rem;
 }
 
-.trend-result-preview__trace {
-  color: var(--color-danger);
-}
-
 .trend-result-drawer {
   display: grid;
   gap: 1rem;
   min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+
+.trend-result-drawer__topbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 0.5rem;
+  background: rgba(255, 252, 247, 0.96);
 }
 
 .trend-result-drawer__summary-copy,
@@ -285,6 +286,8 @@ onBeforeUnmount(() => {
 }
 
 .trend-result-drawer__content {
+  min-height: 0;
+  overflow: auto;
   overflow-wrap: anywhere;
   word-break: break-word;
 }

@@ -20,7 +20,13 @@ const contentRef = ref<HTMLElement | null>(null);
 const cursorVisible = computed(() => props.phase === 'streaming');
 const finalHtml = computed(() => (props.resultContent ? renderAnalysisMarkdown(props.resultContent) : ''));
 const showError = computed(() => props.phase === 'error' && props.errorMessage);
-const partialVisible = computed(() => Boolean(props.streamingText) && (props.phase === 'error' || props.phase === 'aborted'));
+const sanitizedPartialText = computed(() => (
+  (props.streamingText ?? '')
+    .replace(/\[analysis[- ]progress\][^\n\r]*/giu, ' ')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim()
+));
+const partialVisible = computed(() => Boolean(sanitizedPartialText.value) && (props.phase === 'error' || props.phase === 'aborted'));
 const displayText = computed(() => {
   if (props.phase === 'done' && props.resultContent) {
     return props.resultContent;
@@ -81,7 +87,7 @@ watch(
 
     <div v-if="partialVisible" ref="contentRef" class="analysis-result__partial">
       <p class="analysis-result__partial-title">已保留的片段</p>
-      <p>{{ displayText }}</p>
+      <p>{{ sanitizedPartialText }}</p>
     </div>
   </div>
 </template>

@@ -116,4 +116,20 @@ public class DataQueryRepository {
         );
         return Optional.ofNullable(entity);
     }
+
+    public List<AnalysisResultEntity> findRecentBoardThemeResults(String platform,
+                                                                  String channelCode,
+                                                                  String boardCode,
+                                                                  int limit) {
+        return analysisResultMapper.selectList(
+            new LambdaQueryWrapper<AnalysisResultEntity>()
+                .eq(AnalysisResultEntity::getDeleted, 0)
+                .eq(AnalysisResultEntity::getPlatform, platform)
+                .eq(AnalysisResultEntity::getChannelCode, channelCode)
+                .eq(AnalysisResultEntity::getBoardCode, boardCode)
+                .eq(AnalysisResultEntity::getAnalysisType, "theme")
+                .orderByDesc(AnalysisResultEntity::getCreateTime)
+                .last("LIMIT " + Math.max(1, limit))
+        );
+    }
 }

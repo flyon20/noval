@@ -57,9 +57,6 @@ function handleBoardChange(boardCode: string) {
         <h2 class="trend-context__title">榜单趋势分析</h2>
         <span class="trend-context__status">状态：{{ activeStatus }}</span>
       </div>
-      <p class="trend-context__description">
-        下拉切换频道和榜单，只展示当前选择的数据；趋势分析仍需手动启动。
-      </p>
       <div class="trend-context__chips">
         <span class="trend-context__chip">平台：{{ platformLabel }}</span>
         <span class="trend-context__chip">当前榜单：{{ activeBoardName }}</span>
@@ -125,6 +122,7 @@ function handleBoardChange(boardCode: string) {
 .trend-context__field {
   display: grid;
   gap: 0.45rem;
+  min-width: 0;
 }
 
 .trend-context__eyebrow,
@@ -143,8 +141,7 @@ function handleBoardChange(boardCode: string) {
   flex-wrap: wrap;
 }
 
-.trend-context__title,
-.trend-context__description {
+.trend-context__title {
   margin: 0;
 }
 
@@ -165,16 +162,11 @@ function handleBoardChange(boardCode: string) {
   font-weight: 600;
 }
 
-.trend-context__description {
-  color: var(--color-text-muted);
-  line-height: 1.55;
-  font-size: 0.95rem;
-}
-
 .trend-context__chips {
   display: flex;
   gap: 0.55rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .trend-context__chip {
@@ -216,8 +208,13 @@ function handleBoardChange(boardCode: string) {
     align-items: flex-start;
   }
 
-  .trend-context__description {
-    font-size: 0.92rem;
+  .trend-context__eyebrow {
+    display: none;
+  }
+
+  .trend-context__chip {
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 }
 </style>

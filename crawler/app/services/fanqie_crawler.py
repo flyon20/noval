@@ -142,21 +142,30 @@ class FanqieCrawler(BaseCrawler):
 
         safe_start_chapter_no = max(1, start_chapter_no)
         start_index = safe_start_chapter_no - 1
-        selected_refs = chapter_refs[start_index:start_index + chapter_count]
-        if not selected_refs:
+        candidate_refs = [
+            (chapter_no, item_id, title)
+            for chapter_no, (item_id, title) in enumerate(chapter_refs[start_index:], start=safe_start_chapter_no)
+        ]
+        if not candidate_refs:
             raise ValueError("chapter directory parse failed")
-        if len(selected_refs) == 1 or self._chapter_fetch_workers == 1:
-            return [
-                self._fetch_single_chapter(chapter_no, item_id, title)
-                for chapter_no, (item_id, title) in enumerate(selected_refs, start=safe_start_chapter_no)
-            ]
+        if len(candidate_refs) == 1 or self._chapter_fetch_workers == 1:
+            return self._fetch_available_chapters(candidate_refs, chapter_count)
 
-        with ThreadPoolExecutor(max_workers=min(self._chapter_fetch_workers, len(selected_refs))) as executor:
-            futures = [
-                executor.submit(self._fetch_single_chapter, chapter_no, item_id, title)
-                for chapter_no, (item_id, title) in enumerate(selected_refs, start=safe_start_chapter_no)
-            ]
-            return [future.result() for future in futures]
+        with ThreadPoolExecutor(max_workers=min(self._chapter_fetch_workers, len(candidate_refs))) as executor:
+            chapters: List[ChapterItem] = []
+            cursor = 0
+            while cursor < len(candidate_refs) and len(chapters) < chapter_count:
+                remaining = chapter_count - len(chapters)
+                batch_refs = candidate_refs[cursor:cursor + remaining]
+                futures = [
+                    executor.submit(self._fetch_single_chapter, chapter_no, item_id, title)
+                    for chapter_no, item_id, title in batch_refs
+                ]
+                chapters.extend(self._collect_available_chapters(futures, remaining, raise_if_empty=False))
+                cursor += len(batch_refs)
+            if not chapters:
+                raise ValueError("chapter content parse failed")
+            return chapters
 
     def _resolve_rank_url(self, category_or_channel_code: str, board_code: str | None = None) -> str:
         normalized_value = (category_or_channel_code or "").strip()
@@ -246,6 +255,42 @@ class FanqieCrawler(BaseCrawler):
             content=content,
             sourceWordCount=source_word_count,
         )
+
+    def _fetch_available_chapters(
+        self,
+        candidate_refs: List[tuple[int, str, str | None]],
+        chapter_count: int,
+    ) -> List[ChapterItem]:
+        chapters: List[ChapterItem] = []
+        for chapter_no, item_id, title in candidate_refs:
+            try:
+                chapters.append(self._fetch_single_chapter(chapter_no, item_id, title))
+            except Exception:
+                continue
+            if len(chapters) >= chapter_count:
+                return chapters
+        if not chapters:
+            raise ValueError("chapter content parse failed")
+        return chapters
+
+    def _collect_available_chapters(
+        self,
+        futures: List[Any],
+        chapter_count: int,
+        *,
+        raise_if_empty: bool = True,
+    ) -> List[ChapterItem]:
+        chapters: List[ChapterItem] = []
+        for future in futures:
+            try:
+                chapters.append(future.result())
+            except Exception:
+                continue
+            if len(chapters) >= chapter_count:
+                return chapters
+        if not chapters and raise_if_empty:
+            raise ValueError("chapter content parse failed")
+        return chapters
 
     def _fetch_state(self, url: str) -> dict[str, Any]:
         html = self._http_client.get_text(url)

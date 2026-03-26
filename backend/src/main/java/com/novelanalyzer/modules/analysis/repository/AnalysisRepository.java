@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -97,5 +98,27 @@ public class AnalysisRepository {
                 .last("LIMIT 1")
         );
         return Optional.ofNullable(entity);
+    }
+
+    public List<AnalysisResultEntity> findReusableBoardTrendCandidates(String platform,
+                                                                       String channelCode,
+                                                                       String boardCode,
+                                                                       Long promptConfigId,
+                                                                       Long snapshotId,
+                                                                       LocalDateTime validAfter,
+                                                                       int limit) {
+        return analysisResultMapper.selectList(
+            new LambdaQueryWrapper<AnalysisResultEntity>()
+                .eq(AnalysisResultEntity::getDeleted, 0)
+                .eq(AnalysisResultEntity::getPlatform, platform)
+                .eq(AnalysisResultEntity::getChannelCode, channelCode)
+                .eq(AnalysisResultEntity::getBoardCode, boardCode)
+                .eq(AnalysisResultEntity::getSnapshotId, snapshotId)
+                .eq(AnalysisResultEntity::getAnalysisType, "theme")
+                .eq(AnalysisResultEntity::getPromptConfigId, promptConfigId)
+                .gt(validAfter != null, AnalysisResultEntity::getCreateTime, validAfter)
+                .orderByDesc(AnalysisResultEntity::getCreateTime)
+                .last("LIMIT " + Math.max(1, limit))
+        );
     }
 }

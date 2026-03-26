@@ -6,8 +6,17 @@ import type { AnalysisRequest, AnalysisResult } from '@/types/analysis';
 import type { TrendAnalysisResult, TrendRequest } from '@/types/trend';
 import type { TokenResponse } from '@/types/auth';
 
+const DEFAULT_ANALYSIS_TIMEOUT_MS = 15000;
+const LARGE_CHAPTER_ANALYSIS_TIMEOUT_MS = 180000;
+
+function resolveBlockingAnalysisTimeout(payload: AnalysisRequest) {
+  return payload.chapterCount >= 10 ? LARGE_CHAPTER_ANALYSIS_TIMEOUT_MS : DEFAULT_ANALYSIS_TIMEOUT_MS;
+}
+
 async function runBlocking(path: string, payload: AnalysisRequest) {
-  const response = await httpClient.post<ApiResponse<AnalysisResult>>(path, payload);
+  const response = await httpClient.post<ApiResponse<AnalysisResult>>(path, payload, {
+    timeout: resolveBlockingAnalysisTimeout(payload),
+  });
   return {
     ...response.data.data,
     traceId: response.data.traceId,

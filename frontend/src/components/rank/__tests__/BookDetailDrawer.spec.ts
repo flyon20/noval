@@ -6,6 +6,7 @@ describe('BookDetailDrawer', () => {
   test('renders long desktop detail content with a visible title block', async () => {
     const longTitle = '这是一本在桌面抽屉里也应该完整可见的超长书名，用来验证标题不会被挤压隐藏';
     const wrapper = mount(BookDetailDrawer, {
+      attachTo: document.body,
       props: {
         modelValue: true,
         traceId: 'trace-book-detail',
@@ -25,12 +26,16 @@ describe('BookDetailDrawer', () => {
 
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="rank-detail-title"]').text()).toContain(longTitle);
-    expect(wrapper.get('[data-testid="rank-detail-meta"]').text()).toContain('测试作者');
-    expect(wrapper.get('[data-testid="rank-detail-intro"]').text()).toContain('这里是完整简介内容');
+    expect(document.body.textContent).toContain(longTitle);
+    expect(document.body.textContent).toContain('测试作者');
+    expect(document.body.textContent).toContain('这里是完整简介内容');
+    expect(document.body.textContent).not.toContain('trace-book-detail');
+    expect(wrapper.findComponent({ name: 'ElDrawer' }).props('appendToBody')).toBe(true);
+    wrapper.unmount();
   });
   test('emits close when tapping the drawer close button', async () => {
     const wrapper = mount(BookDetailDrawer, {
+      attachTo: document.body,
       props: {
         modelValue: true,
         detail: {
@@ -48,8 +53,9 @@ describe('BookDetailDrawer', () => {
     });
 
     await flushPromises();
-    await wrapper.get('[data-testid="rank-detail-close"]').trigger('click');
+    (document.body.querySelector('[data-testid="rank-detail-close"]') as HTMLElement)?.click();
 
     expect(wrapper.emitted('update:modelValue')).toEqual([[false]]);
+    wrapper.unmount();
   });
 });

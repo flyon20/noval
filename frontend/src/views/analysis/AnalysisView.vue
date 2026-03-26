@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { analysisApi } from '@/api/analysis';
+import { dataApi } from '@/api/data';
 import { systemConfigApi, userConfigApi } from '@/api/config';
 import AnalysisContextBar from '@/components/analysis/AnalysisContextBar.vue';
 import AnalysisEmptyState from '@/components/analysis/AnalysisEmptyState.vue';
@@ -10,31 +11,44 @@ import AnalysisModeTabs from '@/components/analysis/AnalysisModeTabs.vue';
 import AnalysisResultCard from '@/components/analysis/AnalysisResultCard.vue';
 import AnalysisToolbar from '@/components/analysis/AnalysisToolbar.vue';
 import { useAnalysisRun } from '@/composables/useAnalysisRun';
+import { buildAnalysisDisplayContent } from '@/lib/analysis-display';
 import type { AnalysisResult, AnalysisType } from '@/types/analysis';
+import type { AiModelOption } from '@/types/config';
 
 const route = useRoute();
 const router = useRouter();
 
 const ANALYSIS_MODES: AnalysisType[] = ['deconstruct', 'structure', 'plot'];
 
-const availableModels = ref<string[]>([]);
+const availableModels = ref<AiModelOption[]>([]);
 const selectedModel = ref('');
 
 async function loadModelPreferences() {
   try {
     const [modelsRes, prefRes] = await Promise.all([
-      systemConfigApi.getAvailableModels(),
+      systemConfigApi.getModelOptions(),
       userConfigApi.get('ai.preferred-model'),
     ]);
     availableModels.value = modelsRes.data.data ?? [];
     const preferred = prefRes.data.data?.configValue;
-    if (preferred && availableModels.value.includes(preferred)) {
+    if (preferred && availableModels.value.some((item) => item.modelKey === preferred)) {
       selectedModel.value = preferred;
     } else if (availableModels.value.length > 0) {
-      selectedModel.value = availableModels.value[0];
+      selectedModel.value = availableModels.value[0].modelKey;
     }
   } catch {
-    // non-critical
+    try {
+      const fallback = await systemConfigApi.getAvailableModels();
+      availableModels.value = (fallback.data.data ?? []).map((modelKey, index) => ({
+        modelKey,
+        displayName: modelKey,
+        providerType: 'openai-compatible',
+        isDefault: index === 0,
+      }));
+      selectedModel.value = availableModels.value[0]?.modelKey ?? '';
+    } catch {
+      // non-critical
+    }
   }
 }
 
@@ -53,11 +67,27 @@ const modeLabelMap: Record<AnalysisType, string> = {
   plot: '情节分析',
 };
 
+function buildAnalysisStreamingContent(content?: string | null) {
+  return (content ?? '')
+    .replace(/\[(analysis[- ]progress|chunk-progress)\][^\n\r]*/giu, ' ')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim();
+}
+
+interface PersistedAnalysisContext {
+  platform: 'fanqie';
+  bookId: number;
+  chapterCount: number;
+  bookTitle?: string;
+  author?: string;
+  activeMode?: AnalysisType;
+}
+
 function parseAnalysisType(value: unknown): AnalysisType {
   return value === 'structure' || value === 'plot' ? value : 'deconstruct';
 }
 
-const pageContext = computed(() => {
+function buildRouteContext(): PersistedAnalysisContext | null {
   const bookId = Number(route.query.bookId);
   const chapterCount = Number(route.query.chapterCount);
   const platform = route.query.platform;
@@ -80,7 +110,44 @@ const pageContext = computed(() => {
     bookTitle: typeof route.query.bookName === 'string' ? route.query.bookName : undefined,
     author: typeof route.query.author === 'string' ? route.query.author : undefined,
   };
-});
+}
+
+function parsePersistedAnalysisContext(value: string | null | undefined): PersistedAnalysisContext | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<PersistedAnalysisContext>;
+    if (
+      parsed.platform !== 'fanqie'
+      || typeof parsed.bookId !== 'number'
+      || !Number.isInteger(parsed.bookId)
+      || parsed.bookId <= 0
+      || typeof parsed.chapterCount !== 'number'
+      || !Number.isInteger(parsed.chapterCount)
+      || parsed.chapterCount < 1
+      || parsed.chapterCount > 10
+    ) {
+      return null;
+    }
+
+    return {
+      platform: 'fanqie',
+      bookId: parsed.bookId,
+      chapterCount: parsed.chapterCount,
+      bookTitle: typeof parsed.bookTitle === 'string' ? parsed.bookTitle : undefined,
+      author: typeof parsed.author === 'string' ? parsed.author : undefined,
+      activeMode: parseAnalysisType(parsed.activeMode),
+    };
+  } catch {
+    return null;
+  }
+}
+
+const persistedContext = ref<PersistedAnalysisContext | null>(null);
+const contextReady = ref(false);
+const pageContext = computed(() => buildRouteContext() ?? persistedContext.value);
 
 const preferredMode = computed(() => parseAnalysisType(route.query.mode));
 const activeMode = ref<AnalysisType>(preferredMode.value);
@@ -133,15 +200,25 @@ function resolveAnalysisModeLabel(result: AnalysisResult | null) {
 function resolveAnalysisDetailLabel(result: AnalysisResult | null) {
   const resultJson = result?.resultJson;
   const segmentCount = typeof resultJson?.segmentCount === 'number' ? resultJson.segmentCount : null;
-  const inputChapterCount =
-    typeof resultJson?.inputChapterCount === 'number' ? resultJson.inputChapterCount : pageContext.value?.chapterCount;
+  const requestedChapterCount = typeof resultJson?.requestedChapterCount === 'number'
+    ? resultJson.requestedChapterCount
+    : pageContext.value?.chapterCount;
+  const actualChapterCount = typeof resultJson?.actualChapterCount === 'number'
+    ? resultJson.actualChapterCount
+    : typeof resultJson?.inputChapterCount === 'number'
+      ? resultJson.inputChapterCount
+      : requestedChapterCount;
 
   if (!result) {
     return undefined;
   }
 
   const parts = [
-    typeof inputChapterCount === 'number' ? `章节数：${inputChapterCount}` : '',
+    typeof actualChapterCount === 'number' && typeof requestedChapterCount === 'number' && actualChapterCount < requestedChapterCount
+      ? `抓取章节：${actualChapterCount}/${requestedChapterCount}`
+      : typeof actualChapterCount === 'number'
+        ? `章节数：${actualChapterCount}`
+        : '',
     segmentCount && segmentCount > 1 ? `分段数：${segmentCount}` : '',
   ].filter(Boolean);
 
@@ -171,11 +248,26 @@ function resolvePhaseLabel(mode: AnalysisType) {
   return '等待开始';
 }
 
+function hasModeStarted(mode: AnalysisType) {
+  const modeState = analysis.state.modes[mode];
+  return modeState.phase !== 'idle'
+    || Boolean(modeState.result)
+    || Boolean(modeState.streamingText)
+    || Boolean(modeState.errorMessage);
+}
+
 const analysisPanels = computed(() => {
   return ANALYSIS_MODES.map((mode) => {
     const modeState = analysis.state.modes[mode];
     const result = modeState.result;
     const running = ['preparing', 'streaming', 'fallback-blocking'].includes(modeState.phase);
+    const displayResultContent = result
+      ? buildAnalysisDisplayContent(mode, {
+        resultContent: result.resultContent,
+        resultJson: result.resultJson,
+      })
+      : '';
+    const displayStreamingText = buildAnalysisStreamingContent(modeState.streamingText);
 
     return {
       mode,
@@ -184,6 +276,8 @@ const analysisPanels = computed(() => {
       running,
       state: modeState,
       result,
+      displayResultContent,
+      displayStreamingText,
       meta: {
         analysisModeLabel: modeState.phase === 'done' ? resolveAnalysisModeLabel(result) : undefined,
         analysisDetailLabel: modeState.phase === 'done' ? resolveAnalysisDetailLabel(result) : undefined,
@@ -230,27 +324,112 @@ const tabStatuses = computed(
 watch(
   preferredMode,
   (mode) => {
-    activeMode.value = mode;
-  },
-  { immediate: true },
-);
-
-watch(
-  () =>
-    pageContext.value
-      ? `${pageContext.value.bookId}:${pageContext.value.platform}:${pageContext.value.chapterCount}`
-      : '',
-  (contextKey) => {
-    hasStarted.value = false;
-    analysis.resetAllAnalyses();
-    if (!contextKey || !pageContext.value) {
-      return;
+    if (buildRouteContext()) {
+      activeMode.value = mode;
     }
   },
   { immediate: true },
 );
 
+async function persistCurrentContext(context: PersistedAnalysisContext | null = pageContext.value) {
+  if (!context) {
+    return;
+  }
+
+  try {
+    await userConfigApi.update({
+      configKey: 'analysis.current-context',
+      configValue: JSON.stringify({
+        ...context,
+        activeMode: activeMode.value,
+      }),
+    });
+  } catch {
+    // non-critical
+  }
+}
+
+async function restorePersistedResults(context: PersistedAnalysisContext) {
+  analysis.resetAllAnalyses();
+  hasStarted.value = false;
+
+  try {
+    const response = await dataApi.getHistory({
+      platform: context.platform,
+      bookId: context.bookId,
+      limit: 20,
+    });
+    const historyItems = (response.data.data ?? []).filter((item) => item.chapterCount === context.chapterCount);
+    const latestByMode = new Map<AnalysisType, AnalysisResult>();
+
+    for (const item of historyItems) {
+      const mode = parseAnalysisType(item.analysisType);
+      if (latestByMode.has(mode)) {
+        continue;
+      }
+      latestByMode.set(mode, {
+        id: item.id,
+        bookId: item.bookId,
+        analysisType: mode,
+        modelName: item.modelName,
+        resultContent: item.resultContent,
+        resultJson: item.resultJson,
+        tokenUsed: typeof item.resultJson?.tokenUsed === 'number' ? item.resultJson.tokenUsed as number : 0,
+      });
+    }
+
+    if (!latestByMode.size) {
+      return;
+    }
+
+    analysis.hydrateModes(Object.fromEntries(latestByMode.entries()) as Partial<Record<AnalysisType, AnalysisResult>>);
+    hasStarted.value = true;
+
+    if (!context.bookTitle) {
+      const bookName = historyItems.find((item) => typeof item.bookName === 'string' && item.bookName)?.bookName ?? undefined;
+      if (bookName && persistedContext.value && persistedContext.value.bookId === context.bookId) {
+        persistedContext.value = {
+          ...persistedContext.value,
+          bookTitle: bookName,
+        };
+        await persistCurrentContext(persistedContext.value);
+      }
+    }
+  } catch {
+    // non-critical
+  }
+}
+
+async function initializeAnalysisPage() {
+  const routeContext = buildRouteContext();
+  if (routeContext) {
+    persistedContext.value = routeContext;
+    activeMode.value = preferredMode.value;
+    await persistCurrentContext(routeContext);
+    await restorePersistedResults(routeContext);
+    contextReady.value = true;
+    return;
+  }
+
+  try {
+    const response = await userConfigApi.get('analysis.current-context');
+    const restored = parsePersistedAnalysisContext(response.data.data?.configValue ?? null);
+    persistedContext.value = restored;
+    if (restored?.activeMode) {
+      activeMode.value = restored.activeMode;
+    }
+    if (restored) {
+      await restorePersistedResults(restored);
+    }
+  } catch {
+    persistedContext.value = null;
+  } finally {
+    contextReady.value = true;
+  }
+}
+
 onMounted(() => {
+  void initializeAnalysisPage();
   void loadModelPreferences();
 });
 
@@ -258,15 +437,46 @@ onBeforeUnmount(() => {
   analysis.stopAllAnalyses();
 });
 
+watch(activeMode, () => {
+  if (!contextReady.value || !pageContext.value) {
+    return;
+  }
+  void persistCurrentContext();
+});
+
+watch(
+  () => {
+    const routeContext = buildRouteContext();
+    return routeContext
+      ? `${routeContext.platform}:${routeContext.bookId}:${routeContext.chapterCount}:${route.query.mode ?? ''}`
+      : '';
+  },
+  async (routeContextKey, previousKey) => {
+    if (!contextReady.value || !routeContextKey || routeContextKey === previousKey) {
+      return;
+    }
+    const routeContext = buildRouteContext();
+    if (!routeContext) {
+      return;
+    }
+    persistedContext.value = routeContext;
+    activeMode.value = preferredMode.value;
+    await persistCurrentContext(routeContext);
+    await restorePersistedResults(routeContext);
+  },
+);
+
 async function handleRerun(mode: AnalysisType) {
   if (!pageContext.value) {
     return;
   }
 
-  if (!hasStarted.value) {
+  const modeStarted = hasModeStarted(mode);
+
+  if (!hasStarted.value || !modeStarted) {
     hasStarted.value = true;
     activeMode.value = mode;
-    await analysis.runAllAnalyses().catch(() => undefined);
+    await analysis.runAnalysis(mode).catch(() => undefined);
     return;
   }
 
@@ -279,7 +489,18 @@ function handleStop(mode: AnalysisType) {
 
 async function handleCopy(mode: AnalysisType) {
   try {
-    await analysis.copyResult(mode);
+    const panel = analysisPanels.value.find((item) => item.mode === mode);
+    const text = panel?.displayResultContent || panel?.displayStreamingText || panel?.result?.resultContent || '';
+
+    if (!text) {
+      return;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      throw new Error('Clipboard API is not available');
+    }
+
+    await navigator.clipboard.writeText(text);
     ElMessage.success(`${modeLabelMap[mode]}结果已复制`);
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '复制失败，请稍后重试');
@@ -314,7 +535,7 @@ async function goBack() {
           </div>
 
           <el-select
-            v-if="availableModels.length > 1"
+            v-if="availableModels.length > 0"
             :model-value="selectedModel"
             class="analysis-page__model-select"
             placeholder="选择模型"
@@ -323,9 +544,9 @@ async function goBack() {
           >
             <el-option
               v-for="model in availableModels"
-              :key="model"
-              :label="model"
-              :value="model"
+              :key="model.modelKey"
+              :label="`${model.displayName} (${model.modelKey})`"
+              :value="model.modelKey"
             />
           </el-select>
         </div>
@@ -362,9 +583,9 @@ async function goBack() {
           <AnalysisResultCard
             :error-message="activePanel.state.errorMessage"
             :phase="activePanel.state.phase"
-            :result-content="activePanel.result?.resultContent"
+            :result-content="activePanel.displayResultContent"
             :result-meta="activePanel.meta"
-            :streaming-text="activePanel.state.streamingText"
+            :streaming-text="activePanel.displayStreamingText"
           />
         </article>
       </section>

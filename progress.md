@@ -282,3 +282,233 @@
 
 ## Current Focus
 - Write the dedicated spec and implementation-plan documents for this rework, then move into test-first backend changes.
+
+## Session Addendum: 2026-03-25
+### Model Registry + Trend Contract Execution
+- Completed backend contract tightening for trend analysis:
+  - `AnalysisService` now normalizes trend payloads into a stable shape without inventing board/theme conclusions.
+  - `DataQueryService` now returns empty contract-driven collections when stored JSON is missing, while keeping real snapshot context available.
+  - Added and extended trend DTOs for `boardSummary`, `themeDistribution`, `rankNo`, `representativeBooks`, `topThemeRatio`, and `leadBookName`.
+- Updated theme prompt seed/example data and persisted test fixtures so admin-visible contracts and stored theme samples match the new schema.
+- Rebuilt trend display shaping in `frontend/src/lib/trend-display.ts` and expanded front-end data types to carry the richer contract fields.
+- Reworked `TrendView.vue`, `TrendSummaryCards.vue`, and `TrendComparisonList.vue` so the page renders board summary, theme table, representative books, comparison ratios, and detail drawer content directly from structured JSON while keeping mobile layout intact.
+
+### Verification Evidence
+- Ran `mvn "-Dtest=Phase5BackendIntegrationTest" test` and it passed.
+- Ran `mvn "-Dtest=Phase4AnalysisIntegrationTest,Phase5BackendIntegrationTest" test` and it passed.
+- Ran `npm run test -- --run src/lib/__tests__/trend-display.spec.ts src/views/trend/__tests__/TrendView.spec.ts` and it passed.
+- Ran `npm run test -- --run src/lib/__tests__/trend-display.spec.ts src/views/config/system/__tests__/SystemConfigView.spec.ts src/views/config/prompt/__tests__/PromptConfigView.spec.ts src/views/analysis/__tests__/AnalysisView.spec.ts src/views/trend/__tests__/TrendView.spec.ts` and it passed.
+- Ran `npm run type-check` and it passed.
+- Ran `npm run build` and it passed.
+
+### Remaining Risk
+- Front-end production build still emits chunk-size warnings for large bundles, especially `TrendView` and the main app bundle. This did not block the build, but later code-splitting would improve deploy-time performance.
+- The workspace still contains unrelated pre-existing changes plus `appendonly.aof`, which should stay out of local commits.
+
+## Session Addendum: 2026-03-25 (Prompt Contract Visibility Follow-up)
+### Root-cause Reproduction
+- Queried local MySQL directly and confirmed the active `prompt_config` rows still have empty input/output contract fields for all four prompt types.
+- Verified local `system_config.ai.model-registry.json` is already populated, so the configuration complaint is now centered on prompt-contract visibility and model-management presentation rather than missing registry storage.
+- Re-read `PromptConfigService`, `PromptConfigRepository`, `PromptConfigView.vue`, `SystemConfigView.vue`, `AnalysisService`, `DataQueryService`, `TrendView.vue`, and `trend-display.ts`.
+
+### Current Focus
+- Add regression coverage for prompt default-contract backfill and admin-page visibility.
+- Implement backend-owned prompt contract defaults plus legacy-row backfill.
+- Tighten trend rendering to use stored structured fields more strictly and upgrade the word-cloud presentation.
+
+## Session: 2026-03-26
+
+### Phase: 文档梳理与本地拉起
+- **Status:** complete
+- **Started:** 2026-03-26 01:10
+- Actions taken:
+  - Re-read `README.md`, `docs/项目总设计-v2.md`, `docs/本地联调说明.md`, and existing planning files to recover current project context.
+  - Inspected key runtime files: `docker-compose.yml`, `frontend/package.json`, `frontend/vite.config.ts`, `backend/pom.xml`, `backend/src/main/resources/application.yml`, `crawler/app/main.py`, and `langgraph-worker/app/main.py`.
+  - Verified local toolchain state: Java 17, Maven 3.8.1, Node 22, npm 9.6.5, Python 3.12; confirmed `docker` is unavailable and MySQL is already listening on `3306`.
+  - Started local Redis, crawler (`5000`), langgraph-worker (`8001`), backend in H2 mode (`8080`), and frontend Vite dev server (`5173`).
+  - Diagnosed and corrected two startup command issues:
+    - Python service env injection via `Start-Process powershell -Command` dropped the env assignment.
+    - Frontend `npm run dev` invocation passed `127.0.0.1 5173` as positional args to Vite.
+  - Re-ran the failed service startups with corrected commands and re-verified the stack.
+- Files created/modified:
+  - `D:\Git\agent\noval\task_plan.md` (updated)
+  - `D:\Git\agent\noval\findings.md` (updated)
+  - `D:\Git\agent\noval\progress.md` (updated)
+
+## Verification Evidence: 2026-03-26
+- `Invoke-WebRequest http://127.0.0.1:5000/health` returned `{"code":200,"message":"success","data":{"status":"UP"}}`.
+- `Invoke-WebRequest http://127.0.0.1:8001/health` returned `{"code":200,"message":"success","data":{"status":"UP"}}`.
+- `Invoke-WebRequest http://127.0.0.1:8080/api/system/health` returned backend `status=UP`.
+- `Invoke-WebRequest http://127.0.0.1:5173/api/system/health` returned the proxied backend health payload.
+- `Invoke-WebRequest http://127.0.0.1:5173/` returned `200`, and browser verification confirmed the login page rendered with username/password fields.
+- `Get-NetTCPConnection` confirmed listeners on `5000`, `8001`, `6379`, `8080`, and `5173`.
+
+
+## Session Addendum: 2026-03-26 (Analysis Chain Deep Dive)
+### Analysis Architecture Reading Work
+- Re-read the current baseline docs for architecture and AI design scope:
+  - `README.md`
+  - `docs/project-design-v2.md`
+  - `docs/superpowers/specs/2026-03-21-langchain4j-ai-gateway-design.md`
+  - `docs/superpowers/specs/2026-03-24-phase2-langgraph-multi-agent-design.md`
+  - `docs/superpowers/specs/2026-03-25-model-registry-and-trend-contract-design.md`
+- Traced the real single-book and trend analysis call chain across:
+  - frontend analysis/trend API + composables
+  - backend `AnalysisController` / `AnalysisService`
+  - backend `AiGatewayService` / `LangGraphWorkerClient`
+  - Python `langgraph-worker`
+  - crawler-backed chapter / board snapshot inputs
+  - `analysis_result` persistence and `DataQueryService` readback
+- Verified the current migration state:
+  - default runtime config is still `analysis.runtime.mode=legacy`
+  - LangGraph path is implemented and callable
+  - current worker is one shared graph service, not yet four independently implemented agent modules
+- Logged the main mental model for future sessions:
+  - Java owns business orchestration and storage
+  - Python worker owns AI execution when LangGraph mode is enabled
+  - model registry + prompt contract are the shared config seam between frontend, backend, and worker
+- Files created/modified:
+  - `D:/Git/agent/noval/task_plan.md` (updated)
+  - `D:/Git/agent/noval/findings.md` (updated)
+  - `D:/Git/agent/noval/progress.md` (updated)
+
+
+## Session Addendum: 2026-03-26 (Single-book 10-Chapter Stream Fix)
+### Debug + Fix Work
+- Reproduced the single-book analysis failure path from logs and confirmed the key evidence:
+  - backend warned `PythonCrawlerClient : crawler chapter call failed: 500 Internal Server Error`
+  - crawler stderr showed a reader URL inside the requested chapter range returned `404`
+- Added a crawler regression test proving that one invalid reader page inside the requested range should not fail the whole chapter fetch.
+- Updated `crawler/app/services/fanqie_crawler.py` so chapter fetching now skips broken reader pages and continues pulling later chapters until it has enough valid content or exhausts the catalog.
+- Added a frontend stream regression test proving `[analysis-progress]` must not count as real output before fallback.
+- Updated `frontend/src/lib/analysis-stream.ts` so placeholder progress deltas are ignored for visible text and fallback state tracking, while real streamed tokens still render normally.
+
+### Verification Evidence
+- Ran `python -m unittest tests.test_fanqie_crawler -v` in `crawler` and it passed with `Ran 24 tests ... OK`.
+- Ran `npm run test -- --run src/lib/__tests__/analysis-stream.spec.ts src/composables/__tests__/useAnalysisRun.spec.ts` in `frontend` and it passed with `14 passed`.
+
+
+## Session Addendum: 2026-03-26 (Actual Chapter Count UX)
+### TDD + Implementation Work
+- Added a backend unit test in `AnalysisServiceTimeoutTest` to lock that single-book analysis results carry:
+  - `requestedChapterCount`
+  - `actualChapterCount`
+  - `inputChapterCount`
+  - `chapterFetchDegraded`
+- Added a front-end view test to lock that the analysis page shows `?????8/10` when fewer chapters were actually fetched than requested.
+- Updated `AnalysisService` to attach requested/actual chapter metadata into `resultJson` for:
+  - blocking single-book analysis
+  - real streaming single-book analysis
+  - chunked streaming analysis
+  - LangGraph single-book analysis path
+- Updated `AnalysisView.vue` so the result meta area now shows an explicit ratio when actual fetched chapters are lower than requested, while keeping the previous compact label when they are equal.
+
+### Verification Evidence
+- Ran `mvn "-Dtest=AnalysisServiceTimeoutTest" test` in `backend` and it passed.
+- Ran `npm run test -- --run src/views/analysis/__tests__/AnalysisView.spec.ts src/lib/__tests__/analysis-stream.spec.ts src/composables/__tests__/useAnalysisRun.spec.ts` in `frontend` and it passed with `18 passed`.
+- Re-ran `python -m unittest tests.test_fanqie_crawler -v` in `crawler` and it passed with `Ran 24 tests ... OK`.
+
+
+## Session Addendum: 2026-03-26 (10-Chapter Timeout Budget)
+### TDD + Timeout Fix Work
+- Added backend timeout regression tests proving:
+  - 10-chapter single-book analysis gets a 60s timeout budget
+  - short single-book analysis keeps the default 15s budget
+- Added a frontend API regression test proving the blocking single-book request uses a 60s timeout for `chapterCount=10`.
+- Updated `AnalysisService` to compute a longer timeout budget for long single-book analysis and pass it through blocking, streaming, and chunked legacy analysis paths.
+- Updated `AiGatewayService` to accept per-call timeout overrides for OpenAI-compatible blocking and streaming model clients.
+- Updated `frontend/src/api/analysis.ts` so blocking fallback requests for 10-chapter analysis no longer use the generic 15s Axios timeout.
+
+### Verification Evidence
+- Ran `mvn "-Dtest=AnalysisServiceTimeoutTest" test` in `backend` and it passed with `Tests run: 9 ... 0 errors`.
+- Ran `npm run test -- --run src/api/__tests__/analysis.spec.ts src/views/analysis/__tests__/AnalysisView.spec.ts src/lib/__tests__/analysis-stream.spec.ts src/composables/__tests__/useAnalysisRun.spec.ts` in `frontend` and it passed with `19 passed`.
+
+
+## Session Addendum: 2026-03-26 (Forced Chunking For 8+ Chapters)
+### Final Timeout Fix Work
+- Added a backend regression test proving that large single-book analysis with short chapter text still splits into multiple chunks once chapter count is high enough.
+- Updated `AnalysisService.splitChaptersForChunkedAnalysis(...)` so `8+` chapters force fixed-size chunk splitting (`3` chapters per segment) instead of relying only on token thresholds.
+- Kept the longer backend AI timeout budget for long single-book analysis and aligned the frontend blocking fallback timeout to `180000ms` for `chapterCount=10`.
+
+### Verification Evidence
+- Re-ran `mvn "-Dtest=AnalysisServiceTimeoutTest" test` in `backend` and it passed with `Tests run: 10 ... 0 errors`.
+- Re-ran `npm run test -- --run src/api/__tests__/analysis.spec.ts src/views/analysis/__tests__/AnalysisView.spec.ts src/lib/__tests__/analysis-stream.spec.ts src/composables/__tests__/useAnalysisRun.spec.ts` in `frontend` and it passed with `19 passed`.
+
+
+## Session Addendum: 2026-03-26 (Persistent Analysis/Trend Context)
+### Implementation Work
+- Added hydration support to `useAnalysisRun` so persisted single-book analysis results can be restored into the three analysis panels without rerunning requests.
+- Updated `AnalysisView.vue` to:
+  - restore `analysis.current-context` from `user_config` when route query is absent
+  - persist current book context and active tab back to `user_config`
+  - reload recent persisted results for the current book via `/api/data/history`
+  - keep the current analyzed book title visible across navigation and refresh
+- Updated `TrendView.vue` to:
+  - restore `trend.current-context` from `user_config`
+  - prefer that saved trend context over rank-page board preference
+  - persist the selected trend board when the user switches context
+- Updated `RankView.vue` to:
+  - restore `rank.chapter-count` from `user_config`
+  - persist chapter-count changes independently from existing rank-fetch-count preference
+  - include current book title/author when routing into `/analysis`
+- Added/updated frontend regression coverage for:
+  - hydrated analysis results
+  - restoring persisted analysis context and results
+  - restoring persisted trend context
+  - restoring rank-page chapter count
+
+### Verification Evidence
+- Ran `npm run test -- --run src/composables/__tests__/useAnalysisRun.spec.ts src/views/analysis/__tests__/AnalysisView.spec.ts src/views/trend/__tests__/TrendView.spec.ts src/views/rank/__tests__/RankView.spec.ts` and it passed with `35 passed`.
+- Ran `npm run type-check` and it passed.
+
+
+## Session Addendum: 2026-03-26 (Rank Mobile Refresh Flow)
+### Implementation Work
+- Updated `RankView.vue` to support mobile-only refresh-flow pagination while keeping the current card layout unchanged.
+- Added mobile viewport state, page-append state, load-more error state, and a bottom sentinel driven by `IntersectionObserver`.
+- Implemented mobile auto-load for the next page, plus a manual `????` fallback button and an `?????` terminal state.
+- Kept desktop `ElPagination` behavior unchanged.
+- Added a floating `???` button for mobile refresh flow and wired it to smooth scroll back to the list top.
+- Guarded board polling so mobile multi-page refresh flow does not unexpectedly collapse appended content into a single later page.
+
+### Verification Evidence
+- Ran `npm run test -- --run src/views/rank/__tests__/RankView.spec.ts` and it passed with `11 passed`.
+- Ran `npm run type-check` and it passed.
+
+
+## Session Addendum: 2026-03-26 (Single-book Analysis First-Run UX)
+### Debug + Fix Work
+- Updated `AnalysisView.vue` so the first click on `????` / rerun no longer dispatches all three analysis panels at once; it now starts only the active panel.
+- Updated `AnalysisView.vue` so later first-time runs for untouched panels use normal analysis start semantics instead of forcing `forceReanalyze`.
+- Replaced the analysis-page streaming display path from preview-truncation mode to full accumulated streaming text, while still removing progress markers.
+- Updated analysis-page tests to lock:
+  - first trigger only runs the active panel
+  - long streaming output remains visible instead of truncating to preview length
+  - targeted panel stop/rerun still behaves correctly
+
+### Verification Evidence
+- Ran `npm run test -- --run src/views/analysis/__tests__/AnalysisView.spec.ts src/composables/__tests__/useAnalysisRun.spec.ts` and it passed with `14 passed`.
+- Ran `npm run type-check` and it passed.
+
+
+## Session Addendum: 2026-03-26 (UI Copy + Drawer + Trend Visual Cleanup)
+### Implementation Work
+- Simplified `AppHeader.vue` to keep only page titles and made the top bar sticky so mobile users can reliably reach logout.
+- Simplified `BookDetailDrawer.vue` by removing trace/debug text and extra labels.
+- Rebuilt `ChapterPreviewDrawer.vue` for better desktop usability:
+  - desktop uses a side drawer instead of the old awkward bottom sheet
+  - primary actions reordered to `?????? / ????? / ??`
+  - chapter count and quota move into a dedicated meta row below the actions
+  - removed trace/debug parameter text
+- Simplified `RankView.vue` hero copy by removing explanatory filler text.
+- Rebuilt `TrendTagCloud.vue` into a true colorful cloud-like SVG layout with varied size, color, and placement.
+- Tightened trend UI copy and improved visual clarity:
+  - shortened trend summary/comparison copy
+  - removed verbose trend toolbar subtitles
+  - converted theme-table support content to a real `el-table`
+  - disabled pie labels inside the theme distribution chart and kept legend/tooltips outside the pie
+  - tightened snapshot table copy and enabled overflow tooltips
+
+### Verification Evidence
+- Ran `npm run test -- --run src/components/rank/__tests__/BookDetailDrawer.spec.ts src/components/rank/__tests__/ChapterPreviewDrawer.spec.ts src/layouts/__tests__/AppShell.spec.ts src/views/trend/__tests__/TrendView.spec.ts` and it passed with `19 passed`.
+- Ran `npm run type-check` and it passed.

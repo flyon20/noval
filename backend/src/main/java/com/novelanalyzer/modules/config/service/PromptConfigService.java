@@ -14,15 +14,18 @@ public class PromptConfigService {
     private static final String REQUIRED_CONTENT_PLACEHOLDER = "{{content}}";
 
     private final PromptConfigRepository promptConfigRepository;
+    private final DefaultPromptContractCatalog defaultPromptContractCatalog;
 
-    public PromptConfigService(PromptConfigRepository promptConfigRepository) {
+    public PromptConfigService(PromptConfigRepository promptConfigRepository,
+                               DefaultPromptContractCatalog defaultPromptContractCatalog) {
         this.promptConfigRepository = promptConfigRepository;
+        this.defaultPromptContractCatalog = defaultPromptContractCatalog;
     }
 
     public PromptConfigVO getByType(String promptType) {
         PromptConfigEntity entity = promptConfigRepository.findDefaultByType(promptType)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
-        return toVO(entity);
+        return toVO(backfillMissingContractFields(entity));
     }
 
     public PromptConfigVO save(PromptConfigUpdateRequest request) {
@@ -34,6 +37,8 @@ public class PromptConfigService {
         entity.setModelName(request.getModelName());
         entity.setTemperature(request.getTemperature());
         entity.setMaxTokens(request.getMaxTokens());
+        entity.setInputJsonSchema(request.getInputJsonSchema());
+        entity.setInputExampleJson(request.getInputExampleJson());
         entity.setOutputJsonSchema(request.getOutputJsonSchema());
         entity.setOutputExampleJson(request.getOutputExampleJson());
         entity.setPostProcessType(request.getPostProcessType());
@@ -45,11 +50,25 @@ public class PromptConfigService {
         return toVO(updated);
     }
 
+    public void backfillMissingDefaultContracts() {
+        promptConfigRepository.findAllActive().forEach(this::backfillMissingContractFields);
+    }
+
     private void validatePromptContent(String promptContent) {
         if (promptContent == null || !promptContent.contains(REQUIRED_CONTENT_PLACEHOLDER)) {
             throw new BusinessException(ResultCode.BAD_REQUEST,
                 "promptContent must contain {{content}} placeholder");
         }
+    }
+
+    private PromptConfigEntity backfillMissingContractFields(PromptConfigEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        if (defaultPromptContractCatalog.applyMissingDefaults(entity)) {
+            promptConfigRepository.saveOrUpdate(entity);
+        }
+        return entity;
     }
 
     private PromptConfigVO toVO(PromptConfigEntity entity) {
@@ -61,6 +80,8 @@ public class PromptConfigService {
         vo.setModelName(entity.getModelName());
         vo.setTemperature(entity.getTemperature());
         vo.setMaxTokens(entity.getMaxTokens());
+        vo.setInputJsonSchema(entity.getInputJsonSchema());
+        vo.setInputExampleJson(entity.getInputExampleJson());
         vo.setOutputJsonSchema(entity.getOutputJsonSchema());
         vo.setOutputExampleJson(entity.getOutputExampleJson());
         vo.setPostProcessType(entity.getPostProcessType());

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
+import { userConfigApi } from '@/api/config';
 import { crawlerApi } from '@/api/crawler';
 import BookDetailDrawer from '@/components/rank/BookDetailDrawer.vue';
 import ChapterPreviewDrawer from '@/components/rank/ChapterPreviewDrawer.vue';
@@ -28,8 +29,16 @@ import type {
 } from '@/types/crawler';
 
 const INTRO_PREVIEW_LENGTH = 100;
+const BOARD_POLL_INTERVAL_MS = 12000;
+const BOARD_RETRY_INTERVAL_MS = 3000;
+const MOBILE_BREAKPOINT = 768;
+const MOBILE_SCROLL_TOP_THRESHOLD = 360;
+const MOBILE_LOAD_MORE_ROOT_MARGIN = '220px';
 
 const router = useRouter();
+let boardPollTimer: ReturnType<typeof setTimeout> | null = null;
+let mobileLoadObserver: IntersectionObserver | null = null;
+const mobileLoadSentinelRef = ref<HTMLElement | null>(null);
 
 const filters = reactive({
   platform: DEFAULT_PLATFORM,
@@ -56,12 +65,19 @@ const state = reactive({
   detailOpen: false,
   chapterOpen: false,
   activeBookId: undefined as number | undefined,
+  activeBookName: '',
+  activeBookAuthor: '',
   page: 1,
   pageSize: DEFAULT_RANK_PAGE_SIZE,
   total: 0,
   snapshotId: undefined as number | undefined,
   snapshotTime: '',
   refreshInfo: null as RankRefreshResult | null,
+  isMobileViewport: false,
+  loadingMore: false,
+  loadMoreError: '',
+  showScrollTop: false,
+  loadedPages: [] as number[],
 });
 
 const channelOptions = computed(() => state.boardCatalog);
@@ -76,6 +92,9 @@ const totalPages = computed(() => {
   }
   return Math.ceil(state.total / state.pageSize);
 });
+
+const hasMorePages = computed(() => state.page < totalPages.value);
+const useRefreshFlow = computed(() => state.isMobileViewport);
 
 const selectedChannelName = computed(() => {
   return state.boardCatalog.find((item) => item.channelCode === filters.channelCode)?.channelName ?? '未选择频道';
@@ -114,17 +133,25 @@ function normalizeRankFetchCount(rankFetchCount?: number | null): RankFetchCount
   return DEFAULT_RANK_FETCH_COUNT;
 }
 
+function normalizeChapterCount(chapterCount?: number | null): UiChapterCount {
+  if (CHAPTER_COUNT_OPTIONS.includes(chapterCount as UiChapterCount)) {
+    return chapterCount as UiChapterCount;
+  }
+  return 3;
+}
+
 async function initializePage() {
   state.listLoading = true;
   state.errorMessage = '';
   state.traceId = '';
 
   try {
-    const [response, preference] = await Promise.all([
+    const [response, preference, chapterCountConfig] = await Promise.all([
       crawlerApi.getBoards({
         platform: filters.platform,
       }),
       loadUserPreference(),
+      loadChapterCountPreference(),
     ]);
     state.boardCatalog = response.data.data;
     state.traceId = response.data.traceId;
@@ -146,6 +173,7 @@ async function initializePage() {
     filters.channelCode = preferredChannel?.channelCode ?? firstChannel.channelCode;
     filters.boardCode = preferredBoard?.boardCode ?? preferredChannel?.boards[0]?.boardCode ?? firstBoard.boardCode;
     filters.rankFetchCount = normalizeRankFetchCount(preference?.rankFetchCount);
+    filters.chapterCount = normalizeChapterCount(chapterCountConfig);
     await loadCurrentBoard();
   } catch (error) {
     applyListError(error, '榜单目录加载失败');
@@ -159,6 +187,7 @@ async function loadCurrentBoard() {
     return;
   }
 
+  resetRefreshFlowState();
   state.listLoading = true;
   state.errorMessage = '';
 
@@ -184,8 +213,10 @@ async function loadCurrentBoard() {
       analysisTriggered: false,
     };
     state.errorMessage = '';
+    scheduleBoardPoll();
   } catch (error) {
     if (isSnapshotMissingError(error)) {
+      scheduleBoardPoll(BOARD_RETRY_INTERVAL_MS);
       await refreshCurrentBoard('AUTO');
       return;
     }
@@ -214,6 +245,7 @@ async function refreshCurrentBoard(refreshMode: 'AUTO' | 'FORCE') {
     state.refreshInfo = refreshResponse.data.data;
     state.traceId = refreshResponse.data.traceId;
     state.page = 1;
+    resetRefreshFlowState();
     await loadCurrentBoard();
   } catch (error) {
     applyListError(error, '榜单抓取失败');
@@ -222,12 +254,19 @@ async function refreshCurrentBoard(refreshMode: 'AUTO' | 'FORCE') {
   }
 }
 
-async function fetchRankPage(page: number, keepLoading = false) {
+async function fetchRankPage(page: number, keepLoading = false, append = false) {
   if (!filters.channelCode || !filters.boardCode) {
     return;
   }
 
-  if (!keepLoading) {
+  if (append && (state.loadingMore || state.loadedPages.includes(page))) {
+    return;
+  }
+
+  if (append) {
+    state.loadingMore = true;
+    state.loadMoreError = '';
+  } else if (!keepLoading) {
     state.listLoading = true;
     state.errorMessage = '';
   }
@@ -240,12 +279,24 @@ async function fetchRankPage(page: number, keepLoading = false) {
       page,
       pageSize: state.pageSize,
     });
-    applyPageResult(response.data.data);
+    applyPageResult(response.data.data, { append });
     state.traceId = response.data.traceId;
+    if (append) {
+      state.loadMoreError = '';
+    }
   } catch (error) {
-    applyListError(error, '榜单分页加载失败');
+    if (append) {
+      state.loadMoreError = getErrorPayload(error).message ?? '加载更多失败';
+    } else {
+      applyListError(error, '榜单分页加载失败');
+    }
   } finally {
-    if (!keepLoading) {
+    if (append) {
+      state.loadingMore = false;
+      void nextTick(() => {
+        syncMobileLoadObserver();
+      });
+    } else if (!keepLoading) {
       state.listLoading = false;
     }
   }
@@ -276,6 +327,7 @@ async function handlePageSizeChange(pageSize: number) {
   }
   state.pageSize = pageSize;
   state.page = 1;
+  resetRefreshFlowState();
   await fetchRankPage(1);
 }
 
@@ -310,6 +362,8 @@ async function openChapters(row: RankBookItem) {
   state.chapterLoading = true;
   state.chapterTraceId = '';
   state.activeBookId = row.bookId;
+  state.activeBookName = row.bookName;
+  state.activeBookAuthor = row.author;
   state.chapterRefreshSummary = null;
 
   try {
@@ -365,17 +419,37 @@ async function goAnalysis() {
       bookId: String(state.activeBookId),
       platform: filters.platform,
       chapterCount: String(filters.chapterCount),
+      bookName: state.activeBookName,
+      author: state.activeBookAuthor,
     },
   });
 }
 
-function applyPageResult(pageResult: RankPageResult) {
-  state.rankList = pageResult.items;
+function applyPageResult(pageResult: RankPageResult, options: { append?: boolean } = {}) {
+  if (options.append) {
+    const merged = [...state.rankList, ...pageResult.items];
+    const deduped = new Map<number, RankBookItem>();
+    for (const item of merged) {
+      deduped.set(item.bookId, item);
+    }
+    state.rankList = [...deduped.values()];
+  } else {
+    state.rankList = pageResult.items;
+  }
   state.page = pageResult.page;
   state.pageSize = pageResult.pageSize;
   state.total = pageResult.total;
   state.snapshotId = pageResult.snapshotId;
   state.snapshotTime = pageResult.snapshotTime ?? '';
+  if (!state.loadedPages.includes(pageResult.page)) {
+    state.loadedPages.push(pageResult.page);
+  }
+}
+
+function resetRefreshFlowState() {
+  state.loadedPages = [];
+  state.loadingMore = false;
+  state.loadMoreError = '';
 }
 
 function applyListError(error: unknown, fallbackMessage: string) {
@@ -400,6 +474,20 @@ async function loadUserPreference() {
   }
 }
 
+async function loadChapterCountPreference() {
+  try {
+    const response = await userConfigApi.get('rank.chapter-count');
+    const rawValue = response.data.data?.configValue;
+    if (!rawValue) {
+      return null;
+    }
+    const parsed = Number(rawValue);
+    return Number.isInteger(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 async function saveUserPreference() {
   if (!filters.channelCode || !filters.boardCode) {
     return;
@@ -416,9 +504,161 @@ async function saveUserPreference() {
   }
 }
 
+async function saveChapterCountPreference(chapterCount: UiChapterCount) {
+  try {
+    await userConfigApi.update({
+      configKey: 'rank.chapter-count',
+      configValue: String(chapterCount),
+    });
+  } catch {
+    // Ignore preference write failures to avoid blocking rank browsing.
+  }
+}
+
+async function loadNextPage() {
+  if (!useRefreshFlow.value || state.listLoading || state.loadingMore || !hasMorePages.value) {
+    return;
+  }
+  await fetchRankPage(state.page + 1, true, true);
+}
+
+function clearBoardPollTimer() {
+  if (boardPollTimer) {
+    clearTimeout(boardPollTimer);
+    boardPollTimer = null;
+  }
+}
+
+function destroyMobileLoadObserver() {
+  if (mobileLoadObserver) {
+    mobileLoadObserver.disconnect();
+    mobileLoadObserver = null;
+  }
+}
+
+function syncViewportMode() {
+  state.isMobileViewport = window.innerWidth <= MOBILE_BREAKPOINT;
+}
+
+function handleWindowScroll() {
+  state.showScrollTop = window.scrollY > MOBILE_SCROLL_TOP_THRESHOLD;
+}
+
+function handleScrollTop() {
+  window.scrollTo({
+    top: 0,
+    behavior: 'smooth',
+  });
+}
+
+function syncMobileLoadObserver() {
+  destroyMobileLoadObserver();
+  if (!useRefreshFlow.value || !mobileLoadSentinelRef.value || !hasMorePages.value) {
+    return;
+  }
+  mobileLoadObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      void loadNextPage();
+    }
+  }, {
+    root: null,
+    rootMargin: MOBILE_LOAD_MORE_ROOT_MARGIN,
+    threshold: 0.01,
+  });
+  mobileLoadObserver.observe(mobileLoadSentinelRef.value);
+}
+
+function scheduleBoardPoll(delay = BOARD_POLL_INTERVAL_MS) {
+  clearBoardPollTimer();
+
+  if (!filters.channelCode || !filters.boardCode) {
+    return;
+  }
+
+  boardPollTimer = setTimeout(() => {
+    void pollCurrentBoardPage();
+  }, delay);
+}
+
+async function pollCurrentBoardPage() {
+  if (!filters.channelCode || !filters.boardCode) {
+    return;
+  }
+
+  if (useRefreshFlow.value && state.page > 1) {
+    scheduleBoardPoll();
+    return;
+  }
+
+  if (state.listLoading || state.detailLoading || state.chapterLoading || state.chapterRefreshLoading) {
+    scheduleBoardPoll();
+    return;
+  }
+
+  try {
+    const response = await crawlerApi.getRankPage({
+      platform: filters.platform,
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+      page: state.page || 1,
+      pageSize: state.pageSize,
+    });
+    const pageResult = response.data.data;
+    applyPageResult(pageResult, { append: false });
+    state.traceId = response.data.traceId;
+    state.refreshInfo = {
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+      snapshotId: pageResult.snapshotId,
+      snapshotTime: pageResult.snapshotTime,
+      total: pageResult.total,
+      reused: true,
+      refreshLimited: false,
+      analysisTriggered: false,
+    };
+    if (state.errorMessage) {
+      state.errorMessage = '';
+    }
+    scheduleBoardPoll();
+  } catch (error) {
+    scheduleBoardPoll(isSnapshotMissingError(error) ? BOARD_RETRY_INTERVAL_MS : BOARD_POLL_INTERVAL_MS);
+  }
+}
+
 onMounted(() => {
+  syncViewportMode();
+  handleWindowScroll();
+  window.addEventListener('resize', syncViewportMode);
+  window.addEventListener('scroll', handleWindowScroll, { passive: true });
   void initializePage();
 });
+
+watch(
+  () => filters.chapterCount,
+  (chapterCount, previousChapterCount) => {
+    if (chapterCount === previousChapterCount) {
+      return;
+    }
+    void saveChapterCountPreference(chapterCount);
+  },
+);
+
+onBeforeUnmount(() => {
+  clearBoardPollTimer();
+  destroyMobileLoadObserver();
+  window.removeEventListener('resize', syncViewportMode);
+  window.removeEventListener('scroll', handleWindowScroll);
+});
+
+watch(
+  () => [state.isMobileViewport, state.page, state.total, state.rankList.length, state.loadingMore],
+  () => {
+    void nextTick(() => {
+      syncMobileLoadObserver();
+    });
+  },
+  { flush: 'post' },
+);
 </script>
 
 <template>
@@ -427,9 +667,6 @@ onMounted(() => {
       <div class="rank-page__hero-copy">
         <p class="rank-page__eyebrow">Rank Workspace</p>
         <h1>扫榜页</h1>
-        <p class="rank-page__summary-copy">
-          查看当前榜单、分页浏览并进入详情。
-        </p>
       </div>
       <div class="rank-page__hero-badge">
         <span>{{ selectedChannelName }}</span>
@@ -597,9 +834,51 @@ onMounted(() => {
             </el-button>
           </div>
         </article>
+
+        <div
+          v-if="useRefreshFlow"
+          ref="mobileLoadSentinelRef"
+          class="rank-page__mobile-sentinel"
+          data-testid="rank-mobile-sentinel"
+        />
       </div>
 
-      <div v-if="state.total > 0" class="rank-page__pagination">
+      <div v-if="useRefreshFlow && state.total > 0" class="rank-page__mobile-flow">
+        <span
+          v-if="state.loadingMore"
+          class="rank-page__mobile-flow-text"
+          data-testid="rank-mobile-loading"
+        >
+          正在加载更多...
+        </span>
+        <button
+          v-else-if="state.loadMoreError"
+          class="rank-page__mobile-flow-button"
+          data-testid="rank-mobile-retry"
+          type="button"
+          @click="loadNextPage"
+        >
+          {{ state.loadMoreError }}，点此重试
+        </button>
+        <button
+          v-else-if="hasMorePages"
+          class="rank-page__mobile-flow-button"
+          data-testid="rank-mobile-load-more"
+          type="button"
+          @click="loadNextPage"
+        >
+          继续下滑或点此加载更多
+        </button>
+        <span
+          v-else
+          class="rank-page__mobile-flow-text"
+          data-testid="rank-mobile-end"
+        >
+          已经到底了
+        </span>
+      </div>
+
+      <div v-else-if="state.total > 0" class="rank-page__pagination">
         <span class="rank-page__pagination-meta">第 {{ state.page }} / {{ totalPages || 1 }} 页</span>
         <el-pagination
           :current-page="state.page"
@@ -611,6 +890,16 @@ onMounted(() => {
         />
       </div>
     </section>
+
+    <button
+      v-if="useRefreshFlow && state.showScrollTop"
+      class="rank-page__scroll-top"
+      data-testid="rank-scroll-top"
+      type="button"
+      @click="handleScrollTop"
+    >
+      回顶部
+    </button>
 
     <BookDetailDrawer
       v-model="state.detailOpen"
@@ -916,6 +1205,45 @@ onMounted(() => {
   font-size: 0.9rem;
 }
 
+.rank-page__mobile-sentinel {
+  width: 100%;
+  height: 1px;
+}
+
+.rank-page__mobile-flow {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+}
+
+.rank-page__mobile-flow-text {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+}
+
+.rank-page__mobile-flow-button {
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(35, 65, 58, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.rank-page__scroll-top {
+  position: fixed;
+  right: 1rem;
+  bottom: 1.25rem;
+  z-index: 20;
+  padding: 0.8rem 1rem;
+  border: none;
+  border-radius: 999px;
+  background: rgba(35, 65, 58, 0.96);
+  color: #fff;
+  box-shadow: var(--shadow-soft);
+  cursor: pointer;
+}
+
 .rank-page__alert {
   margin-bottom: 0.2rem;
 }
@@ -940,6 +1268,10 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  .rank-page__pagination {
+    display: none;
+  }
+
   .rank-page__item {
     grid-template-columns: auto 1fr;
     grid-template-rows: auto auto;

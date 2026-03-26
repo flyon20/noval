@@ -11,7 +11,9 @@ public class VisualDataVO {
     private Integer sourceSnapshotCount;
     private Integer historyAnalysisCount;
     private List<RankSnapshotVO> latestSnapshots;
+    private String boardSummary;
     private List<ThemeWordCloudItemVO> historicalWordCloud;
+    private List<ThemeDistributionItemVO> themeDistribution;
     private List<ThemeTableItemVO> themeTable;
     private List<HotBookVO> hotBooks;
     private List<InsightCardVO> insightCards;
@@ -76,12 +78,28 @@ public class VisualDataVO {
         this.latestSnapshots = latestSnapshots;
     }
 
+    public String getBoardSummary() {
+        return boardSummary;
+    }
+
+    public void setBoardSummary(String boardSummary) {
+        this.boardSummary = boardSummary;
+    }
+
     public List<ThemeWordCloudItemVO> getHistoricalWordCloud() {
         return historicalWordCloud;
     }
 
     public void setHistoricalWordCloud(List<ThemeWordCloudItemVO> historicalWordCloud) {
         this.historicalWordCloud = historicalWordCloud;
+    }
+
+    public List<ThemeDistributionItemVO> getThemeDistribution() {
+        return themeDistribution;
+    }
+
+    public void setThemeDistribution(List<ThemeDistributionItemVO> themeDistribution) {
+        this.themeDistribution = themeDistribution;
     }
 
     public List<ThemeTableItemVO> getThemeTable() {

@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { analysisApi } from '@/api/analysis';
 import { crawlerApi } from '@/api/crawler';
+import { systemConfigApi, userConfigApi } from '@/api/config';
 import { dataApi } from '@/api/data';
 import { DEFAULT_RANK_FETCH_COUNT } from '@/constants/crawler';
 import AnalysisToolbar from '@/components/analysis/AnalysisToolbar.vue';
@@ -14,13 +15,21 @@ import TrendSnapshotTable from '@/components/trend/TrendSnapshotTable.vue';
 import TrendSummaryCards from '@/components/trend/TrendSummaryCards.vue';
 import TrendTagCloud from '@/components/trend/TrendTagCloud.vue';
 import { useTrendRun } from '@/composables/useTrendRun';
-import { buildPreviewText, buildTrendDisplayModel, localizeTrendText } from '@/lib/trend-display';
+import {
+  buildPreviewText,
+  buildTrendDisplayModel,
+  buildTrendStreamingPreviewText,
+  localizeTrendText,
+} from '@/lib/trend-display';
 import { getErrorPayload } from '@/lib/http-error';
 import type { SnapshotThemeComparison, ThemeWordCloudItem, VisualData } from '@/types/data';
+import type { AiModelOption } from '@/types/config';
 import type { RankBoardCatalog, RankFetchCount, UserRankPreference } from '@/types/crawler';
 import type { TrendAnalysisResult } from '@/types/trend';
 
 const PLATFORM = 'fanqie' as const;
+const VISUAL_POLL_INTERVAL_MS = 12000;
+const VISUAL_RETRY_INTERVAL_MS = 3000;
 
 const PHASE_LABELS: Record<string, string> = {
   idle: '待命',
@@ -36,11 +45,22 @@ const boardCatalog = ref<RankBoardCatalog[]>([]);
 const selectedChannelCode = ref('');
 const selectedBoardCode = ref('');
 const selectedRankFetchCount = ref<RankFetchCount>(DEFAULT_RANK_FETCH_COUNT);
+const availableModels = ref<AiModelOption[]>([]);
+const selectedModel = ref('');
 const contextLoading = ref(false);
 const contextError = ref('');
 const visualLoading = ref(false);
 const visualError = ref('');
 const visualData = ref<VisualData | null>(null);
+const isMobileViewport = ref(false);
+let visualPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+interface PersistedTrendContext {
+  platform: 'fanqie';
+  channelCode: string;
+  boardCode: string;
+  boardName?: string;
+}
 
 const trend = useTrendRun({
   runTrend(payload, callbacks) {
@@ -74,14 +94,26 @@ const structuredTrend = computed(() => buildTrendDisplayModel({
   resultContent: trend.state.result?.resultContent ?? visualData.value?.detailContent ?? visualData.value?.trendPreview,
   detailContent: visualData.value?.detailContent,
   comparisonSummary: visualData.value?.comparisonSummary,
+  boardSummary: visualData.value?.boardSummary,
   trendPreview: visualData.value?.trendPreview,
   insightCards: visualData.value?.insightCards,
+  themeDistribution: visualData.value?.themeDistribution,
   themeTable: visualData.value?.themeTable,
   hotBooks: visualData.value?.hotBooks,
 }));
 
 const displaySummary = computed(() => structuredTrend.value.summaryText);
+const displayBoardSummary = computed(() => structuredTrend.value.boardSummary || displaySummary.value);
 const displayContent = computed(() => structuredTrend.value.detailContent);
+const themeDistributionRows = computed(() => (
+  structuredTrend.value.themeDistribution.length
+    ? structuredTrend.value.themeDistribution
+    : structuredTrend.value.themeTable.map((item) => ({
+      theme: item.theme,
+      count: item.count,
+      ratio: item.ratio ?? null,
+    }))
+));
 
 const displayPhase = computed(() => {
   if (['preparing', 'streaming', 'fallback-blocking', 'done', 'error'].includes(trend.state.phase)) {
@@ -95,6 +127,7 @@ const displayMeta = computed(() => ({
   traceId: trend.state.result?.traceId ?? trend.state.traceId,
   modelName: trend.state.result?.modelName,
 }));
+const displayStreamingText = computed(() => buildTrendStreamingPreviewText(trend.state.streamingText));
 
 const tagCloudItems = computed<ThemeWordCloudItem[]>(() => (visualData.value?.historicalWordCloud ?? []).map((item) => ({
   ...item,
@@ -108,17 +141,10 @@ const availableSnapshotCount = computed(() => Math.max(
 ));
 const visualSummaryText = computed(() => {
   if (availableSnapshotCount.value > 0) {
-    return `图表只围绕当前榜单展示，优先展示当前可用的 ${availableSnapshotCount.value} 次快照和已落库的结构化趋势结果，手机端会自动切成单列。`;
+    return `图表只围绕当前榜单展示，优先显示当前可用的 ${availableSnapshotCount.value} 次快照和已落库的结构化趋势结果，手机端会自动切成单列。`;
   }
 
   return '图表只围绕当前榜单展示，待抓到快照后这里会自动补上结构化趋势数据，手机端会自动切成单列。';
-});
-const wordCloudSubtitle = computed(() => {
-  if (availableSnapshotCount.value > 0) {
-    return `基于当前可用的 ${availableSnapshotCount.value} 次样本，先展示已经拿到的题材关键词。`;
-  }
-
-  return '当前还没有可用样本，待抓到快照后这里会自动补上题材关键词。';
 });
 const snapshotChartTitle = computed(() => {
   if (availableSnapshotCount.value > 0) {
@@ -135,31 +161,28 @@ const snapshotChartSubtitle = computed(() => {
   return '当前还没有可用快照，待抓取后这里会展示样本规模变化。';
 });
 
-const wordCloudOption = computed(() => ({
-  tooltip: { trigger: 'axis' },
-  grid: { left: 24, right: 16, top: 24, bottom: 24, containLabel: true },
-  xAxis: { type: 'value' },
-  yAxis: {
-    type: 'category',
-    data: tagCloudItems.value.map((item) => item.name).reverse(),
+const themeTableOption = computed(() => ({
+  tooltip: { trigger: 'item' },
+  legend: {
+    type: 'scroll',
+    bottom: 0,
+    icon: 'circle',
+    itemWidth: 10,
+    itemHeight: 10,
   },
   series: [
     {
-      type: 'bar',
-      data: tagCloudItems.value.map((item) => item.value).reverse(),
-      barMaxWidth: 22,
-    },
-  ],
-}));
-
-const themeTableOption = computed(() => ({
-  tooltip: { trigger: 'item' },
-  legend: { bottom: 0 },
-  series: [
-    {
       type: 'pie',
-      radius: ['40%', '70%'],
-      data: (visualData.value?.themeTable ?? []).map((item) => ({
+      radius: ['42%', '70%'],
+      center: ['50%', '45%'],
+      avoidLabelOverlap: true,
+      label: { show: false },
+      labelLine: { show: false },
+      emphasis: {
+        scale: true,
+        label: { show: false },
+      },
+      data: themeDistributionRows.value.map((item) => ({
         name: localizeTrendText(item.theme),
         value: item.count,
       })),
@@ -190,6 +213,10 @@ const snapshotOption = computed(() => {
   };
 });
 
+function syncViewportMode() {
+  isMobileViewport.value = window.innerWidth <= 760;
+}
+
 function resolveInitialSelection(preference: UserRankPreference | null) {
   const firstChannel = boardCatalog.value[0];
   const firstBoard = firstChannel?.boards[0];
@@ -209,6 +236,59 @@ function resolveInitialSelection(preference: UserRankPreference | null) {
   };
 }
 
+function parsePersistedTrendContext(value: string | null | undefined): PersistedTrendContext | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<PersistedTrendContext>;
+    if (
+      parsed.platform !== 'fanqie'
+      || typeof parsed.channelCode !== 'string'
+      || !parsed.channelCode
+      || typeof parsed.boardCode !== 'string'
+      || !parsed.boardCode
+    ) {
+      return null;
+    }
+
+    return {
+      platform: 'fanqie',
+      channelCode: parsed.channelCode,
+      boardCode: parsed.boardCode,
+      boardName: typeof parsed.boardName === 'string' ? parsed.boardName : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveTrendSelection(
+  preference: UserRankPreference | null,
+  persistedContext: PersistedTrendContext | null,
+) {
+  const firstChannel = boardCatalog.value[0];
+  const firstBoard = firstChannel?.boards[0];
+
+  if (!firstChannel || !firstBoard) {
+    return null;
+  }
+
+  const persistedChannel = persistedContext
+    ? boardCatalog.value.find((item) => item.channelCode === persistedContext.channelCode)
+    : null;
+  const persistedBoard = persistedChannel?.boards.find((item) => item.boardCode === persistedContext.boardCode);
+  if (persistedChannel && persistedBoard) {
+    return {
+      channelCode: persistedChannel.channelCode,
+      boardCode: persistedBoard.boardCode,
+    };
+  }
+
+  return resolveInitialSelection(preference);
+}
+
 function ensureVisualShell() {
   if (visualData.value) {
     return visualData.value;
@@ -222,7 +302,9 @@ function ensureVisualShell() {
     sourceSnapshotCount: 0,
     historyAnalysisCount: 0,
     latestSnapshots: [],
+    boardSummary: '',
     historicalWordCloud: [],
+    themeDistribution: [],
     themeTable: [],
     hotBooks: [],
     insightCards: [],
@@ -242,6 +324,7 @@ function mergeVisualFromResult(result: TrendAnalysisResult) {
     resultJson,
     resultContent: result.resultContent,
   });
+  const hasThemeDistribution = Object.prototype.hasOwnProperty.call(resultJson, 'themeDistribution');
   const hasThemeTable = Object.prototype.hasOwnProperty.call(resultJson, 'themeTable');
   const hasHotBooks = Object.prototype.hasOwnProperty.call(resultJson, 'hotBooks');
   const hasInsightCards = Object.prototype.hasOwnProperty.call(resultJson, 'insightCards');
@@ -254,9 +337,11 @@ function mergeVisualFromResult(result: TrendAnalysisResult) {
   current.historyAnalysisCount = typeof resultJson.historyAnalysisCount === 'number'
     ? resultJson.historyAnalysisCount
     : current.historyAnalysisCount;
+  current.boardSummary = structured.boardSummary || current.boardSummary;
   current.historicalWordCloud = Array.isArray(resultJson.historicalWordCloud)
     ? (resultJson.historicalWordCloud as ThemeWordCloudItem[])
     : current.historicalWordCloud;
+  current.themeDistribution = hasThemeDistribution ? structured.themeDistribution : current.themeDistribution;
   current.themeTable = hasThemeTable ? structured.themeTable : current.themeTable;
   current.hotBooks = hasHotBooks ? structured.hotBooks : current.hotBooks;
   current.insightCards = hasInsightCards ? structured.insightCards : current.insightCards;
@@ -264,7 +349,7 @@ function mergeVisualFromResult(result: TrendAnalysisResult) {
     ? (resultJson.snapshotComparisons as SnapshotThemeComparison[])
     : current.snapshotComparisons;
   current.comparisonSummary = structured.comparisonSummary || current.comparisonSummary;
-  current.trendPreview = structured.summaryText || current.trendPreview;
+  current.trendPreview = structured.previewText || current.trendPreview;
   current.detailContent = structured.detailContent || current.detailContent;
   visualData.value = {
     ...current,
@@ -286,10 +371,57 @@ async function loadVisualData() {
       boardCode: selectedBoardCode.value,
     });
     visualData.value = response.data.data;
+    scheduleVisualPoll();
   } catch (error) {
     visualError.value = getErrorPayload(error).message ?? '趋势可视化数据加载失败';
+    scheduleVisualPoll(VISUAL_RETRY_INTERVAL_MS);
   } finally {
     visualLoading.value = false;
+  }
+}
+
+function clearVisualPollTimer() {
+  if (visualPollTimer) {
+    clearTimeout(visualPollTimer);
+    visualPollTimer = null;
+  }
+}
+
+function scheduleVisualPoll(delay = VISUAL_POLL_INTERVAL_MS) {
+  clearVisualPollTimer();
+
+  if (!selectedChannelCode.value || !selectedBoardCode.value) {
+    return;
+  }
+
+  visualPollTimer = setTimeout(() => {
+    void pollVisualData();
+  }, delay);
+}
+
+async function pollVisualData() {
+  if (!selectedChannelCode.value || !selectedBoardCode.value) {
+    return;
+  }
+
+  if (contextLoading.value || visualLoading.value || isRunning.value) {
+    scheduleVisualPoll();
+    return;
+  }
+
+  try {
+    const response = await dataApi.getVisual({
+      platform: PLATFORM,
+      channelCode: selectedChannelCode.value,
+      boardCode: selectedBoardCode.value,
+    });
+    visualData.value = response.data.data;
+    if (visualError.value) {
+      visualError.value = '';
+    }
+    scheduleVisualPoll();
+  } catch {
+    scheduleVisualPoll(VISUAL_RETRY_INTERVAL_MS);
   }
 }
 
@@ -306,7 +438,54 @@ async function maybeSavePreference(channelCode: string, boardCode: string) {
       rankFetchCount: selectedRankFetchCount.value,
     });
   } catch {
-    // Ignore preference persistence errors so the page stays responsive.
+    // ignore preference persistence errors
+  }
+}
+
+async function loadModelPreferences() {
+  try {
+    const [modelsResponse, preferenceResponse] = await Promise.all([
+      systemConfigApi.getModelOptions(),
+      userConfigApi.get('ai.preferred-model'),
+    ]);
+    availableModels.value = modelsResponse.data.data ?? [];
+    const preferredModel = preferenceResponse.data.data?.configValue;
+    if (preferredModel && availableModels.value.some((item) => item.modelKey === preferredModel)) {
+      selectedModel.value = preferredModel;
+    } else {
+      selectedModel.value = availableModels.value[0]?.modelKey ?? '';
+    }
+  } catch {
+    selectedModel.value = '';
+  }
+}
+
+async function handleModelChange(modelKey: string) {
+  selectedModel.value = modelKey;
+  try {
+    await userConfigApi.update({ configKey: 'ai.preferred-model', configValue: modelKey });
+  } catch {
+    // ignore preference persistence errors
+  }
+}
+
+async function persistTrendContext(channelCode: string, boardCode: string) {
+  const boardName = boardCatalog.value
+    .find((item) => item.channelCode === channelCode)
+    ?.boards.find((item) => item.boardCode === boardCode)
+    ?.boardName;
+  try {
+    await userConfigApi.update({
+      configKey: 'trend.current-context',
+      configValue: JSON.stringify({
+        platform: PLATFORM,
+        channelCode,
+        boardCode,
+        boardName,
+      }),
+    });
+  } catch {
+    // non-critical
   }
 }
 
@@ -315,13 +494,17 @@ async function initializePage() {
   contextError.value = '';
 
   try {
-    const [boardsResponse, preferenceResponse] = await Promise.all([
+    const [boardsResponse, preferenceResponse, trendContextResponse] = await Promise.all([
       crawlerApi.getBoards({ platform: PLATFORM }),
       crawlerApi.getPreference({ platform: PLATFORM }).catch(() => null),
+      userConfigApi.get('trend.current-context').catch(() => null),
     ]);
 
     boardCatalog.value = boardsResponse.data.data;
-    const selection = resolveInitialSelection(preferenceResponse?.data.data ?? null);
+    const selection = resolveTrendSelection(
+      preferenceResponse?.data.data ?? null,
+      parsePersistedTrendContext(trendContextResponse?.data.data?.configValue ?? null),
+    );
 
     if (!selection) {
       visualData.value = null;
@@ -336,6 +519,7 @@ async function initializePage() {
       channelCode: selection.channelCode,
       boardCode: selection.boardCode,
     });
+    await persistTrendContext(selection.channelCode, selection.boardCode);
     await loadVisualData();
   } catch (error) {
     contextError.value = getErrorPayload(error).message ?? '趋势榜单上下文加载失败';
@@ -363,8 +547,13 @@ async function handleContextSelect(payload: { channelCode: string; boardCode: st
     channelCode: payload.channelCode,
     boardCode: payload.boardCode,
   });
+  await persistTrendContext(payload.channelCode, payload.boardCode);
   await maybeSavePreference(payload.channelCode, payload.boardCode);
   await loadVisualData();
+}
+
+function isUserAbortedTrendRun(error: unknown) {
+  return error instanceof Error && error.message === 'Analysis stream aborted';
 }
 
 async function handleRerun() {
@@ -374,6 +563,10 @@ async function handleRerun() {
       mergeVisualFromResult(result);
     }
   } catch (error) {
+    if (isUserAbortedTrendRun(error)) {
+      return;
+    }
+
     ElMessage.error(getErrorPayload(error).message ?? '趋势分析失败');
   }
 }
@@ -392,11 +585,16 @@ async function handleCopy() {
 }
 
 onMounted(() => {
+  syncViewportMode();
+  window.addEventListener('resize', syncViewportMode);
   void initializePage();
+  void loadModelPreferences();
 });
 
 onBeforeUnmount(() => {
+  clearVisualPollTimer();
   trend.stopTrend();
+  window.removeEventListener('resize', syncViewportMode);
 });
 </script>
 
@@ -417,16 +615,32 @@ onBeforeUnmount(() => {
         <div class="trend-page__toolbar">
           <div class="trend-page__toolbar-copy">
             <p class="trend-page__toolbar-title">榜单分析</p>
-            <p class="trend-page__toolbar-subtitle">默认只展示历史可视化和摘要，点击按钮后才会开始新的流式趋势分析。</p>
           </div>
-          <AnalysisToolbar
-            :disabling="!selectedChannelCode || !selectedBoardCode"
-            :running="isRunning"
-            primary-label="开始分析"
-            @copy="handleCopy"
-            @rerun="handleRerun"
-            @stop="handleStop"
-          />
+          <div class="trend-page__toolbar-side">
+            <el-select
+              v-if="availableModels.length > 0"
+              :model-value="selectedModel"
+              class="trend-page__model-select"
+              placeholder="选择模型"
+              @update:model-value="handleModelChange"
+            >
+              <el-option
+                v-for="model in availableModels"
+                :key="model.modelKey"
+                :label="`${model.displayName} (${model.modelKey})`"
+                :value="model.modelKey"
+              />
+            </el-select>
+
+            <AnalysisToolbar
+              :disabling="!selectedChannelCode || !selectedBoardCode"
+              :running="isRunning"
+              primary-label="开始分析"
+              @copy="handleCopy"
+              @rerun="handleRerun"
+              @stop="handleStop"
+            />
+          </div>
         </div>
 
         <div data-test="trend-result-panel">
@@ -438,30 +652,89 @@ onBeforeUnmount(() => {
             :result-meta="displayMeta"
             :result-summary="displaySummary"
             :key-points="structuredTrend.keyPoints"
-            :streaming-text="trend.state.streamingText"
+            :streaming-text="displayStreamingText"
           />
         </div>
 
         <div
-          v-if="structuredTrend.themeTable.length || structuredTrend.hotBooks.length"
+          v-if="displayBoardSummary || structuredTrend.themeTable.length || structuredTrend.hotBooks.length"
           class="trend-page__result-support"
           data-test="trend-result-support-grid"
         >
+          <article v-if="displayBoardSummary" class="trend-page__support-card trend-page__support-card--summary">
+            <div class="trend-page__support-card-head">
+              <h3>榜单摘要</h3>
+              <span>{{ currentBoardName || '当前榜单' }}</span>
+            </div>
+            <p class="trend-page__support-summary">
+              {{ buildPreviewText(displayBoardSummary, 220) }}
+            </p>
+          </article>
+
           <article v-if="structuredTrend.themeTable.length" class="trend-page__support-card">
             <div class="trend-page__support-card-head">
               <h3>题材表</h3>
               <span>{{ structuredTrend.themeTable.length }} 项</span>
             </div>
-            <ul class="trend-page__support-list" data-test="trend-result-theme-table">
+            <div
+              v-if="!isMobileViewport"
+              class="trend-page__support-table-wrap"
+              data-test="trend-result-theme-table"
+            >
+              <el-table
+                :data="structuredTrend.themeTable.slice(0, 6)"
+                size="small"
+                stripe
+                table-layout="fixed"
+                empty-text="暂无题材数据"
+              >
+                <el-table-column label="题材" min-width="180" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    {{ row.theme }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="频次" width="120">
+                  <template #default="{ row }">
+                    {{ row.count }}
+                    <template v-if="typeof row.ratio === 'number'">
+                      · {{ row.ratio }}%
+                    </template>
+                  </template>
+                </el-table-column>
+                <el-table-column label="趋势" min-width="120" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    {{ row.trend || '稳定' }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="代表作" min-width="180" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    {{ row.representativeBooks?.[0]?.bookName || '--' }}
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+            <ul
+              v-else
+              class="trend-page__support-list trend-page__support-list--cards"
+              data-test="trend-result-theme-cards"
+            >
               <li
-                v-for="item in structuredTrend.themeTable.slice(0, 4)"
+                v-for="item in structuredTrend.themeTable.slice(0, 6)"
                 :key="`${item.theme}-${item.trend}`"
               >
                 <div class="trend-page__support-copy">
                   <strong>{{ item.theme }}</strong>
-                  <span>出现 {{ item.count }} 次</span>
+                  <span>
+                    {{ item.count }}
+                    <template v-if="typeof item.ratio === 'number'">
+                      · {{ item.ratio }}%
+                    </template>
+                  </span>
                 </div>
-                <em>{{ item.trend || '保持稳定' }}</em>
+                <em>{{ item.trend || '稳定' }}</em>
+                <p v-if="item.representativeBooks?.[0]" class="trend-page__support-meta">
+                  代表作：{{ item.representativeBooks[0].bookName }}
+                </p>
               </li>
             </ul>
           </article>
@@ -478,9 +751,14 @@ onBeforeUnmount(() => {
               >
                 <div class="trend-page__support-copy">
                   <strong>{{ item.bookName }}</strong>
-                  <span>{{ item.rankLabel || '当前热书样本' }}</span>
+                  <span>
+                    {{ item.rankLabel || '当前样本热书' }}
+                    <template v-if="item.theme">
+                      · {{ item.theme }}
+                    </template>
+                  </span>
                 </div>
-                <em>{{ item.reason || item.author || '已进入当前榜单重点关注范围。' }}</em>
+                <em>{{ item.reason || item.author || '已进入当前榜单重点观察范围。' }}</em>
               </li>
             </ul>
           </article>
@@ -495,17 +773,17 @@ onBeforeUnmount(() => {
           :phase-label="phaseLabel"
           :representative-book="representativeBook"
           :source-snapshot-count="trend.state.result?.sourceSnapshotCount ?? visualData?.sourceSnapshotCount ?? 0"
-          :summary="buildPreviewText(displaySummary, 180)"
+          :summary="buildPreviewText(displayBoardSummary || displaySummary, 180)"
         />
-        <TrendTagCloud :items="tagCloudItems" />
         <TrendComparisonList
           :comparisons="(visualData?.snapshotComparisons ?? []).map((item) => ({
             ...item,
             topTheme: localizeTrendText(item.topTheme),
             change: localizeTrendText(item.change),
+            leadBookName: item.leadBookName,
           }))"
           :insight-cards="structuredTrend.insightCards"
-          :summary="structuredTrend.comparisonSummary || displaySummary"
+          :summary="structuredTrend.comparisonSummary || displayBoardSummary || displaySummary"
         />
       </aside>
     </div>
@@ -516,26 +794,17 @@ onBeforeUnmount(() => {
           <p class="trend-page__visual-eyebrow">趋势图谱</p>
           <h3 class="trend-page__visual-title">榜单图表</h3>
         </div>
-        <p class="trend-page__visual-summary">
-          {{ visualSummaryText }}
-        </p>
+        <p class="trend-page__visual-summary">图表</p>
       </header>
 
-      <TrendChartCard
-        title="历史题材词云"
-        :subtitle="wordCloudSubtitle"
-        :height="260"
-        :option="wordCloudOption"
-      />
+      <TrendTagCloud :items="tagCloudItems" />
       <TrendChartCard
         title="题材分布"
-        subtitle="把趋势结果中的主题表直接转成图表，避免前端再做模糊推断。"
         :height="260"
         :option="themeTableOption"
       />
       <TrendChartCard
         :title="snapshotChartTitle"
-        :subtitle="snapshotChartSubtitle"
         :height="260"
         :option="snapshotOption"
       />
@@ -576,6 +845,8 @@ onBeforeUnmount(() => {
 .trend-page {
   display: grid;
   gap: 1.25rem;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .trend-page__hero {
@@ -583,12 +854,14 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
   gap: 1rem;
   align-items: start;
+  min-width: 0;
 }
 
 .trend-page__result,
 .trend-page__insights {
   display: grid;
   gap: 1rem;
+  min-width: 0;
 }
 
 .trend-page__toolbar {
@@ -602,6 +875,7 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.92);
   box-shadow: var(--shadow-soft);
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .trend-page__toolbar-title,
@@ -624,6 +898,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 1rem;
+  min-width: 0;
 }
 
 .trend-page__support-card {
@@ -636,6 +911,13 @@ onBeforeUnmount(() => {
     linear-gradient(145deg, rgba(255, 250, 243, 0.94), rgba(247, 249, 243, 0.9)),
     rgba(255, 255, 255, 0.92);
   box-shadow: var(--shadow-soft);
+  min-width: 0;
+}
+
+.trend-page__support-card--summary {
+  background:
+    linear-gradient(145deg, rgba(248, 245, 238, 0.94), rgba(245, 248, 242, 0.92)),
+    rgba(255, 255, 255, 0.92);
 }
 
 .trend-page__support-card-head {
@@ -646,17 +928,32 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+.trend-page__toolbar-side {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.trend-page__model-select {
+  min-width: 220px;
+}
+
 .trend-page__support-card-head h3,
 .trend-page__support-list,
 .trend-page__support-copy strong,
 .trend-page__support-copy span,
-.trend-page__support-list em {
+.trend-page__support-list em,
+.trend-page__support-summary,
+.trend-page__support-meta {
   margin: 0;
 }
 
 .trend-page__support-card-head span,
 .trend-page__support-copy span,
-.trend-page__support-list em {
+.trend-page__support-list em,
+.trend-page__support-meta {
   color: var(--color-text-muted);
 }
 
@@ -664,11 +961,31 @@ onBeforeUnmount(() => {
   font-size: 0.82rem;
 }
 
+.trend-page__support-summary,
+.trend-page__support-meta {
+  line-height: 1.7;
+}
+
+.trend-page__support-table-wrap {
+  overflow-x: auto;
+}
+
+.trend-page__support-table-wrap :deep(.el-table) {
+  --el-table-border-color: rgba(35, 65, 58, 0.08);
+  --el-table-header-bg-color: rgba(35, 65, 58, 0.04);
+  --el-table-row-hover-bg-color: rgba(35, 65, 58, 0.04);
+  min-width: 560px;
+}
+
 .trend-page__support-list {
   display: grid;
   gap: 0.75rem;
   padding: 0;
   list-style: none;
+}
+
+.trend-page__support-list--cards li {
+  gap: 0.5rem;
 }
 
 .trend-page__support-list li {
@@ -693,6 +1010,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+  min-width: 0;
 }
 
 .trend-page__visual-header {
@@ -743,8 +1061,18 @@ onBeforeUnmount(() => {
     padding: 0.95rem;
   }
 
+  .trend-page__toolbar-side,
+  .trend-page__model-select {
+    width: 100%;
+    min-width: 0;
+  }
+
   .trend-page__result-support {
     grid-template-columns: 1fr;
+  }
+
+  .trend-page__support-table-wrap :deep(.el-table) {
+    min-width: 480px;
   }
 }
 </style>

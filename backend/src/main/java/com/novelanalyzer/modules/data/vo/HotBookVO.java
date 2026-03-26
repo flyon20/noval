@@ -2,10 +2,20 @@ package com.novelanalyzer.modules.data.vo;
 
 public class HotBookVO {
 
+    private String theme;
     private String bookName;
     private String author;
+    private Integer rankNo;
     private String rankLabel;
     private String reason;
+
+    public String getTheme() {
+        return theme;
+    }
+
+    public void setTheme(String theme) {
+        this.theme = theme;
+    }
 
     public String getBookName() {
         return bookName;
@@ -21,6 +31,14 @@ public class HotBookVO {
 
     public void setAuthor(String author) {
         this.author = author;
+    }
+
+    public Integer getRankNo() {
+        return rankNo;
+    }
+
+    public void setRankNo(Integer rankNo) {
+        this.rankNo = rankNo;
     }
 
     public String getRankLabel() {

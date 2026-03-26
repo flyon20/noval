@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 
@@ -9,17 +10,19 @@ from app.config import settings
 
 
 class OpenAICompatibleProviderClient:
+    _MAX_TRANSPORT_ATTEMPTS = 3
+    _RETRYABLE_ERRORS = (httpx.ConnectError, httpx.TimeoutException)
+
     async def invoke(self, *, messages: list[dict], model: str, temperature: float | None, max_tokens: int | None,
-                     require_json: bool) -> dict:
+                     require_json: bool, base_url: str | None = None, api_key: str | None = None,
+                     timeout_millis: int | None = None) -> dict:
         payload = self._build_payload(messages, model, temperature, max_tokens, require_json, stream=False)
-        async with httpx.AsyncClient(timeout=settings.timeout_millis / 1000) as client:
-            response = await client.post(
-                f"{settings.openai_base_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        data = await self._invoke_with_retry(
+            payload=payload,
+            base_url=base_url,
+            api_key=api_key,
+            timeout_millis=timeout_millis,
+        )
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         usage = data.get("usage") or {}
@@ -30,30 +33,41 @@ class OpenAICompatibleProviderClient:
         }
 
     async def stream(self, *, messages: list[dict], model: str, temperature: float | None,
-                     max_tokens: int | None, require_json: bool) -> AsyncGenerator[dict, None]:
+                     max_tokens: int | None, require_json: bool, base_url: str | None = None,
+                     api_key: str | None = None, timeout_millis: int | None = None) -> AsyncGenerator[dict, None]:
         payload = self._build_payload(messages, model, temperature, max_tokens, require_json, stream=True)
-        async with httpx.AsyncClient(timeout=settings.timeout_millis / 1000) as client:
-            async with client.stream(
-                "POST",
-                f"{settings.openai_base_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    payload = json.loads(data)
-                    choice = (payload.get("choices") or [{}])[0]
-                    delta = (choice.get("delta") or {}).get("content")
-                    if delta:
-                        yield {"event": "delta", "delta": delta}
-                    if choice.get("finish_reason"):
-                        usage = payload.get("usage") or {}
-                        yield {"event": "done", "tokenUsed": int(usage.get("total_tokens") or 0)}
+        for attempt in range(1, self._MAX_TRANSPORT_ATTEMPTS + 1):
+            yielded_chunk = False
+            try:
+                async with httpx.AsyncClient(timeout=self._resolve_timeout_seconds(timeout_millis)) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{self._resolve_base_url(base_url)}/chat/completions",
+                        headers=self._headers(api_key),
+                        json=payload,
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data = line[len("data:"):].strip()
+                            if data == "[DONE]":
+                                break
+                            payload = json.loads(data)
+                            choice = (payload.get("choices") or [{}])[0]
+                            delta = (choice.get("delta") or {}).get("content")
+                            if delta:
+                                yielded_chunk = True
+                                yield {"event": "delta", "delta": delta}
+                            if choice.get("finish_reason"):
+                                yielded_chunk = True
+                                usage = payload.get("usage") or {}
+                                yield {"event": "done", "tokenUsed": int(usage.get("total_tokens") or 0)}
+                return
+            except self._RETRYABLE_ERRORS:
+                if yielded_chunk or attempt >= self._MAX_TRANSPORT_ATTEMPTS:
+                    raise
+                await asyncio.sleep(self._retry_backoff_seconds(attempt))
 
     def _build_payload(self, messages: list[dict], model: str, temperature: float | None,
                        max_tokens: int | None, require_json: bool, stream: bool) -> dict:
@@ -70,8 +84,41 @@ class OpenAICompatibleProviderClient:
             payload["response_format"] = {"type": "json_object"}
         return payload
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, api_key: str | None = None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if settings.openai_api_key:
-            headers["Authorization"] = f"Bearer {settings.openai_api_key}"
+        effective_api_key = api_key or settings.openai_api_key
+        if effective_api_key:
+            headers["Authorization"] = f"Bearer {effective_api_key}"
         return headers
+
+    def _resolve_base_url(self, base_url: str | None = None) -> str:
+        return (base_url or settings.openai_base_url).rstrip("/")
+
+    def _resolve_timeout_seconds(self, timeout_millis: int | None) -> float:
+        effective_timeout_millis = timeout_millis if timeout_millis and timeout_millis > 0 else settings.timeout_millis
+        return effective_timeout_millis / 1000
+
+    async def _invoke_with_retry(self,
+                                 *,
+                                 payload: dict,
+                                 base_url: str | None,
+                                 api_key: str | None,
+                                 timeout_millis: int | None) -> dict:
+        for attempt in range(1, self._MAX_TRANSPORT_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self._resolve_timeout_seconds(timeout_millis)) as client:
+                    response = await client.post(
+                        f"{self._resolve_base_url(base_url)}/chat/completions",
+                        headers=self._headers(api_key),
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            except self._RETRYABLE_ERRORS:
+                if attempt >= self._MAX_TRANSPORT_ATTEMPTS:
+                    raise
+                await asyncio.sleep(self._retry_backoff_seconds(attempt))
+        raise RuntimeError("unreachable")
+
+    def _retry_backoff_seconds(self, attempt: int) -> float:
+        return 0.35 * attempt

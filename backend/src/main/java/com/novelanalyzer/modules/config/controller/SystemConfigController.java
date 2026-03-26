@@ -1,8 +1,11 @@
 package com.novelanalyzer.modules.config.controller;
 
 import com.novelanalyzer.common.result.Result;
+import com.novelanalyzer.modules.config.dto.AiModelRegistrySaveRequest;
 import com.novelanalyzer.modules.config.dto.SystemConfigUpdateRequest;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
+import com.novelanalyzer.modules.config.vo.AiModelOptionVO;
+import com.novelanalyzer.modules.config.vo.AiModelRegistryVO;
 import com.novelanalyzer.modules.config.vo.SystemConfigVO;
 import com.novelanalyzer.modules.security.annotation.RequireRole;
 import jakarta.validation.Valid;
@@ -38,6 +41,24 @@ public class SystemConfigController {
     @RequireRole({"ADMIN"})
     public Result<SystemConfigVO> updateSystemConfig(@Valid @RequestBody SystemConfigUpdateRequest request) {
         return Result.success(systemConfigService.save(request));
+    }
+
+    @GetMapping("/system/model-registry")
+    @RequireRole({"ADMIN"})
+    public Result<AiModelRegistryVO> getModelRegistry() {
+        return Result.success(systemConfigService.getModelRegistry());
+    }
+
+    @PutMapping("/system/model-registry")
+    @RequireRole({"ADMIN"})
+    public Result<AiModelRegistryVO> updateModelRegistry(@Valid @RequestBody AiModelRegistrySaveRequest request) {
+        return Result.success(systemConfigService.saveModelRegistry(request));
+    }
+
+    @GetMapping("/system/model-options")
+    @RequireRole({"ADMIN", "USER"})
+    public Result<List<AiModelOptionVO>> getModelOptions() {
+        return Result.success(systemConfigService.getModelOptions());
     }
 
     @GetMapping("/system/available-models")

@@ -8,7 +8,7 @@ CREATE TABLE prompt_config (
     prompt_content CLOB NOT NULL,
     model_name VARCHAR(50) DEFAULT 'dify',
     temperature DECIMAL(3,2) DEFAULT 0.70,
-    max_tokens INT DEFAULT 2000,
+    max_tokens INT DEFAULT 6000,
     status TINYINT DEFAULT 1,
     is_default TINYINT DEFAULT 0,
     dify_workflow_id VARCHAR(100),

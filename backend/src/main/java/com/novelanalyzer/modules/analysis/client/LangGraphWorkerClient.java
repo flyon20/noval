@@ -173,7 +173,7 @@ public class LangGraphWorkerClient {
         String body = objectMapper.writeValueAsString(requestPayload == null ? Map.of() : requestPayload);
         return HttpRequest.newBuilder()
             .uri(URI.create(resolveBaseUrl() + path))
-            .timeout(Duration.ofMillis(resolveTimeoutMillis()))
+            .timeout(Duration.ofMillis(resolveTimeoutMillis(requestPayload)))
             .header("Content-Type", "application/json")
             .header(INTERNAL_API_KEY_HEADER, resolveInternalApiKey())
             .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
@@ -219,7 +219,19 @@ public class LangGraphWorkerClient {
             return;
         }
         throw new BusinessException(ResultCode.INTERNAL_ERROR,
-            firstNonBlank(body, "langgraph worker returned HTTP " + statusCode));
+            firstNonBlank(extractErrorMessage(body), body, "langgraph worker returned HTTP " + statusCode));
+    }
+
+    private String extractErrorMessage(String body) {
+        if (body == null || body.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(body, new TypeReference<Map<String, Object>>() {});
+            return firstNonBlank(asString(payload.get("message")), asString(payload.get("detail")));
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String resolveBaseUrl() {
@@ -240,11 +252,29 @@ public class LangGraphWorkerClient {
         return value;
     }
 
-    private int resolveTimeoutMillis() {
-        return systemConfigService.getIntValueOrDefault(
+    private int resolveTimeoutMillis(Map<String, Object> requestPayload) {
+        int configuredTimeout = systemConfigService.getIntValueOrDefault(
             "ai.langgraph-worker.timeout-millis",
             aiProperties.getLanggraphWorker().getTimeoutMillis()
         );
+        int requestedTimeout = extractRequestedTimeoutMillis(requestPayload);
+        if (requestedTimeout <= 0) {
+            return configuredTimeout;
+        }
+        return Math.max(configuredTimeout, requestedTimeout + 10000);
+    }
+
+    @SuppressWarnings("unchecked")
+    private int extractRequestedTimeoutMillis(Map<String, Object> requestPayload) {
+        if (requestPayload == null) {
+            return 0;
+        }
+        Object limitsValue = requestPayload.get("limits");
+        if (!(limitsValue instanceof Map<?, ?> limits)) {
+            return 0;
+        }
+        Object timeoutValue = limits.get("timeoutMillis");
+        return parseInteger(timeoutValue, 0);
     }
 
     private String asString(Object value) {

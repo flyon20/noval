@@ -31,6 +31,10 @@ public class PromptConfigEntity {
     private String difyWorkflowId;
     @TableField("dify_api_key_ref")
     private String difyApiKeyRef;
+    @TableField("input_json_schema")
+    private String inputJsonSchema;
+    @TableField("input_example_json")
+    private String inputExampleJson;
     @TableField("output_json_schema")
     private String outputJsonSchema;
     @TableField("output_example_json")
@@ -132,6 +136,22 @@ public class PromptConfigEntity {
 
     public void setDifyApiKeyRef(String difyApiKeyRef) {
         this.difyApiKeyRef = difyApiKeyRef;
+    }
+
+    public String getInputJsonSchema() {
+        return inputJsonSchema;
+    }
+
+    public void setInputJsonSchema(String inputJsonSchema) {
+        this.inputJsonSchema = inputJsonSchema;
+    }
+
+    public String getInputExampleJson() {
+        return inputExampleJson;
+    }
+
+    public void setInputExampleJson(String inputExampleJson) {
+        this.inputExampleJson = inputExampleJson;
     }
 
     public String getOutputJsonSchema() {

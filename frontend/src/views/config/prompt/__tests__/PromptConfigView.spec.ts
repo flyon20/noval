@@ -9,7 +9,7 @@ vi.mock('@/api/config', () => ({
     update: vi.fn(),
   },
   systemConfigApi: {
-    getAvailableModels: vi.fn(),
+    getModelOptions: vi.fn(),
   },
 }));
 
@@ -22,6 +22,8 @@ function createPromptConfig(promptType: 'deconstruct' | 'structure' | 'plot' | '
     modelName: 'dify',
     temperature: 0.7,
     maxTokens: 2048,
+    inputJsonSchema: '{"type":"object","properties":{"content":{"type":"string"}}}',
+    inputExampleJson: '{"content":"example-input"}',
     outputJsonSchema: '{"type":"object"}',
     outputExampleJson: '{"summary":"example"}',
     postProcessType: 'json_extract',
@@ -42,11 +44,14 @@ describe('PromptConfigView', () => {
         traceId: `trace-${promptType}`,
       },
     }));
-    vi.mocked(systemConfigApi.getAvailableModels).mockResolvedValue({
+    vi.mocked(systemConfigApi.getModelOptions).mockResolvedValue({
       data: {
         code: 200,
         message: 'success',
-        data: ['dify', 'deepseek-chat'],
+        data: [
+          { modelKey: 'dify', displayName: 'Dify', providerType: 'workflow' },
+          { modelKey: 'deepseek-chat', displayName: 'DeepSeek Chat', providerType: 'openai-compatible' },
+        ],
         timestamp: 1,
         traceId: 'trace-models',
       },
@@ -68,12 +73,55 @@ describe('PromptConfigView', () => {
 
     expect(promptConfigApi.getByType).toHaveBeenCalledWith('deconstruct');
     expect(wrapper.text()).toContain('{{content}}');
+    expect(wrapper.get('[data-test="prompt-contract-status"]').text()).toContain('系统预置结构约束已加载');
     expect((wrapper.get('[data-test="prompt-post-process-type-input"]').element as HTMLInputElement).value).toBe('json_extract');
+    expect((wrapper.get('[data-test="prompt-input-json-schema-input"]').element as HTMLTextAreaElement).value).toContain('"content"');
 
     await wrapper.get('[data-test="prompt-type-structure"]').trigger('click');
     await flushPromises();
 
     expect(promptConfigApi.getByType).toHaveBeenLastCalledWith('structure');
+  });
+
+  test('shows backend error message and trace id when prompt config loading fails', async () => {
+    const { promptConfigApi, systemConfigApi } = await import('@/api/config');
+
+    vi.mocked(promptConfigApi.getByType).mockRejectedValue({
+      response: {
+        data: {
+          code: 500,
+          message: 'prompt config not found',
+          traceId: 'trace-load-failed',
+        },
+      },
+    });
+    vi.mocked(systemConfigApi.getModelOptions).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [],
+        timestamp: 1,
+        traceId: 'trace-models',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/config/prompt', component: PromptConfigView }],
+    });
+    await router.push('/config/prompt');
+
+    const wrapper = mount(PromptConfigView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('提示词配置加载失败');
+    expect(wrapper.text()).toContain('prompt config not found');
+    expect(wrapper.text()).toContain('trace-load-failed');
   });
 
   test('submits prompt config update with current form values', async () => {
@@ -88,11 +136,14 @@ describe('PromptConfigView', () => {
         traceId: 'trace-deconstruct',
       },
     });
-    vi.mocked(systemConfigApi.getAvailableModels).mockResolvedValue({
+    vi.mocked(systemConfigApi.getModelOptions).mockResolvedValue({
       data: {
         code: 200,
         message: 'success',
-        data: ['dify', 'dify-chat'],
+        data: [
+          { modelKey: 'dify', displayName: 'Dify', providerType: 'workflow' },
+          { modelKey: 'dify-chat', displayName: 'Dify Chat', providerType: 'workflow' },
+        ],
         timestamp: 1,
         traceId: 'trace-models',
       },
@@ -129,6 +180,10 @@ describe('PromptConfigView', () => {
     await flushPromises();
     await wrapper.get('[data-test="prompt-temperature-input"]').setValue('0.9');
     await wrapper.get('[data-test="prompt-max-tokens-input"]').setValue('4096');
+    await wrapper.get('[data-test="prompt-contract-unlock"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="prompt-input-json-schema-input"]').setValue('{"type":"object","properties":{"content":{"type":"string"}}}');
+    await wrapper.get('[data-test="prompt-input-example-json-input"]').setValue('{"content":"example-input"}');
     await wrapper.get('[data-test="prompt-output-json-schema-input"]').setValue('{"type":"object","properties":{"summary":{"type":"string"}}}');
     await wrapper.get('[data-test="prompt-output-example-json-input"]').setValue('{"summary":"example"}');
     await wrapper.get('[data-test="prompt-post-process-type-input"]').setValue('json_extract');
@@ -143,6 +198,8 @@ describe('PromptConfigView', () => {
       modelName: 'dify-chat',
       temperature: 0.9,
       maxTokens: 4096,
+      inputJsonSchema: '{"type":"object","properties":{"content":{"type":"string"}}}',
+      inputExampleJson: '{"content":"example-input"}',
       outputJsonSchema: '{"type":"object","properties":{"summary":{"type":"string"}}}',
       outputExampleJson: '{"summary":"example"}',
       postProcessType: 'json_extract',

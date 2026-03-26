@@ -9,6 +9,7 @@ import type {
   StreamStartEvent,
 } from '@/types/analysis';
 import type { AnalysisStreamTask } from '@/lib/analysis-stream';
+import { createStreamingPlaybackController } from '@/lib/streaming-playback';
 
 type AnalysisRunModeFn = (
   mode: AnalysisType,
@@ -99,6 +100,17 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
     structure: null,
     plot: null,
   };
+  const playbackControllers: Record<AnalysisType, ReturnType<typeof createStreamingPlaybackController>> = {
+    deconstruct: createStreamingPlaybackController((text) => {
+      state.modes.deconstruct.streamingText = text;
+    }),
+    structure: createStreamingPlaybackController((text) => {
+      state.modes.structure.streamingText = text;
+    }),
+    plot: createStreamingPlaybackController((text) => {
+      state.modes.plot.streamingText = text;
+    }),
+  };
   const currentRunIds: Record<AnalysisType, number> = {
     deconstruct: 0,
     structure: 0,
@@ -118,8 +130,8 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
 
   function resetModeState(mode: AnalysisType, phase: AnalysisRunPhase = 'idle') {
     const modeState = state.modes[mode];
+    playbackControllers[mode].reset();
     modeState.phase = phase;
-    modeState.streamingText = '';
     modeState.errorMessage = '';
     modeState.traceId = '';
     modeState.isFallback = false;
@@ -164,7 +176,7 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
           }
 
           modeState.phase = 'streaming';
-          modeState.streamingText += event.delta;
+          playbackControllers[mode].append(event.delta);
         },
         onDone(event) {
           if (runId !== currentRunIds[mode]) {
@@ -202,6 +214,7 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
         return result;
       }
 
+      await playbackControllers[mode].flushTo(result.resultContent);
       modeState.result = result;
       modeState.phase = 'done';
       modeState.streamingText = result.resultContent;
@@ -214,6 +227,7 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
       }
 
       if (modeState.phase !== 'error') {
+        playbackControllers[mode].flushSync();
         modeState.phase = 'error';
         modeState.errorMessage = error instanceof Error ? error.message : 'Analysis failed';
       }
@@ -230,6 +244,7 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
   function stopAnalysis(mode: AnalysisType) {
     abortMode(mode);
     currentRunIds[mode] += 1;
+    playbackControllers[mode].flushSync();
     state.modes[mode].phase = 'aborted';
   }
 
@@ -244,6 +259,26 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
       abortMode(mode);
       currentRunIds[mode] += 1;
       resetModeState(mode);
+    }
+  }
+
+  function hydrateModes(results: Partial<Record<AnalysisType, AnalysisResult>>) {
+    for (const mode of ANALYSIS_MODES) {
+      abortMode(mode);
+      currentRunIds[mode] += 1;
+      const result = results[mode] ?? null;
+      if (!result) {
+        resetModeState(mode);
+        continue;
+      }
+      const modeState = state.modes[mode];
+      playbackControllers[mode].reset();
+      modeState.phase = 'done';
+      modeState.streamingText = result.resultContent;
+      modeState.errorMessage = '';
+      modeState.traceId = result.traceId ?? '';
+      modeState.isFallback = false;
+      modeState.result = result;
     }
   }
 
@@ -272,6 +307,7 @@ export function useAnalysisRun(options: UseAnalysisRunOptions) {
     stopAnalysis,
     stopAllAnalyses,
     resetAllAnalyses,
+    hydrateModes,
     rerunAnalysis,
     copyResult,
   };

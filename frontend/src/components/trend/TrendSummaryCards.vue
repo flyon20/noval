@@ -15,23 +15,23 @@ const stats = computed(() => [
   {
     label: '来源快照数',
     value: String(props.sourceSnapshotCount ?? 0),
-    note: '用于当前榜单趋势判断的最近快照样本',
+    note: '快照样本',
     dataTest: 'trend-summary-snapshot-count',
   },
   {
     label: '历史分析数',
     value: String(props.historyAnalysisCount ?? 0),
-    note: '当前榜单可直接复用的历史趋势结果',
+    note: '结果条数',
   },
   {
     label: '最近快照',
     value: props.latestSnapshotTime || '--',
-    note: '最近一次成功抓取该榜单的时间',
+    note: '更新时间',
   },
   {
     label: '代表作品',
     value: props.representativeBook || props.boardName || '--',
-    note: '最近榜单样本里最能代表当前走势的书',
+    note: '当前代表',
   },
 ]);
 </script>
@@ -53,7 +53,7 @@ const stats = computed(() => [
         </div>
       </div>
       <p class="trend-summary__copy">
-        {{ summary || '当前还没有可展示的榜单摘要，先看快照与历史数据，需要时再点击按钮发起新的趋势分析。' }}
+        {{ summary || '暂无摘要' }}
       </p>
     </article>
   </section>

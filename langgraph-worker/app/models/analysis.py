@@ -9,9 +9,17 @@ class PromptConfigPayload(BaseModel):
     promptType: str | None = None
     promptName: str | None = None
     promptContent: str | None = None
+    modelKey: str | None = None
+    displayName: str | None = None
+    providerType: str | None = None
     modelName: str | None = None
+    baseUrl: str | None = None
+    apiKey: str | None = None
     temperature: float | None = None
     maxTokens: int | None = None
+    temperatureSpecJson: str | None = None
+    inputJsonSchema: str | None = None
+    inputExampleJson: str | None = None
     outputJsonSchema: str | None = None
     outputExampleJson: str | None = None
     postProcessType: str | None = None

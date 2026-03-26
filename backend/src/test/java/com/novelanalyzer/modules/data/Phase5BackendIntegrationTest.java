@@ -247,12 +247,241 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
             .andExpect(jsonPath("$.data.historyAnalysisCount").value(3))
             .andExpect(jsonPath("$.data.latestSnapshots.length()").value(3))
+            .andExpect(jsonPath("$.data.boardSummary").isNotEmpty())
             .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(2))
             .andExpect(jsonPath("$.data.themeTable.length()").value(2))
+            .andExpect(jsonPath("$.data.themeTable[0].ratio").value(50.0))
+            .andExpect(jsonPath("$.data.themeTable[0].representativeBooks.length()").value(1))
             .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
+            .andExpect(jsonPath("$.data.hotBooks[0].rankNo").value(1))
             .andExpect(jsonPath("$.data.insightCards.length()").value(2))
             .andExpect(jsonPath("$.data.comparisonSummary").isNotEmpty())
-            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3));
+            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3))
+            .andExpect(jsonPath("$.data.snapshotComparisons[0].leadBookName").isNotEmpty());
+    }
+
+    @Test
+    void shouldRecoverStructuredTrendFieldsFromRawJsonStoredInDetailContent() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        String nestedThemeJson = """
+            {
+              "analysisType":"theme",
+              "summary":"Urban-brain remains the clearest direction across the latest board snapshots.",
+              "boardSummary":"This board keeps concentrating on urban-brain and system-flow hybrids, with the top title staying highly stable.",
+              "trendPreview":"Urban-brain continues to dominate this board.",
+              "detailContent":"Detailed board trend analysis for the last three snapshots.",
+              "historicalWordCloud":[
+                {"name":"urban-brain","value":24},
+                {"name":"system-flow","value":15}
+              ],
+              "themeDistribution":[
+                {"theme":"urban-brain","count":3,"ratio":50.0},
+                {"theme":"system-flow","count":2,"ratio":33.3}
+              ],
+              "themeTable":[
+                {
+                  "theme":"urban-brain",
+                  "count":3,
+                  "ratio":50.0,
+                  "trend":"rising",
+                  "representativeBooks":[
+                    {"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"Keeps leading the board"}
+                  ]
+                }
+              ],
+              "hotBooks":[
+                {"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"Keeps leading the board"}
+              ],
+              "insightCards":[
+                {"label":"Lead lane","value":"urban-brain","note":"Dominates the board history"},
+                {"label":"Lead title","value":"Brain City King","note":"Most representative latest book"}
+              ],
+              "snapshotComparisons":[
+                {"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","topThemeRatio":50.0,"leadBookName":"Brain City King","change":"holding"}
+              ],
+              "comparisonSummary":"Urban-brain has become the clearest board-level direction across the last three snapshots.",
+              "historyAnalysisCount":3
+            }
+            """;
+        String degradedStoredJson = """
+            {
+              "analysisType":"theme",
+              "summary":"",
+              "boardSummary":"",
+              "trendPreview":%s,
+              "detailContent":%s,
+              "historicalWordCloud":[],
+              "themeDistribution":[],
+              "themeTable":[],
+              "hotBooks":[],
+              "insightCards":[],
+              "snapshotComparisons":[],
+              "comparisonSummary":"",
+              "historyAnalysisCount":3
+            }
+            """.formatted(jsonStringLiteral(nestedThemeJson), jsonStringLiteral(nestedThemeJson));
+
+        jdbcTemplate.update(
+            "UPDATE analysis_result SET result_json = ?, result_content = ? WHERE id = ?",
+            degradedStoredJson,
+            nestedThemeJson,
+            3004L
+        );
+
+        mockMvc.perform(get("/api/data/visual")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.boardSummary").isNotEmpty())
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(2))
+            .andExpect(jsonPath("$.data.themeTable.length()").value(1))
+            .andExpect(jsonPath("$.data.themeTable[0].representativeBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.hotBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.insightCards[0].label").value("Lead lane"))
+            .andExpect(jsonPath("$.data.snapshotComparisons[0].leadBookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.trendPreview").value("Urban-brain continues to dominate this board."))
+            .andExpect(jsonPath("$.data.detailContent").value("Detailed board trend analysis for the last three snapshots."));
+    }
+
+    @Test
+    void shouldSkipLatestBrokenTrendVisualResultAndUsePreviousStructuredVersion() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        jdbcTemplate.update("""
+            INSERT INTO analysis_result
+                (id, user_id, platform, book_id, channel_code, board_code, snapshot_id, analysis_type, chapter_count,
+                 prompt_config_id, model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TIMESTAMP '2026-03-20 13:30:00', TIMESTAMP '2026-03-20 13:30:00', ?)
+            """,
+            3999L,
+            1L,
+            "fanqie",
+            1001L,
+            "male-new",
+            "urban-brain",
+            6001L,
+            "theme",
+            0,
+            4L,
+            "dify",
+            "{\"summary\":\"broken",
+            """
+                {
+                  "analysisType":"theme",
+                  "summary":"",
+                  "boardSummary":"",
+                  "trendPreview":"{\\"summary\\":\\"broken",
+                  "detailContent":"{\\"summary\\":\\"broken",
+                  "historicalWordCloud":[],
+                  "themeDistribution":[],
+                  "themeTable":[],
+                  "hotBooks":[],
+                  "insightCards":[],
+                  "snapshotComparisons":[],
+                  "comparisonSummary":"",
+                  "historyAnalysisCount":3
+                }
+                """,
+            33,
+            120L,
+            0
+        );
+
+        mockMvc.perform(get("/api/data/visual")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.boardSummary").isNotEmpty())
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(2))
+            .andExpect(jsonPath("$.data.themeTable.length()").value(2))
+            .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
+            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3))
+            .andExpect(jsonPath("$.data.detailContent").value("Detailed board trend analysis for the last three snapshots."));
+    }
+
+    @Test
+    void shouldNormalizeLegacyTrendFieldNamesFromEmbeddedJson() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        String legacyThemeJson = """
+            {
+              "summary": {
+                "platform": "fanqie",
+                "channel": "male-new",
+                "board": "urban-brain",
+                "coreTrend": "This board is shifting toward urban-brain hybrid hooks."
+              },
+              "historicalWordCloud": [
+                {"word": "urban-brain", "count": 18, "percentage": "75.0%"}
+              ],
+              "themeTable": [
+                {
+                  "theme": "urban-brain hybrid",
+                  "count": 3,
+                  "percentage": "50.0%",
+                  "top3Examples": ["Brain City King (stable #1)"],
+                  "trend": "rising"
+                }
+              ],
+              "hotBooks": [
+                {
+                  "title": "Brain City King",
+                  "rankTrend": ["S3#1", "S2#1"],
+                  "coreEmotion": "Rule-breaking payoff"
+                }
+              ]
+            }
+            """;
+        String degradedStoredJson = """
+            {
+              "analysisType":"theme",
+              "summary":"",
+              "boardSummary":"",
+              "trendPreview":%s,
+              "detailContent":%s,
+              "historicalWordCloud":[],
+              "themeDistribution":[],
+              "themeTable":[],
+              "hotBooks":[],
+              "insightCards":[],
+              "snapshotComparisons":[],
+              "comparisonSummary":"",
+              "historyAnalysisCount":3
+            }
+            """.formatted(jsonStringLiteral(legacyThemeJson), jsonStringLiteral(legacyThemeJson));
+
+        jdbcTemplate.update(
+            "UPDATE analysis_result SET result_json = ?, result_content = ? WHERE id = ?",
+            degradedStoredJson,
+            legacyThemeJson,
+            3004L
+        );
+
+        mockMvc.perform(get("/api/data/visual")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.boardSummary").value("This board is shifting toward urban-brain hybrid hooks."))
+            .andExpect(jsonPath("$.data.historicalWordCloud[0].name").value("urban-brain"))
+            .andExpect(jsonPath("$.data.historicalWordCloud[0].value").value(18))
+            .andExpect(jsonPath("$.data.themeDistribution[0].theme").value("urban-brain hybrid"))
+            .andExpect(jsonPath("$.data.themeDistribution[0].ratio").value(50.0))
+            .andExpect(jsonPath("$.data.themeTable[0].representativeBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.hotBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.hotBooks[0].reason").value("Rule-breaking payoff"))
+            .andExpect(jsonPath("$.data.trendPreview").value("This board is shifting toward urban-brain hybrid hooks."));
     }
 
     @Test
@@ -295,13 +524,15 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(1))
             .andExpect(jsonPath("$.data.historyAnalysisCount").value(1))
             .andExpect(jsonPath("$.data.latestSnapshots.length()").value(1))
-            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(1))
-            .andExpect(jsonPath("$.data.themeTable.length()").value(1))
-            .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
-            .andExpect(jsonPath("$.data.insightCards.length()").value(2))
-            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(1))
-            .andExpect(jsonPath("$.data.comparisonSummary").isNotEmpty())
-            .andExpect(jsonPath("$.data.trendPreview").isNotEmpty());
+            .andExpect(jsonPath("$.data.boardSummary").isEmpty())
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(0))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(0))
+            .andExpect(jsonPath("$.data.themeTable.length()").value(0))
+            .andExpect(jsonPath("$.data.hotBooks.length()").value(0))
+            .andExpect(jsonPath("$.data.insightCards.length()").value(0))
+            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(0))
+            .andExpect(jsonPath("$.data.comparisonSummary").isEmpty())
+            .andExpect(jsonPath("$.data.trendPreview").isEmpty());
     }
 
     @Test
@@ -322,8 +553,13 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.boardName").isNotEmpty())
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"))
+            .andExpect(jsonPath("$.data.resultJson.boardSummary").isNotEmpty())
             .andExpect(jsonPath("$.data.resultJson.historicalWordCloud").isArray())
             .andExpect(jsonPath("$.data.resultJson.historicalWordCloud").isNotEmpty())
+            .andExpect(jsonPath("$.data.resultJson.themeDistribution").isArray())
+            .andExpect(jsonPath("$.data.resultJson.themeDistribution").isNotEmpty())
+            .andExpect(jsonPath("$.data.resultJson.themeTable[0].representativeBooks").isArray())
+            .andExpect(jsonPath("$.data.resultJson.hotBooks[0].rankNo").value(1))
             .andExpect(jsonPath("$.data.resultJson.summary").isNotEmpty())
             .andExpect(jsonPath("$.data.resultContent").isNotEmpty());
     }
@@ -385,5 +621,13 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
+    }
+
+    private String jsonStringLiteral(String value) {
+        return "\"" + value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\r", "\\r")
+            .replace("\n", "\\n") + "\"";
     }
 }

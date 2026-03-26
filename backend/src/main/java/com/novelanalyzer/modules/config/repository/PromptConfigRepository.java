@@ -5,6 +5,7 @@ import com.novelanalyzer.modules.config.mapper.PromptConfigMapper;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -40,6 +41,15 @@ public class PromptConfigRepository {
         return Optional.ofNullable(entity);
     }
 
+    public List<PromptConfigEntity> findAllActive() {
+        return promptConfigMapper.selectList(
+            new LambdaQueryWrapper<PromptConfigEntity>()
+                .eq(PromptConfigEntity::getDeleted, 0)
+                .eq(PromptConfigEntity::getStatus, 1)
+                .orderByAsc(PromptConfigEntity::getId)
+        );
+    }
+
     public Long saveOrUpdate(PromptConfigEntity entity) {
         Optional<PromptConfigEntity> existing = findByTypeAndName(entity.getPromptType(), entity.getPromptName());
         if (existing.isPresent()) {
@@ -58,6 +68,8 @@ public class PromptConfigRepository {
             if (entity.getDifyApiKeyRef() != null) {
                 dbEntity.setDifyApiKeyRef(entity.getDifyApiKeyRef());
             }
+            dbEntity.setInputJsonSchema(entity.getInputJsonSchema());
+            dbEntity.setInputExampleJson(entity.getInputExampleJson());
             dbEntity.setOutputJsonSchema(entity.getOutputJsonSchema());
             dbEntity.setOutputExampleJson(entity.getOutputExampleJson());
             dbEntity.setPostProcessType(entity.getPostProcessType());

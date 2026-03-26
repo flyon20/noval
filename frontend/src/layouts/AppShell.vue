@@ -121,10 +121,11 @@ const emit = defineEmits<{
     background: transparent;
     backdrop-filter: none;
     min-height: 100dvh;
+    overflow: visible;
   }
 
   .app-shell__content {
-    padding: 0.875rem;
+    padding: calc(0.875rem + 56px) 0.875rem 0.875rem;
   }
 }
 </style>

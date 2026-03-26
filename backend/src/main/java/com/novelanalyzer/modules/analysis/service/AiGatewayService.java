@@ -24,6 +24,7 @@ import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.service.UserConfigService;
+import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -39,6 +40,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
@@ -54,6 +58,24 @@ public class AiGatewayService {
         "theme", "Please analyze the following trend data and summarize core themes, changes, and representative books.\n\n{{content}}"
     );
 
+    private static final String THEME_STRUCTURED_GUIDANCE = """
+        Trend output constraints:
+        1. Never use broad labels such as 都市系统, 玄幻升级, 都市, or 系统流 as the final lane name.
+        2. `themeDistribution.theme` and `themeTable.theme` must use 3 or 4 Chinese segments joined by '-' and must land on a concrete lane such as 都市脑洞-直播算命-惩恶扬善, 娱乐明星-老六系统-全网黑粉, 玄幻-长生苟道-家族养成, or 四合院-戾气极重-截胡流.
+        3. Every `themeDistribution` and `themeTable` row must expose laneLevel, systemType, systemPresence, systemPersona, interactionMode, feedbackLoop, payoffMechanism, emotionAnchor, antiRoutineDesign, avoidedPoisonPoints, and microTags. If the story is not a classic system-flow, still explain the exact golden-finger form instead of writing a broad bucket.
+        4. `systemArchetypes` must distinguish concrete system type, systemPresence, systemPersona, interaction mode, feedback loop, and payoff mechanism, for example 签到打卡流 / 神级选择流 / 情绪值收集流 / 熟练度面板 / 暴击返还流 / 听劝流.
+        5. `microInnovationSignals` must explain the anti-cliche twist, antiRoutineDesign, avoidedPoisonPoints, and why the twist can work in the next 3-6 months.
+        6. `historicalWordCloud` must contain concrete board-scoped terms: fine-grained lanes, system types, identity tags, emotion tags, scene tags, and micro-innovation words. Avoid umbrella words such as 系统流.
+        7. `hotBooks` should be the highest-ranked representative title under each main lane, and each reason must explain why it represents that lane and which system/payoff loop makes it competitive.
+        8. `insightCards` must at least cover 主赛道 and 代表热书 using the latest board-scoped sample, where 主赛道 is the lane with the highest ratio and 代表热书 is the highest-ranked title inside that lane.
+        9. Keep `summary`, `boardSummary`, `trendPreview`, and `comparisonSummary` concise. `summary` should stay within 120 Chinese characters, `boardSummary` within 180 Chinese characters, `trendPreview` within 260 Chinese characters, and `comparisonSummary` within 180 Chinese characters.
+        10. Keep `hotBooks`, `themeTable`, `themeDistribution`, `systemArchetypes`, `microInnovationSignals`, and `insightCards` compact. `themeDistribution` <= 8 rows, `themeTable` <= 6 rows, `representativeBooks` <= 2 per theme, `hotBooks` <= 5 items, `systemArchetypes` <= 6 items, `microInnovationSignals` <= 3 items, `insightCards` = 4 items, `historicalWordCloud` <= 20 items, and every reason/note string should stay within 60 Chinese characters.
+        11. `detailContent` must be plain prose without markdown tables or code fences, and should stay within 600 Chinese characters.
+        """;
+    private static final long STREAM_PROGRESS_INITIAL_DELAY_MILLIS = 1200L;
+    private static final long STREAM_PROGRESS_INTERVAL_MILLIS = 1500L;
+    private static final String STREAM_PROGRESS_DELTA = "[analysis-progress] 正在分析中，请稍候...";
+
     private final RestTemplate aiRestTemplate;
     private final AiProperties aiProperties;
     private final SystemConfigService systemConfigService;
@@ -61,10 +83,9 @@ public class AiGatewayService {
     private final TokenCountEstimator tokenCountEstimator;
     private final ObjectMapper objectMapper;
 
-    // 模型实例缓存：key = baseUrl|modelName|timeoutMillis，避免每次请求重建
+    // 模型实例缓存：key = baseUrl|modelName|apiKey|timeoutMillis，避免每次请求重建
     private final ConcurrentHashMap<String, OpenAiChatModel> chatModelCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, OpenAiStreamingChatModel> streamingModelCache = new ConcurrentHashMap<>();
-    private volatile String cachedApiKey = null;
 
     public AiGatewayService(RestTemplate aiRestTemplate,
                             AiProperties aiProperties,
@@ -81,8 +102,21 @@ public class AiGatewayService {
     }
 
     public AiInvokeResult analyze(PromptConfigEntity promptConfig, String text, String analysisType) {
+        return analyze(promptConfig, text, analysisType, null);
+    }
+
+    public AiInvokeResult analyze(PromptConfigEntity promptConfig,
+                                  String text,
+                                  String analysisType,
+                                  Integer timeoutOverrideMillis) {
         String renderedPrompt = renderPrompt(promptConfig.getPromptContent(), text, analysisType);
-        AiInvokeResult providerResult = invokePreferredProvider(promptConfig, text, renderedPrompt, analysisType);
+        AiInvokeResult providerResult = invokePreferredProvider(
+            promptConfig,
+            text,
+            renderedPrompt,
+            analysisType,
+            timeoutOverrideMillis
+        );
         if (providerResult != null) {
             return providerResult;
         }
@@ -126,17 +160,18 @@ public class AiGatewayService {
     private AiInvokeResult invokePreferredProvider(PromptConfigEntity promptConfig,
                                                    String text,
                                                    String renderedPrompt,
-                                                   String analysisType) {
+                                                   String analysisType,
+                                                   Integer timeoutOverrideMillis) {
         String providerType = resolveProviderType();
         if ("dify".equalsIgnoreCase(providerType)) {
             AiInvokeResult difyResult = invokeDify(promptConfig, renderedPrompt, analysisType);
             if (difyResult != null) {
                 return difyResult;
             }
-            return invokeOpenAiCompatible(promptConfig, text, analysisType);
+            return invokeOpenAiCompatible(promptConfig, text, analysisType, timeoutOverrideMillis);
         }
 
-        AiInvokeResult openAiResult = invokeOpenAiCompatible(promptConfig, text, analysisType);
+        AiInvokeResult openAiResult = invokeOpenAiCompatible(promptConfig, text, analysisType, timeoutOverrideMillis);
         if (openAiResult != null) {
             return openAiResult;
         }
@@ -145,22 +180,21 @@ public class AiGatewayService {
 
     private AiInvokeResult invokeOpenAiCompatible(PromptConfigEntity promptConfig,
                                                   String text,
-                                                  String analysisType) {
-        String apiKey = resolveOpenAiCompatibleApiKey();
-        if (apiKey == null || apiKey.isBlank()) {
+                                                  String analysisType,
+                                                  Integer timeoutOverrideMillis) {
+        OpenAiCompatibleRuntime runtime = resolveOpenAiCompatibleRuntime(promptConfig);
+        if (runtime.apiKey() == null || runtime.apiKey().isBlank()) {
             return null;
         }
-
-        String modelName = resolveOpenAiCompatibleModelName(promptConfig);
-        if (modelName == null || modelName.isBlank()) {
+        if (runtime.modelName() == null || runtime.modelName().isBlank()) {
             return null;
         }
 
         try {
             PromptMessagePair promptMessages = buildPromptMessagePair(promptConfig, text, analysisType);
             OpenAiChatModel model = getOrCreateChatModel(
-                resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
-                promptConfig.getTemperature(), promptConfig.getMaxTokens()
+                runtime.baseUrl(), runtime.apiKey(), runtime.modelName(),
+                runtime.temperature(), runtime.maxTokens(), timeoutOverrideMillis
             );
             ChatRequest.Builder requestBuilder = ChatRequest.builder()
                 .messages(promptMessages.messages());
@@ -176,9 +210,9 @@ public class AiGatewayService {
             Integer totalTokens = Optional.ofNullable(response.tokenUsage())
                 .map(u -> u.totalTokenCount())
                 .orElse(null);
-            Map<String, Object> resultJson = buildStructuredResult(promptConfig, Map.of(), content, analysisType, modelName);
+            Map<String, Object> resultJson = buildStructuredResult(promptConfig, Map.of(), content, analysisType, runtime.modelName());
             return AiInvokeResult.of(
-                modelName,
+                runtime.modelName(),
                 content,
                 totalTokens != null ? totalTokens
                     : Math.max(120, estimateTokenCountInternal(promptMessages.combinedText()) + estimateTokenCountInternal(content)),
@@ -198,6 +232,7 @@ public class AiGatewayService {
     public boolean streamToEmitter(PromptConfigEntity promptConfig,
                                    String text,
                                    String analysisType,
+                                   int timeoutOverrideMillis,
                                    SseEmitter emitter,
                                    InvocationHandle invocationHandle,
                                    BiConsumer<SseEmitter, AiInvokeResult> onDone,
@@ -205,20 +240,38 @@ public class AiGatewayService {
         if (!isOpenAiCompatibleStreamingEnabled()) {
             return false;
         }
-        String apiKey = resolveOpenAiCompatibleApiKey();
-        String modelName = resolveOpenAiCompatibleModelName(promptConfig);
-        if (apiKey == null || apiKey.isBlank() || modelName == null || modelName.isBlank()) {
+        OpenAiCompatibleRuntime runtime = resolveOpenAiCompatibleRuntime(promptConfig);
+        if (runtime.apiKey() == null || runtime.apiKey().isBlank()
+            || runtime.modelName() == null || runtime.modelName().isBlank()) {
             return false;
         }
 
         PromptMessagePair promptMessages = buildPromptMessagePair(promptConfig, text, analysisType);
         OpenAiStreamingChatModel streamModel = getOrCreateStreamingChatModel(
-            resolveOpenAiCompatibleBaseUrl(), apiKey, modelName,
-            promptConfig.getTemperature(), promptConfig.getMaxTokens()
+            runtime.baseUrl(), runtime.apiKey(), runtime.modelName(),
+            runtime.temperature(), runtime.maxTokens(), timeoutOverrideMillis
         );
 
         StringBuilder buffer = new StringBuilder();
-        final String resolvedModel = modelName;
+        final String resolvedModel = runtime.modelName();
+        AtomicBoolean waitingForFirstDelta = new AtomicBoolean(true);
+        ScheduledExecutorService progressExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "analysis-stream-progress");
+            thread.setDaemon(true);
+            return thread;
+        });
+        progressExecutor.scheduleAtFixedRate(() -> {
+            if (invocationHandle.isCancelled() || !waitingForFirstDelta.get()) {
+                return;
+            }
+            try {
+                emitter.send(SseEmitter.event()
+                    .name("delta")
+                    .data(Map.of("event", "delta", "delta", STREAM_PROGRESS_DELTA)));
+            } catch (IOException ignored) {
+                invocationHandle.cancel();
+            }
+        }, STREAM_PROGRESS_INITIAL_DELAY_MILLIS, STREAM_PROGRESS_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
 
         ChatRequest.Builder requestBuilder = ChatRequest.builder()
             .messages(promptMessages.messages());
@@ -239,6 +292,9 @@ public class AiGatewayService {
                     }
                     return;
                 }
+                if (token != null && !token.isBlank()) {
+                    waitingForFirstDelta.set(false);
+                }
                 buffer.append(token);
                 try {
                     emitter.send(SseEmitter.event()
@@ -251,9 +307,11 @@ public class AiGatewayService {
 
             @Override
             public void onCompleteResponse(ChatResponse response) {
+                progressExecutor.shutdownNow();
                 if (invocationHandle.isCancelled()) {
                     return;
                 }
+                waitingForFirstDelta.set(false);
                 if (buffer.isEmpty()) {
                     emitRawStreamingDeltas(response, buffer, emitter);
                 }
@@ -273,9 +331,11 @@ public class AiGatewayService {
 
             @Override
             public void onError(Throwable error) {
+                progressExecutor.shutdownNow();
                 if (invocationHandle.isCancelled()) {
                     return;
                 }
+                waitingForFirstDelta.set(false);
                 onError.accept(error);
             }
         });
@@ -343,17 +403,24 @@ public class AiGatewayService {
     }
 
     private String augmentSystemPromptWithStructuredOutput(PromptConfigEntity promptConfig, String systemPrompt) {
-        if (!requiresJsonResponse(promptConfig)) {
+        if (!usesThemeStructuredContract(promptConfig)) {
             return systemPrompt;
         }
         StringBuilder builder = new StringBuilder(systemPrompt);
+        if (hasInputJsonContract(promptConfig)) {
+            builder.append("\n\ninput schema:\n").append(promptConfig.getInputJsonSchema());
+            if (promptConfig.getInputExampleJson() != null && !promptConfig.getInputExampleJson().isBlank()) {
+                builder.append("\ninput example:\n").append(promptConfig.getInputExampleJson());
+            }
+        }
+        if (hasOutputJsonContract(promptConfig)) {
+            builder.append("\n\noutput schema:\n").append(promptConfig.getOutputJsonSchema());
+            if (promptConfig.getOutputExampleJson() != null && !promptConfig.getOutputExampleJson().isBlank()) {
+                builder.append("\noutput example:\n").append(promptConfig.getOutputExampleJson());
+            }
+        }
+        builder.append("\n\n").append(THEME_STRUCTURED_GUIDANCE);
         builder.append("\n\nPlease output valid JSON only.");
-        if (promptConfig != null && promptConfig.getOutputJsonSchema() != null && !promptConfig.getOutputJsonSchema().isBlank()) {
-            builder.append("\noutput schema:\n").append(promptConfig.getOutputJsonSchema());
-        }
-        if (promptConfig != null && promptConfig.getOutputExampleJson() != null && !promptConfig.getOutputExampleJson().isBlank()) {
-            builder.append("\noutput example:\n").append(promptConfig.getOutputExampleJson());
-        }
         return builder.toString();
     }
 
@@ -368,14 +435,38 @@ public class AiGatewayService {
         if (promptConfig == null) {
             return false;
         }
-        if (promptConfig.getOutputJsonSchema() != null && !promptConfig.getOutputJsonSchema().isBlank()) {
-            return true;
+        if (!usesThemeStructuredContract(promptConfig)) {
+            return false;
         }
         if ("json_extract".equalsIgnoreCase(promptConfig.getPostProcessType())) {
             return true;
         }
-        return promptConfig.getParseConfigJson() != null
-            && promptConfig.getParseConfigJson().toLowerCase(java.util.Locale.ROOT).contains("\"parser\":\"json\"");
+        if (promptConfig.getParseConfigJson() != null
+            && promptConfig.getParseConfigJson().toLowerCase(java.util.Locale.ROOT).contains("\"parser\":\"json\"")) {
+            return true;
+        }
+        return true;
+    }
+
+    private boolean hasInputJsonContract(PromptConfigEntity promptConfig) {
+        if (promptConfig == null || !usesThemeStructuredContract(promptConfig)) {
+            return false;
+        }
+        return promptConfig.getInputJsonSchema() != null && !promptConfig.getInputJsonSchema().isBlank();
+    }
+
+    private boolean hasOutputJsonContract(PromptConfigEntity promptConfig) {
+        if (promptConfig == null || !usesThemeStructuredContract(promptConfig)) {
+            return false;
+        }
+        return promptConfig.getOutputJsonSchema() != null && !promptConfig.getOutputJsonSchema().isBlank();
+    }
+
+    private boolean usesThemeStructuredContract(PromptConfigEntity promptConfig) {
+        if (promptConfig == null || promptConfig.getPromptType() == null) {
+            return false;
+        }
+        return "theme".equalsIgnoreCase(promptConfig.getPromptType().trim());
     }
 
     private void emitRawStreamingDeltas(ChatResponse response,
@@ -443,22 +534,19 @@ public class AiGatewayService {
     }
 
     private OpenAiChatModel getOrCreateChatModel(String baseUrl, String apiKey,
-                                                  String modelName,
-                                                  Double temperature, Integer maxTokens) {
-        String key = baseUrl + "|" + modelName + "|" + resolveTimeoutMillis()
-            + "|" + temperature + "|" + maxTokens;
-        // apiKey 变化时清空缓存
-        if (!apiKey.equals(cachedApiKey)) {
-            cachedApiKey = apiKey;
-            chatModelCache.clear();
-            streamingModelCache.clear();
-        }
+                                                 String modelName,
+                                                 Double temperature,
+                                                 Integer maxTokens,
+                                                 Integer timeoutOverrideMillis) {
+        int timeoutMillis = resolveTimeoutMillis(timeoutOverrideMillis);
+        String key = baseUrl + "|" + modelName + "|" + timeoutMillis
+            + "|" + temperature + "|" + maxTokens + "|" + Integer.toHexString(apiKey.hashCode());
         return chatModelCache.computeIfAbsent(key, k -> {
             OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
-                .timeout(Duration.ofMillis(resolveTimeoutMillis()))
+                .timeout(Duration.ofMillis(timeoutMillis))
                 .logRequests(false)
                 .logResponses(false);
             if (temperature != null) builder.temperature(temperature);
@@ -468,16 +556,19 @@ public class AiGatewayService {
     }
 
     private OpenAiStreamingChatModel getOrCreateStreamingChatModel(String baseUrl, String apiKey,
-                                                                    String modelName,
-                                                                    Double temperature, Integer maxTokens) {
-        String key = baseUrl + "|" + modelName + "|" + resolveTimeoutMillis()
-            + "|" + temperature + "|" + maxTokens;
+                                                                   String modelName,
+                                                                   Double temperature,
+                                                                   Integer maxTokens,
+                                                                   Integer timeoutOverrideMillis) {
+        int timeoutMillis = resolveTimeoutMillis(timeoutOverrideMillis);
+        String key = baseUrl + "|" + modelName + "|" + timeoutMillis
+            + "|" + temperature + "|" + maxTokens + "|" + Integer.toHexString(apiKey.hashCode());
         return streamingModelCache.computeIfAbsent(key, k -> {
             OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder = OpenAiStreamingChatModel.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
-                .timeout(Duration.ofMillis(resolveTimeoutMillis()))
+                .timeout(Duration.ofMillis(timeoutMillis))
                 .logRequests(false)
                 .logResponses(false);
             if (temperature != null) builder.temperature(temperature);
@@ -621,24 +712,59 @@ public class AiGatewayService {
         return systemConfigService.getIntValueOrDefault("ai.timeout.millis", aiProperties.getTimeoutMillis());
     }
 
+    private int resolveTimeoutMillis(Integer timeoutOverrideMillis) {
+        int configuredTimeout = resolveTimeoutMillis();
+        if (timeoutOverrideMillis == null || timeoutOverrideMillis <= 0) {
+            return configuredTimeout;
+        }
+        return Math.max(configuredTimeout, timeoutOverrideMillis);
+    }
+
     private String resolveOpenAiCompatibleBaseUrl() {
-        return systemConfigService.getValueOrDefault(
+        String baseUrl = systemConfigService.getValueOrDefault(
             "ai.openai-compatible.base-url",
             aiProperties.getOpenAiCompatible().getBaseUrl()
         );
+        return firstNonBlank(baseUrl, aiProperties.getOpenAiCompatible().getBaseUrl());
     }
 
     private String resolveOpenAiCompatibleApiKey() {
+        String systemValue = systemConfigService.getValueOrDefault("ai.openai-compatible.api-key", null);
+        if (systemValue != null && !systemValue.isBlank()) {
+            return systemValue;
+        }
         return resolveSecretValue(aiProperties.getOpenAiCompatible().getApiKeyRef());
     }
 
-    private String resolveOpenAiCompatibleModelName(PromptConfigEntity promptConfig) {
-        // 1. prompt-level model (skip dify)
-        String configuredModel = promptConfig.getModelName();
-        if (configuredModel != null && !configuredModel.isBlank() && !"dify".equalsIgnoreCase(configuredModel)) {
-            return configuredModel;
+    private OpenAiCompatibleRuntime resolveOpenAiCompatibleRuntime(PromptConfigEntity promptConfig) {
+        String userPreferredModel = resolveUserPreferredModel();
+        String promptConfiguredModel = resolvePromptConfiguredModel(promptConfig);
+        Optional<AiModelRegistryModelVO> registryModel = systemConfigService.resolveEnabledModel(
+            userPreferredModel,
+            promptConfiguredModel
+        );
+        if (registryModel.isPresent()) {
+            AiModelRegistryModelVO model = registryModel.get();
+            return new OpenAiCompatibleRuntime(
+                firstNonBlank(model.getModelName(), model.getModelKey()),
+                firstNonBlank(model.getBaseUrl(), resolveOpenAiCompatibleBaseUrl()),
+                firstNonBlank(model.getApiKey(), resolveOpenAiCompatibleApiKey()),
+                promptConfig != null && promptConfig.getTemperature() != null
+                    ? promptConfig.getTemperature() : model.getDefaultTemperature(),
+                promptConfig != null && promptConfig.getMaxTokens() != null
+                    ? promptConfig.getMaxTokens() : model.getMaxTokens()
+            );
         }
-        // 2. user preference
+        return new OpenAiCompatibleRuntime(
+            firstNonBlank(promptConfiguredModel, resolveOpenAiCompatibleModelNameLegacy()),
+            resolveOpenAiCompatibleBaseUrl(),
+            resolveOpenAiCompatibleApiKey(),
+            promptConfig == null ? null : promptConfig.getTemperature(),
+            promptConfig == null ? null : promptConfig.getMaxTokens()
+        );
+    }
+
+    private String resolveUserPreferredModel() {
         try {
             com.novelanalyzer.common.context.AuthUser authUser = AuthUserHolder.get();
             if (authUser != null) {
@@ -649,7 +775,21 @@ public class AiGatewayService {
             }
         } catch (Exception ignored) {
         }
-        // 3. system default
+        return null;
+    }
+
+    private String resolvePromptConfiguredModel(PromptConfigEntity promptConfig) {
+        if (promptConfig == null) {
+            return null;
+        }
+        String configuredModel = promptConfig.getModelName();
+        if (configuredModel == null || configuredModel.isBlank() || "dify".equalsIgnoreCase(configuredModel)) {
+            return null;
+        }
+        return configuredModel;
+    }
+
+    private String resolveOpenAiCompatibleModelNameLegacy() {
         return systemConfigService.getValueOrDefault(
             "ai.openai-compatible.default-model",
             aiProperties.getOpenAiCompatible().getDefaultModel()
@@ -732,6 +872,13 @@ public class AiGatewayService {
     }
 
     private record PromptMessagePair(List<ChatMessage> messages, String combinedText) {
+    }
+
+    private record OpenAiCompatibleRuntime(String modelName,
+                                           String baseUrl,
+                                           String apiKey,
+                                           Double temperature,
+                                           Integer maxTokens) {
     }
 
     public static final class InvocationHandle {

@@ -62,6 +62,7 @@ public class AiConfig {
     public HttpClient aiHttpClient(AiProperties properties) {
         return HttpClient.newBuilder()
             .connectTimeout(Duration.ofMillis(properties.getTimeoutMillis()))
+            .version(HttpClient.Version.HTTP_1_1)
             .build();
     }
 

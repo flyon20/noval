@@ -16,24 +16,24 @@ const route = useRoute();
 
 const pageCopy = computed(() => {
   if (route.path.startsWith('/rank')) {
-    return { title: '扫榜', subtitle: '查看当前榜单与书籍详情。' };
+    return { title: '扫榜' };
   }
   if (route.path.startsWith('/analysis')) {
-    return { title: '单书分析', subtitle: '查看当前书籍分析结果。' };
+    return { title: '单书分析' };
   }
   if (route.path.startsWith('/trend')) {
-    return { title: '趋势分析', subtitle: '查看趋势结果与图表。' };
+    return { title: '趋势分析' };
   }
   if (route.path.startsWith('/history')) {
-    return { title: '历史回看', subtitle: '回看历史分析记录。' };
+    return { title: '历史回看' };
   }
   if (route.path.startsWith('/config/prompt')) {
-    return { title: '提示词配置', subtitle: '管理提示词内容。' };
+    return { title: '提示词配置' };
   }
   if (route.path.startsWith('/config/system')) {
-    return { title: '系统配置', subtitle: '管理系统参数。' };
+    return { title: '系统配置' };
   }
-  return { title: '控制台', subtitle: '查看当前页面内容。' };
+  return { title: '控制台' };
 });
 
 const userInitial = computed(() => {
@@ -46,7 +46,6 @@ const userInitial = computed(() => {
   <header class="app-header">
     <div class="app-header__identity">
       <h2 class="app-header__title">{{ pageCopy.title }}</h2>
-      <p class="app-header__subtitle">{{ pageCopy.subtitle }}</p>
     </div>
 
     <div class="app-header__actions">
@@ -88,8 +87,11 @@ const userInitial = computed(() => {
   gap: 1rem;
   padding: 1.2rem 1.6rem;
   border-bottom: 1px solid var(--color-border);
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.1));
+  background: rgba(255, 252, 247, 0.92);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 30;
 }
 
 .app-header__identity {
@@ -105,20 +107,13 @@ const userInitial = computed(() => {
   justify-content: flex-end;
 }
 
-.app-header__title,
-.app-header__subtitle {
+.app-header__title {
   margin: 0;
 }
 
 .app-header__title {
   font-size: 1.25rem;
   font-family: var(--font-heading);
-}
-
-.app-header__subtitle {
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  line-height: 1.5;
 }
 
 .app-header__user {
@@ -164,10 +159,13 @@ const userInitial = computed(() => {
   .app-header {
     padding: 0.75rem 0.875rem;
     min-height: 52px;
-  }
-
-  .app-header__subtitle {
-    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    z-index: 40;
+    border-radius: 0;
   }
 
   .app-header__title {

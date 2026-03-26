@@ -1,7 +1,9 @@
 import ElementPlus from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import TrendView from '../TrendView.vue';
+import { userConfigApi } from '@/api/config';
 
 vi.mock('@/api/analysis', () => ({
   analysisApi: {
@@ -13,6 +15,50 @@ vi.mock('@/api/analysis', () => ({
 vi.mock('@/api/data', () => ({
   dataApi: {
     getVisual: vi.fn(),
+  },
+}));
+
+vi.mock('@/api/config', () => ({
+  systemConfigApi: {
+    getModelOptions: vi.fn().mockResolvedValue({
+      data: {
+        data: [
+          {
+            modelKey: 'deepseek-chat',
+            displayName: 'DeepSeek Chat',
+            providerType: 'openai-compatible',
+            isDefault: true,
+          },
+        ],
+      },
+    }),
+  },
+  userConfigApi: {
+    get: vi.fn().mockImplementation((configKey: string) => {
+      if (configKey === 'trend.current-context') {
+        return Promise.resolve({
+          data: {
+            data: {
+              configValue: null,
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: {
+          data: {
+            configValue: 'deepseek-chat',
+          },
+        },
+      });
+    }),
+    update: vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          configValue: 'deepseek-chat',
+        },
+      },
+    }),
   },
 }));
 
@@ -53,6 +99,15 @@ function createPreference(boardCode = 'urban-brain', channelCode = 'male-new', r
     boardCode,
     rankFetchCount,
   };
+}
+
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+  window.dispatchEvent(new Event('resize'));
 }
 
 function createVisualPayload(overrides: Record<string, unknown> = {}) {
@@ -155,6 +210,32 @@ function createStreamTask(result: Record<string, unknown>) {
   });
 }
 
+function createPendingStreamTask(delta: string) {
+  return vi.fn().mockImplementation((_payload, callbacks) => {
+    let rejectResult: ((reason?: unknown) => void) | null = null;
+
+    callbacks.onStart({
+      event: 'start',
+      traceId: 'trace-trend-streaming',
+      analysisType: 'theme',
+    });
+    callbacks.onDelta({
+      event: 'delta',
+      delta,
+      chunkIndex: 0,
+    });
+
+    return {
+      abort: vi.fn(() => {
+        rejectResult?.(new Error('Analysis stream aborted'));
+      }),
+      result: new Promise<never>((_resolve, reject) => {
+        rejectResult = reject;
+      }),
+    };
+  });
+}
+
 async function mountTrendView() {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -163,6 +244,7 @@ async function mountTrendView() {
   await router.push('/trend');
 
   const wrapper = mount(TrendView, {
+    attachTo: document.body,
     global: {
       plugins: [router, ElementPlus],
     },
@@ -178,7 +260,27 @@ function getTrendSelects(wrapper: ReturnType<typeof mount>) {
 
 describe('TrendView', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useRealTimers();
+    setViewportWidth(1280);
+    vi.mocked(userConfigApi.get).mockImplementation((configKey: string) => {
+      if (configKey === 'trend.current-context') {
+        return Promise.resolve({
+          data: {
+            data: {
+              configValue: null,
+            },
+          },
+        });
+      }
+      return Promise.resolve({
+        data: {
+          data: {
+            configValue: 'deepseek-chat',
+          },
+        },
+      });
+    });
   });
 
   test('loads board context and visual data without auto starting analysis', async () => {
@@ -225,6 +327,79 @@ describe('TrendView', () => {
     });
     expect(analysisApi.streamTrend).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('都市脑洞');
+  });
+
+  test('restores persisted trend context instead of following rank preference', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+    const { userConfigApi } = await import('@/api/config');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference('urban-brain', 'male-new'),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(userConfigApi.get).mockImplementation((configKey: string) => {
+      if (configKey === 'trend.current-context') {
+        return Promise.resolve({
+          data: {
+            data: {
+              configValue: JSON.stringify({
+                platform: 'fanqie',
+                channelCode: 'female-hot',
+                boardCode: 'ancient-love',
+                boardName: '古言热推',
+              }),
+            },
+          },
+        });
+      }
+
+      return Promise.resolve({
+        data: {
+          data: {
+            configValue: 'deepseek-chat',
+          },
+        },
+      });
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload({
+          channelCode: 'female-hot',
+          boardCode: 'ancient-love',
+          boardName: '古言热推',
+        }),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+
+    const wrapper = await mountTrendView();
+
+    expect(dataApi.getVisual).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'female-hot',
+      boardCode: 'ancient-love',
+    });
+    expect(wrapper.text()).toContain('古言热推');
+    expect(analysisApi.streamTrend).not.toHaveBeenCalled();
   });
 
   test('shows the available snapshot count instead of waiting for three samples', async () => {
@@ -600,11 +775,114 @@ describe('TrendView', () => {
 
     await wrapper.get('[data-test="trend-result-detail-open"]').trigger('click');
     await flushPromises();
-    expect(wrapper.get('[data-test="trend-result-detail"]').text()).toContain('这是一个很长的趋势分析结果');
+    expect(document.body.textContent).toContain('这是一个很长的趋势分析结果');
 
-    await wrapper.get('[data-test="trend-result-detail-close"]').trigger('click');
+    (document.body.querySelector('[data-test="trend-result-detail-close"]') as HTMLElement)?.click();
     await flushPromises();
-    expect(wrapper.find('[data-test="trend-result-detail"]').exists()).toBe(false);
+    expect(document.body.querySelector('[data-test="trend-result-detail"]')).toBeNull();
+
+    wrapper.unmount();
+  });
+
+  test('does not render raw json fragments while trend streaming is in progress', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload(),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createPendingStreamTask(`{
+  "analysisType": "theme",
+  "summary": "当前榜单热钱继续集中在都市脑洞和系统混合流上，代表热书已经显著向高概念书名靠拢",
+  "boardSummary": "都市脑洞持续领跑"
+}`) as never);
+
+    const wrapper = await mountTrendView();
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="analysis-result-card"]').text()).toContain('都市脑洞持续领跑');
+    expect(wrapper.get('[data-test="analysis-result-card"]').text()).not.toContain('"analysisType"');
+    expect(wrapper.get('[data-test="analysis-result-card"]').text()).not.toContain('"summary"');
+
+    wrapper.unmount();
+  });
+
+  test('does not show an error toast when the user stops trend streaming manually', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockImplementation(() => null as never);
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload(),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createPendingStreamTask(`{
+  "analysisType": "theme",
+  "boardSummary": "都市脑洞持续领跑"
+}`) as never);
+
+    const wrapper = await mountTrendView();
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="analysis-toolbar-stop"]').trigger('click');
+    await flushPromises();
+
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+    errorSpy.mockRestore();
   });
 
   test('prefers structured trend sections over raw content after analysis completes', async () => {
@@ -736,5 +1014,104 @@ describe('TrendView', () => {
     expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('都市脑洞');
     expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('脑洞之王');
     expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('持续升温');
+  });
+
+  test('renders theme cards instead of table rows on mobile', async () => {
+    setViewportWidth(390);
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload(),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createStreamTask(createTrendResult({
+      resultJson: {
+        summary: '最近三次样本继续向都市脑洞聚焦。',
+        themeTable: [
+          { theme: '都市脑洞', count: 3, ratio: 50, trend: '持续升温', representativeBooks: [{ bookName: '脑洞之王' }] },
+        ],
+      },
+    })) as never);
+
+    const wrapper = await mountTrendView();
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="trend-result-theme-cards"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="trend-result-theme-table"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('脑洞之王');
+  });
+});
+
+test('polls the current board visual data again so the page hot-updates without manual refresh', async () => {
+  vi.useFakeTimers();
+  const { dataApi } = await import('@/api/data');
+  const { crawlerApi } = await import('@/api/crawler');
+
+  vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+    data: {
+      code: 200,
+      message: 'success',
+      data: createBoardCatalog(),
+      timestamp: 1,
+      traceId: 'trace-boards',
+    },
+  });
+  vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+    data: {
+      code: 200,
+      message: 'success',
+      data: createPreference(),
+      timestamp: 1,
+      traceId: 'trace-preference',
+    },
+  });
+  vi.mocked(dataApi.getVisual).mockResolvedValue({
+    data: {
+      code: 200,
+      message: 'success',
+      data: createVisualPayload(),
+      timestamp: 1,
+      traceId: 'trace-visual',
+    },
+  });
+
+  await mountTrendView();
+  await flushPromises();
+  vi.mocked(dataApi.getVisual).mockClear();
+
+  await vi.advanceTimersByTimeAsync(12000);
+  await flushPromises();
+
+  expect(dataApi.getVisual).toHaveBeenCalledWith({
+    platform: 'fanqie',
+    channelCode: 'male-new',
+    boardCode: 'urban-brain',
   });
 });

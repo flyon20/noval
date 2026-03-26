@@ -145,3 +145,214 @@ Phase 6
 - The current LangGraph worker only knows global OpenAI-compatible base URL and API key, so per-model registry support requires coordinated Java + Python request changes.
 - Existing prompt config rows, system config seeds, and trend test fixtures all assume the old flat model list and shallow trend schema, so schema/data migration must stay incremental.
 - Trend page components currently mix result JSON and backend fallback data; this needs a careful migration to avoid blank panels during the transition.
+
+### Execution Update: 2026-03-25
+- Phase 2 complete: backend model registry endpoints, prompt-config input contract fields, and per-request runtime model resolution are now wired through Java and LangGraph worker.
+- Phase 3 complete: trend analysis normalization no longer fabricates board-level business conclusions; it now preserves stored JSON fields, derives only structural equivalents, and returns empty structures when contract-driven fields are absent.
+- Phase 4 complete: trend prompt seeds/examples and persisted theme fixtures now include `boardSummary`, `themeDistribution`, `themeTable.representativeBooks`, `hotBooks.rankNo`, and richer `snapshotComparisons`.
+- Phase 5 complete: trend page was rebuilt around the strict contract, keeping click-to-run behavior, compact preview + detail drawer, fuller desktop result support panels, and mobile-compatible single-column fallback.
+- Phase 6 complete: targeted and broader verification are both green; remaining work is local git hygiene/commit only, excluding unrelated artifacts such as `appendonly.aof`.
+
+## Session Addendum 2026-03-25 (Prompt Contract Visibility Follow-up)
+
+### Goal
+- Make the admin prompt-config page show the system-preconfigured input/output JSON contracts instead of blank boxes.
+- Finish the model-registry + prompt-contract + trend-contract work to the product level the user requested, not just to "API exists" level.
+
+### Current Phase
+- Phase 2: reproduce, lock root cause, and add failing coverage before implementation.
+
+### Locked Findings
+- Local MySQL `prompt_config` rows for `deconstruct/structure/plot/theme` currently have `input_json_schema`, `input_example_json`, `output_json_schema`, `output_example_json`, and `parse_config_json` all empty.
+- `PromptConfigService` currently reads DB rows as-is and has no default-contract backfill path, so the admin page can only render blanks when legacy rows exist.
+- Current SQL seed only writes contract fields for `theme`; the other three prompt types still have no system default contract data.
+- The model-registry row exists in `system_config`, so the remaining complaint on that page is about clarity/presentation and not raw API absence.
+- Trend visual rendering still contains structural fallbacks and a fake bar-chart word cloud path that need tightening.
+
+## Session Addendum 2026-03-26 (Repo Understanding + Local Run)
+
+### Goal
+- Read the project docs and key entry-point code to rebuild an accurate mental model of the system.
+- Bring the project up successfully in the current Windows environment with the least risky local path.
+
+### Current Phase
+- Phase complete: local stack verification and delivery summary
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Prefer the documented local联调 path over Docker Compose | `docker` is not installed in the current environment, while Java/Node/Python/Redis local tooling is available |
+| Start backend against H2 test-classpath initialization instead of assuming local MySQL schema state | This matches `docs/本地联调说明.md` and avoids coupling startup success to unknown local MySQL seed state |
+| Keep Redis local, and start crawler + langgraph-worker as separate Python services | This mirrors the documented service topology and verifies the real inter-service chain used by the frontend/backend |
+
+### Verification Summary
+- Confirmed the docs baseline is `docs/项目总设计-v2.md`, with local run details in `docs/本地联调说明.md`.
+- Confirmed local service ports are listening: `5000` (crawler), `8001` (langgraph-worker), `6379` (redis), `8080` (backend), `5173` (frontend).
+- Confirmed HTTP health checks pass for crawler, langgraph-worker, backend, and frontend proxy to backend.
+- Confirmed the frontend renders the login page in a browser, not just static HTML.
+
+### Notes
+- Initial crawler/langgraph-worker startup failed because the injected environment variable command was quoted incorrectly; retrying with `cmd.exe /c "set ... && ..."` resolved both.
+- Initial frontend startup used `npm run dev` via `Start-Process`, which passed host/port as positional args to Vite; restarting with `node_modules/.bin/vite.cmd --host=127.0.0.1 --port=5173` fixed the route handling.
+
+
+## Session Addendum 2026-03-26 (Analysis Chain Deep Dive)
+
+### Goal
+- Rebuild the end-to-end analysis mental model from docs and real code.
+- Focus on the exact path for chapter/trend analysis, model selection, and LangGraph worker organization.
+
+### Current Phase
+- Phase complete: architecture understanding and chain summary
+
+### Key Findings
+| Finding | Why it matters |
+|---------|----------------|
+| The project currently has two AI runtimes: `legacy` and `langgraph`, and the default system config is still `legacy` | LangGraph exists in code, but it is not the always-on main path |
+| `AnalysisService` is the real orchestration center in Java | It decides cache reuse, data loading, prompt lookup, runtime branching, SSE, and persistence |
+| The current Python worker uses one shared `LangGraphAnalysisService` with a small `StateGraph`, not four separately implemented agent modules yet | The code has begun the LangGraph migration, but it has not fully reached the multi-agent design doc yet |
+| Model registry + prompt contract now bridge Java and Python together | Frontend model choice, backend runtime resolution, and worker provider config are already connected |
+| Trend analysis is much more contract-driven than single-book analysis | Trend flow strongly depends on structured JSON, normalization, and board-scoped fields |
+
+### Notes
+- Docs should be read in two layers: current baseline (`README.md`, `docs/project-design-v2.md`) and forward-looking design (`docs/superpowers/specs/2026-03-24-phase2-langgraph-multi-agent-design.md`).
+- When explaining the project to others, it is most accurate to say: "business orchestration lives in Java; AI execution can run through either LangChain4j or the LangGraph worker depending on config."
+
+
+## Session Addendum 2026-03-26 (Single-book 10-Chapter Stream Fix)
+
+### Goal
+- Fix the single-book analysis page failure when requesting 10 chapters.
+- Preserve real streaming typing while removing fake progress leakage on failure.
+
+### Current Phase
+- Phase complete: targeted fix verified
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Fix chapter fetch at crawler source instead of only masking backend errors | The immediate failure came from one broken reader URL aborting the whole fetch |
+| Keep stream typing but ignore transport placeholder progress on the frontend | Real token streaming must stay, but `[analysis-progress]` should not pollute result text or block fallback |
+| Use minimal targeted tests in crawler + frontend stream runtime | Fastest way to lock the bug and verify no regression in the affected path |
+
+
+## Session Addendum 2026-03-26 (Actual Chapter Count UX)
+
+### Goal
+- Make the single-book analysis page clearly show when requested chapter count and actually fetched chapter count differ.
+- Keep the existing streaming typing interaction unchanged.
+
+### Current Phase
+- Phase complete: UX clarification shipped with regression coverage
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Store actual/requested chapter metadata in `result_json` | Reuses the existing cached/persisted analysis payload shape and keeps API widening minimal |
+| Show a ratio only when actual fetched chapters are lower than requested | Keeps normal successful runs visually compact while making degraded fetches explicit |
+| Apply metadata attachment in all single-book analysis paths | Avoids drift between blocking, streaming, chunked, and LangGraph-backed runs |
+
+
+## Session Addendum 2026-03-26 (10-Chapter Timeout Budget)
+
+### Goal
+- Prevent 10-chapter single-book analysis from failing due to a hard 15-second timeout during fallback/blocking execution.
+- Keep the current streaming UX and fallback path intact.
+
+### Current Phase
+- Phase complete: timeout budget fix verified
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Use a targeted longer timeout only for long single-book analysis | Fixes the reported path without broadening every request in the system |
+| Align frontend blocking timeout with backend AI timeout budget | Avoids the browser aborting the fallback request before the backend finishes |
+| Keep trend timeout logic separate from single-book timeout logic | The project already treats trend analysis as a distinct timeout class |
+
+
+## Session Addendum 2026-03-26 (Forced Chunking For 8+ Chapters)
+
+### Goal
+- Prevent 8-10 chapter single-book analysis from staying on a single huge legacy LLM call.
+- Make the fallback path survivable under real long-content load.
+
+### Current Phase
+- Phase complete: forced chunking + longer fallback budget verified
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Force chunking by chapter count for large single-book analysis | Token estimation alone was too optimistic for real 8-10 chapter content |
+| Use fixed-size chapter chunks for this path | Simpler and more predictable than trying to retune global token heuristics only |
+| Raise frontend fallback timeout above backend per-call timeout | The browser must allow chunk + merge to finish as a whole request |
+
+
+## Session Addendum 2026-03-26 (Persistent Analysis/Trend Context)
+
+### Goal
+- Keep the current single-book analysis and trend-view context stable across navigation and page refresh.
+- Persist rank-page chapter-count preference separately from rank sample-count preference.
+
+### Current Phase
+- Phase complete: persistent context + result restoration verified
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Persist analysis/trend view context in `user_config` instead of route only | Matches the requirement that refresh and page switching should not force reselection |
+| Restore analysis panels from history instead of auto-rerunning | Preserves the user?s current viewed result and avoids unnecessary model calls |
+| Keep trend context separate from rank-page preference | Prevents `/rank` board changes from unexpectedly replacing the current `/trend` workspace |
+| Persist rank chapter count with its own key | `rankFetchCount` already exists, but chapter count is a distinct user preference |
+
+
+## Session Addendum 2026-03-26 (Rank Mobile Refresh Flow)
+
+### Goal
+- Replace mobile rank-page pagination with a refresh-flow / infinite-scroll experience while keeping the existing rank-card layout.
+- Preserve a clear path back to the current board list top.
+
+### Current Phase
+- Phase complete: mobile refresh flow verified
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Keep layout unchanged and only replace the mobile page-turn interaction | Matches the user?s clarified requirement and avoids unnecessary UI churn |
+| Use `IntersectionObserver` plus a manual fallback load-more button | Gives smooth auto paging but still has a recovery path when auto loading misses |
+| Keep desktop pagination as-is | Mobile and desktop usage patterns differ, and desktop pagination still works well |
+| Suspend disruptive poll replacement when mobile flow has already loaded multiple pages | Prevents the appended list from collapsing unexpectedly during background refresh |
+
+
+## Session Addendum 2026-03-26 (Single-book Analysis First-Run UX)
+
+### Goal
+- Prevent first-run 10-chapter analysis from overloading the page by auto-starting every panel.
+- Make long single-book streaming output readable without requiring manual refresh.
+
+### Current Phase
+- Phase complete: first-run behavior and streaming display fixed
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| First trigger starts only the active analysis panel | Avoids unnecessary concurrent long-running calls on the first interaction |
+| Keep other panels manual/on-demand | Preserves independence between the three analysis modes |
+| Show full streaming text on the analysis page | Prevents the false impression that generation stopped after a few hundred characters |
+
+
+## Session Addendum 2026-03-26 (UI Copy + Drawer + Trend Visual Cleanup)
+
+### Goal
+- Remove low-value UI copy, improve mobile navigation access, fix the desktop chapter drawer, and make trend visuals clearer.
+
+### Current Phase
+- Phase complete: targeted UI cleanup verified
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Reduce copy instead of redesigning whole page structures | Matches the request to keep only basic function names |
+| Keep mobile top bar sticky at all times | Makes logout consistently reachable on phones |
+| Rebuild the chapter drawer layout rather than patching its old bottom-sheet structure | The old desktop interaction problem was structural, not just spacing |
+| Use a colorful SVG cloud and hide pie labels inside slices | Solves the trend visual complaints without introducing a heavy new chart dependency |
+| Present theme data in a real table | Improves scanability and prevents the old mixed, card-like layout from feeling chaotic |
