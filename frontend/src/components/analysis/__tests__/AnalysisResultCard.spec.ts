@@ -61,7 +61,7 @@ describe('AnalysisResultCard', () => {
   });
 
   test('displays markdown result when done', () => {
-    const result = '# 生成成功\n- 第一条';
+    const result = '# 生成成功\n- 第一条\n```ts\nconsole.log("ok")\n```';
     const wrapper = mount(AnalysisResultCard, {
       props: {
         phase: 'done',
@@ -81,6 +81,11 @@ describe('AnalysisResultCard', () => {
     expect(wrapper.text()).toContain('分段汇总');
     expect(wrapper.text()).toContain('章节数：10');
     expect(wrapper.text()).toContain('总 Token：120');
+    expect(wrapper.html()).toContain('analysis-result__markdown');
+    const markdown = wrapper.find('.analysis-result__markdown');
+    expect(markdown.exists()).toBe(true);
+    expect(markdown.find('li').text()).toBe('第一条');
+    expect(markdown.find('code').text()).toContain('console.log("ok")');
   });
 });
 
