@@ -34,16 +34,22 @@ function getIcon(name: string) {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+  left: 12px;
+  right: 12px;
   height: var(--bottom-nav-height);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  border-top: 1px solid rgba(35, 65, 58, 0.12);
-  background: rgba(255, 252, 248, 0.97);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  z-index: 30;
+  padding: 0.35rem 0.4rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 82%, rgba(255, 255, 255, 0.12));
+  border-radius: 1.6rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06)),
+    color-mix(in srgb, var(--color-glass) 92%, transparent);
+  backdrop-filter: blur(24px) saturate(1.24);
+  -webkit-backdrop-filter: blur(24px) saturate(1.24);
+  box-shadow:
+    0 20px 44px rgba(15, 23, 42, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  z-index: 45;
 }
 
 .app-bottom-nav__link {
@@ -62,7 +68,7 @@ function getIcon(name: string) {
 .app-bottom-nav__link::after {
   content: '';
   position: absolute;
-  top: 0;
+  top: 2px;
   left: 50%;
   transform: translateX(-50%) scaleX(0);
   width: 24px;
@@ -90,5 +96,11 @@ function getIcon(name: string) {
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
+}
+
+@media (min-width: 769px) {
+  .app-bottom-nav {
+    display: none;
+  }
 }
 </style>

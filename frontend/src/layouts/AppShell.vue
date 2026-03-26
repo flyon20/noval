@@ -125,7 +125,10 @@ const emit = defineEmits<{
   }
 
   .app-shell__content {
-    padding: calc(0.875rem + 56px) 0.875rem 0.875rem;
+    padding:
+      calc(0.875rem + 56px)
+      0.875rem
+      calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 1.5rem);
   }
 }
 </style>

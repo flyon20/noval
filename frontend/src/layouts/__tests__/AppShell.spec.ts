@@ -54,4 +54,41 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('page body');
     document.documentElement.dataset.theme = previousTheme || '';
   });
+
+  test('keeps header and bottom navigation mounted for mobile shell layout', async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 390,
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: { template: '<div />' } }],
+    });
+    await router.push('/rank');
+
+    const wrapper = mount(AppShell, {
+      props: {
+        username: 'demo',
+        roles: ['USER'],
+      },
+      slots: {
+        default: '<div>page body</div>',
+      },
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    expect(wrapper.findComponent({ name: 'AppHeader' }).exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'AppBottomNav' }).exists()).toBe(true);
+
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: originalWidth,
+    });
+  });
 });

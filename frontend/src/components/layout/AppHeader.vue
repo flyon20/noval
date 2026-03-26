@@ -81,14 +81,16 @@ const userInitial = computed(() => {
 
 <style scoped lang="scss">
 .app-header {
+  --app-header-mobile-height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   padding: 1.2rem 1.6rem;
   border-bottom: 1px solid var(--color-border);
-  background: rgba(255, 252, 247, 0.92);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
   position: sticky;
   top: 0;
   z-index: 30;
@@ -122,8 +124,8 @@ const userInitial = computed(() => {
 }
 
 .app-header__tag {
-  background: rgba(199, 146, 92, 0.08);
-  border-color: rgba(199, 146, 92, 0.22);
+  background: rgba(92, 124, 250, 0.08);
+  border-color: rgba(92, 124, 250, 0.18);
   color: var(--color-accent-strong);
 }
 
@@ -158,7 +160,7 @@ const userInitial = computed(() => {
 @media (max-width: 768px) {
   .app-header {
     padding: 0.75rem 0.875rem;
-    min-height: 52px;
+    min-height: var(--app-header-mobile-height);
     position: fixed;
     top: 0;
     left: 0;
@@ -166,6 +168,9 @@ const userInitial = computed(() => {
     width: 100%;
     z-index: 40;
     border-radius: 0;
+    border-bottom-color: rgba(255, 255, 255, 0.16);
+    background: color-mix(in srgb, var(--color-glass) 88%, transparent);
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
   }
 
   .app-header__title {
