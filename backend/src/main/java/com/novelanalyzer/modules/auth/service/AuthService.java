@@ -18,6 +18,7 @@ import io.jsonwebtoken.JwtException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
 import java.util.List;
@@ -65,6 +66,7 @@ public class AuthService {
         this.authSessionRepository = authSessionRepository;
     }
 
+    @Transactional
     public LoginResult login(LoginRequest request, String loginIp) {
         String username = normalizeUsername(request.getUsername());
         AuthUserEntity dbUser = authRepository.findUserByUsername(username).orElse(null);
@@ -78,6 +80,7 @@ public class AuthService {
                 throw new BusinessException(ResultCode.UNAUTHORIZED, PASSWORD_INCORRECT_MESSAGE);
             }
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
+            authRepository.lockUserById(dbUser.getId());
             authRepository.updateLastLoginTime(dbUser.getId());
             authRepository.insertLoginLog(dbUser.getId(), dbUser.getUsername(), loginIp, 1, "login success");
             enforceDeviceLimit(dbUser.getId());
@@ -97,6 +100,7 @@ public class AuthService {
         throw new BusinessException(ResultCode.UNAUTHORIZED, USERNAME_NOT_FOUND_MESSAGE);
     }
 
+    @Transactional
     public TokenResponse register(RegisterRequest request, String registerIp) {
         String username = normalizeUsername(request.getUsername());
         validatePasswordRule(request.getPassword());

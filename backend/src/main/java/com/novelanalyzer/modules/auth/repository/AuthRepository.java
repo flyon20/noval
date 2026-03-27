@@ -65,6 +65,14 @@ public class AuthRepository {
         return Optional.of(user);
     }
 
+    public void lockUserById(Long userId) {
+        jdbcTemplate.queryForObject(
+            "SELECT id FROM sys_user WHERE id = ? AND deleted = 0 FOR UPDATE",
+            Long.class,
+            userId
+        );
+    }
+
     public boolean existsUserByUsername(String username) {
         Integer count = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM sys_user WHERE username = ?",
