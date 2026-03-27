@@ -17,6 +17,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => !!authSessionRef.value);
   const restoreStatus = ref<AuthRestoreStatus>(authSessionRef.value ? 'authenticated' : 'logged_out');
   let restorePromise: Promise<ReturnType<typeof getCurrentSession>> | null = null;
+  let restoreAttempted = Boolean(authSessionRef.value);
 
   function syncRestoreStatus() {
     restoreStatus.value = authSessionRef.value ? 'authenticated' : 'logged_out';
@@ -24,6 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function restoreSession() {
     const restored = restoreSessionFromStorage();
+    restoreAttempted = true;
     syncRestoreStatus();
     return restored;
   }
@@ -33,9 +35,14 @@ export const useAuthStore = defineStore('auth', () => {
       return authSessionRef.value;
     }
 
+    if (restoreAttempted && restoreStatus.value === 'logged_out') {
+      return null;
+    }
+
     if (!restorePromise) {
       restoreStatus.value = 'restoring';
       restorePromise = bootstrapAuthSession().finally(() => {
+        restoreAttempted = true;
         syncRestoreStatus();
         restorePromise = null;
       });
@@ -46,12 +53,14 @@ export const useAuthStore = defineStore('auth', () => {
 
   function applyTokenResponse(tokenResponse: TokenResponse) {
     const restored = applyTokenResponseToSession(tokenResponse);
+    restoreAttempted = true;
     syncRestoreStatus();
     return restored;
   }
 
   function clearSession() {
     clearCurrentSession();
+    restoreAttempted = true;
     syncRestoreStatus();
   }
 
