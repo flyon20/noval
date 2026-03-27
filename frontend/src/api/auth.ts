@@ -3,19 +3,19 @@ import { httpClient, rawHttpClient } from '@/lib/http';
 import type { ApiResponse } from '@/types/api';
 import type { LoginRequest, RegisterRequest, TokenResponse } from '@/types/auth';
 
-type AuthRequestPayload = {
+type LoginRequestPayload = {
   username: string;
   password: string;
   deviceLabel?: string;
 };
 
 export const authApi = {
-  login(payload: LoginRequest | AuthRequestPayload) {
+  login(payload: LoginRequest | LoginRequestPayload) {
     return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/login', payload, {
       withCredentials: true,
     });
   },
-  register(payload: RegisterRequest | AuthRequestPayload) {
+  register(payload: RegisterRequest) {
     return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/register', payload, {
       withCredentials: true,
     });

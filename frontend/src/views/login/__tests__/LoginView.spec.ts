@@ -148,7 +148,6 @@ describe('LoginView', () => {
     expect(authApi.register).toHaveBeenCalledWith({
       username: 'new-user',
       password: 'Password123',
-      deviceLabel: expect.any(String),
     });
     expect(systemApi.loginBootstrap).toHaveBeenCalledWith({ platform: 'fanqie' });
     expect(push).toHaveBeenCalledWith('/rank');

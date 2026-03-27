@@ -157,14 +157,18 @@ async function handleSubmit() {
   state.traceId = '';
 
   try {
-    const payload = {
+    const loginPayload = {
       username: form.username.trim(),
       password: form.password,
       deviceLabel: getDeviceLabel(),
     };
+    const registerPayload = {
+      username: form.username.trim(),
+      password: form.password,
+    };
     const response = isRegisterMode.value
-      ? await authApi.register(payload)
-      : await authApi.login(payload);
+      ? await authApi.register(registerPayload)
+      : await authApi.login(loginPayload);
 
     authStore.applyTokenResponse(response.data.data);
     triggerLoginBootstrap();
@@ -298,6 +302,8 @@ async function handleSubmit() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: clip;
   background:
     radial-gradient(circle at top left, rgba(92, 124, 250, 0.22), transparent 40%),
     radial-gradient(circle at bottom right, rgba(255, 147, 186, 0.18), transparent 36%),
@@ -428,14 +434,17 @@ async function handleSubmit() {
   padding: 0.35rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-glass) 72%, transparent);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(14px) saturate(1.12);
+  -webkit-backdrop-filter: blur(14px) saturate(1.12);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  box-shadow: var(--shadow-card);
 }
 
 .login-card__mode-item {
   min-height: 42px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: transparent;
+  background: color-mix(in srgb, var(--color-glass) 38%, transparent);
   color: var(--color-text-muted);
   font: inherit;
   font-weight: 600;
@@ -447,9 +456,12 @@ async function handleSubmit() {
 }
 
 .login-card__mode-item.is-active {
-  background: rgba(255, 255, 255, 0.96);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.1)),
+    color-mix(in srgb, var(--color-glass) 92%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
   color: var(--color-primary);
-  box-shadow: 0 8px 20px rgba(35, 65, 58, 0.12);
+  box-shadow: var(--shadow-glow);
 }
 
 .login-card__heading {
@@ -498,21 +510,22 @@ async function handleSubmit() {
 @media (max-width: 768px) {
   .login-page {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto;
+    min-height: auto;
   }
 
   .login-page__hero {
-    padding: 1.75rem 1.25rem;
+    padding: 1.5rem 1.25rem 0.75rem;
     align-items: flex-start;
   }
 
   .login-page__hero-inner {
-    gap: 0.75rem;
+    gap: 0.55rem;
     max-width: 100%;
   }
 
   .login-page__headline {
-    font-size: 2rem;
+    font-size: 1.8rem;
   }
 
   .login-page__features {
@@ -520,17 +533,18 @@ async function handleSubmit() {
   }
 
   .login-page__description {
-    font-size: 0.9rem;
+    font-size: 0.86rem;
+    line-height: 1.65;
   }
 
   .login-page__form-wrap {
     align-items: flex-start;
-    padding: 1.5rem 1.25rem;
+    padding: 0.75rem 1.25rem 1.5rem;
   }
 
   .login-card {
     width: 100%;
-    padding: 1.5rem;
+    padding: 1.35rem;
     border-radius: 1.25rem;
   }
 }
