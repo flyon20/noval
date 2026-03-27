@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
+import java.time.LocalDateTime;
 
 @Service
 public class AuthService {
@@ -48,6 +49,7 @@ public class AuthService {
     private final TokenBlacklistService tokenBlacklistService;
     private final AuthSessionService authSessionService;
     private final AuthSessionRepository authSessionRepository;
+    private final RefreshTokenService refreshTokenService;
     private final AtomicReference<String> cachedEncodedPassword = new AtomicReference<>();
 
     public AuthService(AuthProperties authProperties,
@@ -56,7 +58,8 @@ public class AuthService {
                        PasswordEncoder passwordEncoder,
                        TokenBlacklistService tokenBlacklistService,
                        AuthSessionService authSessionService,
-                       AuthSessionRepository authSessionRepository) {
+                       AuthSessionRepository authSessionRepository,
+                       RefreshTokenService refreshTokenService) {
         this.authProperties = authProperties;
         this.authRepository = authRepository;
         this.jwtUtils = jwtUtils;
@@ -64,6 +67,7 @@ public class AuthService {
         this.tokenBlacklistService = tokenBlacklistService;
         this.authSessionService = authSessionService;
         this.authSessionRepository = authSessionRepository;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @Transactional
@@ -125,26 +129,37 @@ public class AuthService {
         }
     }
 
-    public TokenResponse refresh(String token) {
-        if (tokenBlacklistService.isBlacklisted(token)) {
+    @Transactional
+    public RefreshResult refresh(String refreshToken) {
+        String refreshTokenHash = refreshTokenService.hashRefreshToken(refreshToken);
+        var sessionOptional = authSessionService.findActiveSessionByRefreshTokenHash(refreshTokenHash);
+        if (sessionOptional.isEmpty()) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
-        try {
-            Claims claims = jwtUtils.parseClaims(token, authProperties.getJwtSecret());
-            Long userId = claims.get("uid", Long.class);
-            String sessionId = claims.get("sid", String.class);
-            if (userId == null || userId <= 0) {
-                throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
-            }
-            AuthUserEntity dbUser = authRepository.findActiveUserById(userId)
-                .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
-            List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
-            long expireSeconds = Math.max(1L, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000L);
-            tokenBlacklistService.blacklist(token, expireSeconds);
-            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, sessionId);
-        } catch (JwtException ex) {
+        var session = sessionOptional.get();
+        if (!refreshTokenHash.equals(session.getRefreshTokenHash())) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
+        AuthUserEntity dbUser = authRepository.findActiveUserById(session.getUserId())
+            .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
+
+        String nextRefreshToken = refreshTokenService.generateOpaqueRefreshToken();
+        String nextRefreshTokenHash = refreshTokenService.hashRefreshToken(nextRefreshToken);
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime refreshExpireTime = now.plusSeconds(authProperties.getRefreshTokenExpireSeconds());
+        boolean updated = authSessionRepository.updateSessionOnRefresh(
+            session.getSessionId(),
+            nextRefreshTokenHash,
+            now,
+            refreshExpireTime
+        );
+        if (!updated) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+        }
+
+        authSessionService.rehydrateSessionBySessionId(session.getSessionId());
+        List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
+        return new RefreshResult(issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, session.getSessionId()), nextRefreshToken);
     }
 
     public void logout(String token) {
@@ -153,6 +168,11 @@ public class AuthService {
         }
         try {
             Claims claims = jwtUtils.parseClaims(token, authProperties.getJwtSecret());
+            String sessionId = claims.get("sid", String.class);
+            if (sessionId == null || sessionId.isBlank()) {
+                throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+            }
+            authSessionService.revokeSession(sessionId, AuthSessionStatus.REVOKED, "logout");
             long expireSeconds = Math.max(1L, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000L);
             tokenBlacklistService.blacklist(token, expireSeconds);
         } catch (JwtException ex) {
@@ -245,5 +265,8 @@ public class AuthService {
     }
 
     public record LoginResult(TokenResponse tokenResponse, String refreshToken) {
+    }
+
+    public record RefreshResult(TokenResponse tokenResponse, String refreshToken) {
     }
 }

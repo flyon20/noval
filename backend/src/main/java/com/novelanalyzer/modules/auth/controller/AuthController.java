@@ -6,12 +6,12 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.web.RequestIpResolver;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
-import com.novelanalyzer.modules.auth.dto.RefreshTokenRequest;
 import com.novelanalyzer.modules.auth.dto.RegisterRequest;
 import com.novelanalyzer.modules.auth.service.AuthService;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
 import com.novelanalyzer.modules.security.repository.IpBlacklistRepository;
 import com.novelanalyzer.modules.security.service.RateLimitService;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -68,20 +68,23 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public Result<TokenResponse> refresh(@RequestBody(required = false) RefreshTokenRequest request,
-                                         HttpServletRequest httpServletRequest) {
+    public Result<TokenResponse> refresh(HttpServletRequest httpServletRequest,
+                                         HttpServletResponse httpServletResponse) {
         assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/refresh");
-        return Result.success(authService.refresh(resolveToken(httpServletRequest, request)));
+        AuthService.RefreshResult refreshResult = authService.refresh(extractRefreshToken(httpServletRequest));
+        writeRefreshCookie(httpServletResponse, refreshResult.refreshToken());
+        return Result.success(refreshResult.tokenResponse());
     }
 
     @PostMapping("/logout")
-    public Result<Void> logout(@RequestBody(required = false) RefreshTokenRequest request,
-                               HttpServletRequest httpServletRequest) {
+    public Result<Void> logout(HttpServletRequest httpServletRequest,
+                               HttpServletResponse httpServletResponse) {
         String bearerToken = extractBearerToken(httpServletRequest);
-        if (request != null && request.getToken() != null && !request.getToken().isBlank() && !request.getToken().equals(bearerToken)) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "token mismatch");
+        if (bearerToken == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
-        authService.logout(resolveToken(httpServletRequest, request));
+        authService.logout(bearerToken);
+        clearRefreshCookie(httpServletResponse);
         return Result.success();
     }
 
@@ -94,19 +97,21 @@ public class AuthController {
         return requestIp;
     }
 
-    private String resolveToken(HttpServletRequest request, RefreshTokenRequest body) {
-        String bearerToken = extractBearerToken(request);
-        if (bearerToken != null && body != null && body.getToken() != null && !body.getToken().isBlank()
-            && !body.getToken().trim().equals(bearerToken)) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "token mismatch");
+    private String extractRefreshToken(HttpServletRequest request) {
+        Cookie[] cookies = request.getCookies();
+        if (cookies == null || cookies.length == 0) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "refresh token is required");
         }
-        if (bearerToken != null) {
-            return bearerToken;
+        for (Cookie cookie : cookies) {
+            if (authProperties.getRefreshCookieName().equals(cookie.getName())) {
+                String value = cookie.getValue();
+                if (value != null && !value.isBlank()) {
+                    return value.trim();
+                }
+                break;
+            }
         }
-        if (body != null && body.getToken() != null && !body.getToken().isBlank()) {
-            return body.getToken().trim();
-        }
-        throw new BusinessException(ResultCode.BAD_REQUEST, "token is required");
+        throw new BusinessException(ResultCode.BAD_REQUEST, "refresh token is required");
     }
 
     private String extractBearerToken(HttpServletRequest request) {
@@ -128,6 +133,17 @@ public class AuthController {
             .path(authProperties.getRefreshCookiePath())
             .sameSite(authProperties.getRefreshCookieSameSite())
             .maxAge(Duration.ofSeconds(authProperties.getRefreshTokenExpireSeconds()))
+            .build();
+        response.addHeader("Set-Cookie", cookie.toString());
+    }
+
+    private void clearRefreshCookie(HttpServletResponse response) {
+        ResponseCookie cookie = ResponseCookie.from(authProperties.getRefreshCookieName(), "")
+            .httpOnly(true)
+            .secure(authProperties.isRefreshCookieSecure())
+            .path(authProperties.getRefreshCookiePath())
+            .sameSite(authProperties.getRefreshCookieSameSite())
+            .maxAge(Duration.ZERO)
             .build();
         response.addHeader("Set-Cookie", cookie.toString());
     }

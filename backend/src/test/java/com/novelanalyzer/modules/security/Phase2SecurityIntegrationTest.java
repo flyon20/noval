@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -93,6 +94,46 @@ class Phase2SecurityIntegrationTest {
         assertThat(setCookie).contains("refresh_token=");
     }
 
+    @Test
+    void shouldRejectProtectedRequestWhenSessionRevoked() throws Exception {
+        String adminToken = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/auth/logout")
+                .header("Authorization", "Bearer " + adminToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(get("/api/secure/user/ping")
+                .with(remoteAddr("127.0.0.2"))
+                .header("Authorization", "Bearer " + adminToken))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value(401));
+    }
+
+    @Test
+    void shouldRejectProtectedRequestWhenSessionKicked() throws Exception {
+        MvcResult firstLogin = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\",\"deviceLabel\":\"Device-1\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+        String firstToken = JsonPath.read(firstLogin.getResponse().getContentAsString(), "$.data.accessToken");
+
+        for (int i = 2; i <= 4; i++) {
+            mockMvc.perform(post("/api/auth/login")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"username\":\"admin\",\"password\":\"admin123\",\"deviceLabel\":\"Device-" + i + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+        }
+
+        mockMvc.perform(get("/api/secure/user/ping")
+                .with(remoteAddr("127.0.0.3"))
+                .header("Authorization", "Bearer " + firstToken))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value(401));
+    }
+
     private String loginAndGetToken(String username, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -101,5 +142,12 @@ class Phase2SecurityIntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
+    }
+
+    private RequestPostProcessor remoteAddr(String ip) {
+        return request -> {
+            request.setRemoteAddr(ip);
+            return request;
+        };
     }
 }
