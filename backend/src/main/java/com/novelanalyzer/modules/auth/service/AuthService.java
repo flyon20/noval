@@ -9,6 +9,7 @@ import com.novelanalyzer.modules.auth.dto.RegisterRequest;
 import com.novelanalyzer.modules.auth.model.AuthUserEntity;
 import com.novelanalyzer.modules.auth.repository.AuthRepository;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
+import com.novelanalyzer.modules.auth.service.AuthSessionService.CreatedSession;
 import com.novelanalyzer.modules.security.service.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -40,18 +41,21 @@ public class AuthService {
     private final JwtUtils jwtUtils;
     private final PasswordEncoder passwordEncoder;
     private final TokenBlacklistService tokenBlacklistService;
+    private final AuthSessionService authSessionService;
     private final AtomicReference<String> cachedEncodedPassword = new AtomicReference<>();
 
     public AuthService(AuthProperties authProperties,
                        AuthRepository authRepository,
                        JwtUtils jwtUtils,
                        PasswordEncoder passwordEncoder,
-                       TokenBlacklistService tokenBlacklistService) {
+                       TokenBlacklistService tokenBlacklistService,
+                       AuthSessionService authSessionService) {
         this.authProperties = authProperties;
         this.authRepository = authRepository;
         this.jwtUtils = jwtUtils;
         this.passwordEncoder = passwordEncoder;
         this.tokenBlacklistService = tokenBlacklistService;
+        this.authSessionService = authSessionService;
     }
 
     public TokenResponse login(LoginRequest request, String loginIp) {
@@ -69,7 +73,8 @@ public class AuthService {
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
             authRepository.updateLastLoginTime(dbUser.getId());
             authRepository.insertLoginLog(dbUser.getId(), dbUser.getUsername(), loginIp, 1, "login success");
-            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes);
+            CreatedSession session = authSessionService.createSession(dbUser.getId(), request.getDeviceLabel(), null, loginIp);
+            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, session.sessionId());
         }
 
         if (authProperties.isDemoEnabled()) {
@@ -97,7 +102,8 @@ public class AuthService {
             authRepository.insertUserRole(userId, defaultRoleId);
             List<String> roleCodes = authRepository.findRoleCodesByUserId(userId);
             authRepository.insertLoginLog(userId, username, registerIp, 1, "register success");
-            return issueToken(userId, username, roleCodes);
+            CreatedSession session = authSessionService.createSession(userId, null, null, registerIp);
+            return issueToken(userId, username, roleCodes, session.sessionId());
         } catch (DuplicateKeyException ex) {
             authRepository.insertLoginLog(null, username, registerIp, 0, USERNAME_EXISTS_MESSAGE);
             throw new BusinessException(ResultCode.BAD_REQUEST, USERNAME_EXISTS_MESSAGE);
@@ -117,6 +123,8 @@ public class AuthService {
             AuthUserEntity dbUser = authRepository.findActiveUserById(userId)
                 .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
+            long expireSeconds = Math.max(1L, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000L);
+            tokenBlacklistService.blacklist(token, expireSeconds);
             return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes);
         } catch (JwtException ex) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
@@ -183,11 +191,14 @@ public class AuthService {
         return passwordEncoder.matches(rawPassword, encodedPassword);
     }
 
-    private TokenResponse issueToken(Long userId, String username, List<String> roleCodes) {
+    private TokenResponse issueToken(Long userId, String username, List<String> roleCodes, String sessionId) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("uid", userId);
         claims.put("username", username);
         claims.put("roles", String.join(",", roleCodes));
+        if (sessionId != null && !sessionId.isBlank()) {
+            claims.put("sid", sessionId);
+        }
         String accessToken = jwtUtils.generateToken(
             username,
             authProperties.getJwtSecret(),
