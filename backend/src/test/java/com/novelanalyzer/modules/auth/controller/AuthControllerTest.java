@@ -1,9 +1,6 @@
 package com.novelanalyzer.modules.auth.controller;
 
 import com.jayway.jsonpath.JsonPath;
-import com.novelanalyzer.modules.auth.model.AuthSessionEntity;
-import com.novelanalyzer.modules.auth.model.AuthSessionStatus;
-import com.novelanalyzer.modules.auth.repository.AuthRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -16,10 +13,10 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.time.LocalDateTime;
-import java.util.Optional;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -48,9 +45,6 @@ class AuthControllerTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    @Autowired
-    private AuthRepository authRepository;
-
     @Test
     void shouldLoginRefreshAndLogoutSuccessfully() throws Exception {
         MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
@@ -64,25 +58,80 @@ class AuthControllerTest {
         String responseBody = loginResult.getResponse().getContentAsString();
         String accessToken = JsonPath.read(responseBody, "$.data.accessToken");
 
-        mockMvc.perform(post("/api/auth/refresh")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"token\":\"" + accessToken + "\"}"))
+        MvcResult refreshResult = mockMvc.perform(post("/api/auth/refresh")
+                .header("Authorization", "Bearer " + accessToken))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
+            .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+            .andReturn();
+
+        String refreshedAccessToken = JsonPath.read(refreshResult.getResponse().getContentAsString(), "$.data.accessToken");
+
+        mockMvc.perform(post("/api/auth/refresh")
+                .header("Authorization", "Bearer " + accessToken))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value(401));
+
+        mockMvc.perform(get("/api/secure/user/ping")
+                .header("Authorization", "Bearer " + accessToken))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value(401));
 
         mockMvc.perform(post("/api/auth/logout")
-                .header("Authorization", "Bearer " + accessToken)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"token\":\"" + accessToken + "\"}"))
+                .header("Authorization", "Bearer " + refreshedAccessToken))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
 
         mockMvc.perform(post("/api/auth/refresh")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"token\":\"" + accessToken + "\"}"))
+                .header("Authorization", "Bearer " + refreshedAccessToken))
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value(401));
+    }
+
+    @Test
+    void shouldKickOldestActiveSessionWhenFourthDeviceLogsIn() throws Exception {
+        for (int i = 1; i <= 4; i++) {
+            mockMvc.perform(post("/api/auth/login")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"username\":\"admin\",\"password\":\"admin123\",\"deviceLabel\":\"Device-" + i + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+        }
+
+        Integer activeCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM sys_user_session WHERE user_id = 1 AND status = 1 AND deleted = 0",
+            Integer.class
+        );
+        Integer kickedCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM sys_user_session WHERE user_id = 1 AND status = 4 AND deleted = 0",
+            Integer.class
+        );
+        List<String> kickedDevices = jdbcTemplate.queryForList(
+            "SELECT device_label FROM sys_user_session WHERE user_id = 1 AND status = 4 AND deleted = 0",
+            String.class
+        );
+
+        assertThat(activeCount).isEqualTo(3);
+        assertThat(kickedCount).isEqualTo(1);
+        assertThat(kickedDevices).containsExactly("Device-1");
+    }
+
+    @Test
+    void shouldIssueRefreshCookieOnLogin() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+            .andReturn();
+
+        String setCookie = loginResult.getResponse().getHeader("Set-Cookie");
+        assertThat(setCookie).isNotBlank();
+        assertThat(setCookie).contains("refresh_token=");
+        assertThat(setCookie).contains("HttpOnly");
+        assertThat(setCookie).contains("Secure");
+        assertThat(setCookie).contains("Path=/api/auth");
     }
 
     @Test
@@ -103,56 +152,6 @@ class AuthControllerTest {
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value(401))
             .andExpect(jsonPath("$.message").value("用户名不存在，请先注册"));
-    }
-
-
-
-    @Test
-    void shouldPersistActiveSessionWhenLoginSucceeds() throws Exception {
-        mockMvc.perform(post("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200));
-
-        Integer sessionIdCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(session_id) FROM sys_user_session WHERE user_id = ?",
-            Integer.class,
-            1L
-        );
-        Integer refreshHashCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(refresh_token_hash) FROM sys_user_session WHERE user_id = ?",
-            Integer.class,
-            1L
-        );
-        Integer status = jdbcTemplate.queryForObject(
-            "SELECT status FROM sys_user_session WHERE user_id = ? ORDER BY id DESC LIMIT 1",
-            Integer.class,
-            1L
-        );
-        LocalDateTime refreshExpireTime = jdbcTemplate.queryForObject(
-            "SELECT refresh_expire_time FROM sys_user_session WHERE user_id = ? ORDER BY id DESC LIMIT 1",
-            LocalDateTime.class,
-            1L
-        );
-
-        assertThat(sessionIdCount).isEqualTo(1);
-        assertThat(refreshHashCount).isEqualTo(1);
-        assertThat(status).isEqualTo(AuthSessionStatus.ACTIVE);
-        assertThat(refreshExpireTime).isNotNull();
-    }
-
-    @Test
-    void shouldSelectOldestActiveSessionForEvictionWhenUserReachesDeviceLimit() {
-        LocalDateTime now = LocalDateTime.now();
-        insertActiveSession(1L, "sid-oldest", "hash-oldest", now.minusHours(3));
-        insertActiveSession(1L, "sid-middle", "hash-middle", now.minusHours(2));
-        insertActiveSession(1L, "sid-newest", "hash-newest", now.minusHours(1));
-
-        Optional<AuthSessionEntity> oldest = authRepository.findOldestActiveSessionForEviction(1L);
-
-        assertThat(oldest).isPresent();
-        assertThat(oldest.map(AuthSessionEntity::getSessionId)).hasValue("sid-oldest");
     }
 
     @Test
@@ -273,6 +272,57 @@ class AuthControllerTest {
     }
 
     @Test
+    void shouldRejectLogoutWhenBodyTokenDoesNotMatchBearerToken() throws Exception {
+        MvcResult adminLoginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+        MvcResult writerLoginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"writer\",\"password\":\"writer123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String adminToken = JsonPath.read(adminLoginResult.getResponse().getContentAsString(), "$.data.accessToken");
+        String writerToken = JsonPath.read(writerLoginResult.getResponse().getContentAsString(), "$.data.accessToken");
+
+        mockMvc.perform(post("/api/auth/logout")
+                .header("Authorization", "Bearer " + adminToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"token\":\"" + writerToken + "\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value(400))
+            .andExpect(jsonPath("$.message").value("token mismatch"));
+    }
+
+    @Test
+    void shouldBlockRefreshFromBlacklistedIpEvenThoughEndpointIsWhitelisted() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .with(remoteAddr("127.0.0.1"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String accessToken = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.data.accessToken");
+        jdbcTemplate.update(
+            "INSERT INTO sys_ip_blacklist (ip_address, reason, expire_time, status) VALUES (?, ?, DATEADD('DAY', 1, CURRENT_TIMESTAMP), 1)",
+            "127.0.0.1",
+            "manual block"
+        );
+
+        mockMvc.perform(post("/api/auth/refresh")
+                .with(remoteAddr("127.0.0.1"))
+                .header("Authorization", "Bearer " + accessToken))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value(403));
+    }
+
+    @Test
     void shouldIgnoreSpoofedForwardedIpWhenProxyNotTrusted() throws Exception {
         mockMvc.perform(post("/api/auth/login")
                 .with(remoteAddr("127.0.0.1"))
@@ -288,25 +338,6 @@ class AuthControllerTest {
         );
 
         org.assertj.core.api.Assertions.assertThat(loginIp).isEqualTo("127.0.0.1");
-    }
-
-
-    private void insertActiveSession(Long userId, String sessionId, String refreshHash, LocalDateTime activeTime) {
-        jdbcTemplate.update(
-            """
-            INSERT INTO sys_user_session (
-                user_id, session_id, refresh_token_hash, status, last_active_time,
-                refresh_expire_time, create_time, update_time, deleted, version
-            )
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0)
-            """,
-            userId,
-            sessionId,
-            refreshHash,
-            AuthSessionStatus.ACTIVE,
-            activeTime,
-            activeTime.plusDays(7)
-        );
     }
 
     private RequestPostProcessor remoteAddr(String ip) {

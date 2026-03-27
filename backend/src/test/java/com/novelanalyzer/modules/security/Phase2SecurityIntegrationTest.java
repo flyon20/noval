@@ -78,6 +78,21 @@ class Phase2SecurityIntegrationTest {
         assertThat(count).isGreaterThan(0);
     }
 
+    @Test
+    void shouldSetRefreshCookieWhenLoginSucceeds() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+            .andReturn();
+
+        String setCookie = result.getResponse().getHeader("Set-Cookie");
+        assertThat(setCookie).isNotBlank();
+        assertThat(setCookie).contains("refresh_token=");
+    }
+
     private String loginAndGetToken(String username, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)

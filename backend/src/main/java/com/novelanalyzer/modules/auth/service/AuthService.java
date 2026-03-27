@@ -6,8 +6,10 @@ import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
 import com.novelanalyzer.modules.auth.dto.RegisterRequest;
+import com.novelanalyzer.modules.auth.model.AuthSessionStatus;
 import com.novelanalyzer.modules.auth.model.AuthUserEntity;
 import com.novelanalyzer.modules.auth.repository.AuthRepository;
+import com.novelanalyzer.modules.auth.repository.AuthSessionRepository;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
 import com.novelanalyzer.modules.auth.service.AuthSessionService.CreatedSession;
 import com.novelanalyzer.modules.security.service.TokenBlacklistService;
@@ -35,6 +37,7 @@ public class AuthService {
     private static final Pattern UPPERCASE_PATTERN = Pattern.compile(".*[A-Z].*");
     private static final Pattern LOWERCASE_PATTERN = Pattern.compile(".*[a-z].*");
     private static final Pattern DIGIT_PATTERN = Pattern.compile(".*\\d.*");
+    private static final String KICKED_BY_NEW_LOGIN_REASON = "kicked by new login";
 
     private final AuthProperties authProperties;
     private final AuthRepository authRepository;
@@ -42,6 +45,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final TokenBlacklistService tokenBlacklistService;
     private final AuthSessionService authSessionService;
+    private final AuthSessionRepository authSessionRepository;
     private final AtomicReference<String> cachedEncodedPassword = new AtomicReference<>();
 
     public AuthService(AuthProperties authProperties,
@@ -49,16 +53,18 @@ public class AuthService {
                        JwtUtils jwtUtils,
                        PasswordEncoder passwordEncoder,
                        TokenBlacklistService tokenBlacklistService,
-                       AuthSessionService authSessionService) {
+                       AuthSessionService authSessionService,
+                       AuthSessionRepository authSessionRepository) {
         this.authProperties = authProperties;
         this.authRepository = authRepository;
         this.jwtUtils = jwtUtils;
         this.passwordEncoder = passwordEncoder;
         this.tokenBlacklistService = tokenBlacklistService;
         this.authSessionService = authSessionService;
+        this.authSessionRepository = authSessionRepository;
     }
 
-    public TokenResponse login(LoginRequest request, String loginIp) {
+    public LoginResult login(LoginRequest request, String loginIp) {
         String username = normalizeUsername(request.getUsername());
         AuthUserEntity dbUser = authRepository.findUserByUsername(username).orElse(null);
         if (dbUser != null) {
@@ -73,13 +79,17 @@ public class AuthService {
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
             authRepository.updateLastLoginTime(dbUser.getId());
             authRepository.insertLoginLog(dbUser.getId(), dbUser.getUsername(), loginIp, 1, "login success");
+            enforceDeviceLimit(dbUser.getId());
             CreatedSession session = authSessionService.createSession(dbUser.getId(), request.getDeviceLabel(), null, loginIp);
-            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, session.sessionId());
+            return new LoginResult(
+                issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, session.sessionId()),
+                session.refreshToken()
+            );
         }
 
         if (authProperties.isDemoEnabled()) {
             validateDemoUser(username, request.getPassword(), loginIp);
-            return issueToken(0L, username, List.of("ADMIN"), null);
+            return new LoginResult(issueToken(0L, username, List.of("ADMIN"), null), null);
         }
 
         authRepository.insertLoginLog(null, username, loginIp, 0, USERNAME_NOT_FOUND_MESSAGE);
@@ -191,6 +201,21 @@ public class AuthService {
         return passwordEncoder.matches(rawPassword, encodedPassword);
     }
 
+    private void enforceDeviceLimit(Long userId) {
+        int maxDevices = Math.max(1, authProperties.getSessionMaxDevices());
+        int activeSessionCount = authSessionRepository.findActiveSessionsByUserId(userId).size();
+        if (activeSessionCount < maxDevices) {
+            return;
+        }
+        authSessionService.findOldestActiveSessionForUser(userId).ifPresent(session ->
+            authSessionService.revokeSession(
+                session.getSessionId(),
+                AuthSessionStatus.KICKED,
+                KICKED_BY_NEW_LOGIN_REASON
+            )
+        );
+    }
+
     private TokenResponse issueToken(Long userId, String username, List<String> roleCodes, String sessionId) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("uid", userId);
@@ -210,5 +235,8 @@ public class AuthService {
         response.setTokenType("Bearer");
         response.setExpiresIn(authProperties.getAccessTokenExpireSeconds());
         return response;
+    }
+
+    public record LoginResult(TokenResponse tokenResponse, String refreshToken) {
     }
 }
