@@ -18,6 +18,8 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -89,7 +91,8 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/auth/refresh")
                 .cookie(refreshCookie(firstRefreshToken)))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value(401));
+            .andExpect(jsonPath("$.code").value(401))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
 
         MvcResult logoutResult = mockMvc.perform(post("/api/auth/logout")
                 .header("Authorization", "Bearer " + refreshedAccessToken))

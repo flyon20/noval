@@ -175,7 +175,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
     private void validateSession(Claims claims) {
         Long userId = claims.get("uid", Long.class);
         String sessionId = claims.get("sid", String.class);
-        if (userId == null || userId <= 0 || sessionId == null || sessionId.isBlank()) {
+        if (userId == null || sessionId == null || sessionId.isBlank()) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
         AuthSessionEntity session = authSessionService.findActiveSessionBySessionId(sessionId)

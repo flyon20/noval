@@ -71,9 +71,16 @@ public class AuthController {
     public Result<TokenResponse> refresh(HttpServletRequest httpServletRequest,
                                          HttpServletResponse httpServletResponse) {
         assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/refresh");
-        AuthService.RefreshResult refreshResult = authService.refresh(extractRefreshToken(httpServletRequest));
-        writeRefreshCookie(httpServletResponse, refreshResult.refreshToken());
-        return Result.success(refreshResult.tokenResponse());
+        try {
+            AuthService.RefreshResult refreshResult = authService.refresh(extractRefreshToken(httpServletRequest));
+            writeRefreshCookie(httpServletResponse, refreshResult.refreshToken());
+            return Result.success(refreshResult.tokenResponse());
+        } catch (BusinessException ex) {
+            if (ex.getResultCode() == ResultCode.UNAUTHORIZED || ex.getResultCode() == ResultCode.BAD_REQUEST) {
+                clearRefreshCookie(httpServletResponse);
+            }
+            throw ex;
+        }
     }
 
     @PostMapping("/logout")

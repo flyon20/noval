@@ -97,7 +97,8 @@ public class AuthService {
 
         if (authProperties.isDemoEnabled()) {
             validateDemoUser(username, request.getPassword(), loginIp);
-            return new LoginResult(issueToken(0L, username, List.of("ADMIN"), null), null);
+            CreatedSession session = authSessionService.createSession(0L, request.getDeviceLabel(), null, loginIp);
+            return new LoginResult(issueToken(0L, username, List.of("ADMIN"), session.sessionId()), session.refreshToken());
         }
 
         authRepository.insertLoginLog(null, username, loginIp, 0, USERNAME_NOT_FOUND_MESSAGE);
@@ -140,9 +141,20 @@ public class AuthService {
         if (!refreshTokenHash.equals(session.getRefreshTokenHash())) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
-        AuthUserEntity dbUser = authRepository.findActiveUserById(session.getUserId())
-            .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
-
+        AuthUserEntity dbUser = null;
+        String username;
+        List<String> roleCodes;
+        if (session.getUserId() != null && session.getUserId() > 0) {
+            dbUser = authRepository.findActiveUserById(session.getUserId())
+                .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
+            username = dbUser.getUsername();
+            roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
+        } else if (authProperties.isDemoEnabled()) {
+            username = authProperties.getDemoUsername();
+            roleCodes = List.of("ADMIN");
+        } else {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+        }
         String nextRefreshToken = refreshTokenService.generateOpaqueRefreshToken();
         String nextRefreshTokenHash = refreshTokenService.hashRefreshToken(nextRefreshToken);
         LocalDateTime now = LocalDateTime.now();
@@ -159,8 +171,8 @@ public class AuthService {
         }
 
         authSessionService.rehydrateSessionBySessionId(session.getSessionId());
-        List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
-        return new RefreshResult(issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, session.getSessionId()), nextRefreshToken);
+        Long userId = dbUser != null ? dbUser.getId() : 0L;
+        return new RefreshResult(issueToken(userId, username, roleCodes, session.getSessionId()), nextRefreshToken);
     }
 
     public void logout(String token) {
