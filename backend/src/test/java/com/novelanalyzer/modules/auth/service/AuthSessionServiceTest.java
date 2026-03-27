@@ -22,9 +22,13 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,10 +64,10 @@ class AuthSessionServiceTest {
         AuthProperties authProperties = new AuthProperties();
         authProperties.setRefreshTokenExpireSeconds(604800L);
 
-        doReturn(hashOperations).when(stringRedisTemplate).opsForHash();
-        doReturn(valueOperations).when(stringRedisTemplate).opsForValue();
-        doReturn(zSetOperations).when(stringRedisTemplate).opsForZSet();
-        doReturn(setOperations).when(stringRedisTemplate).opsForSet();
+        lenient().doReturn(hashOperations).when(stringRedisTemplate).opsForHash();
+        lenient().doReturn(valueOperations).when(stringRedisTemplate).opsForValue();
+        lenient().doReturn(zSetOperations).when(stringRedisTemplate).opsForZSet();
+        lenient().doReturn(setOperations).when(stringRedisTemplate).opsForSet();
 
         authSessionService = new AuthSessionService(
             authSessionRepository,
@@ -100,7 +104,7 @@ class AuthSessionServiceTest {
 
         verify(hashOperations).putAll(anyString(), any(Map.class));
         verify(valueOperations).set(anyString(), anyString(), anyLong(), any());
-        verify(zSetOperations).add(anyString(), anyString(), anyLong());
+        verify(zSetOperations, atLeastOnce()).add(anyString(), anyString(), anyDouble());
     }
 
     @Test
@@ -114,7 +118,7 @@ class AuthSessionServiceTest {
 
         when(hashOperations.entries("auth:session:session-id")).thenReturn(Map.of());
         when(authSessionRepository.findSessionBySessionId("session-id")).thenReturn(Optional.of(persisted));
-        when(authSessionRepository.revokeSession("session-id", AuthSessionStatus.REVOKED, "logout", any(LocalDateTime.class)))
+        when(authSessionRepository.revokeSession(eq("session-id"), eq(AuthSessionStatus.REVOKED), eq("logout"), any(LocalDateTime.class)))
             .thenReturn(true);
 
         boolean revoked = authSessionService.revokeSession("session-id", AuthSessionStatus.REVOKED, "logout");
@@ -148,8 +152,26 @@ class AuthSessionServiceTest {
         authSessionService.updateActivity("session-id", LocalDateTime.now());
 
         verify(hashOperations).put(anyString(), anyString(), anyString());
-        verify(zSetOperations).add(anyString(), anyString(), anyLong());
+        verify(zSetOperations, atLeastOnce()).add(anyString(), anyString(), anyDouble());
         verify(setOperations).add("auth:session:dirty", "session-id");
         verify(authSessionRepository, never()).updateLastActiveTime(anyString(), any(LocalDateTime.class));
+    }
+
+    @Test
+    void shouldKeepDirtyMarkerWhenNewerActivityArrivesDuringFlush() {
+        LocalDateTime flushedTime = LocalDateTime.now().minusMinutes(1);
+        LocalDateTime newerTime = flushedTime.plusSeconds(30);
+
+        when(setOperations.members("auth:session:dirty")).thenReturn(java.util.Set.of("session-id"));
+        when(hashOperations.get("auth:session:session-id", "lastActiveTime"))
+            .thenReturn(flushedTime.toString())
+            .thenReturn(newerTime.toString());
+        when(authSessionRepository.updateLastActiveTime("session-id", flushedTime)).thenReturn(true);
+
+        int flushed = authSessionService.flushDirtySessions();
+
+        assertThat(flushed).isEqualTo(1);
+        verify(authSessionRepository).updateLastActiveTime("session-id", flushedTime);
+        verify(setOperations, never()).remove("auth:session:dirty", "session-id");
     }
 }

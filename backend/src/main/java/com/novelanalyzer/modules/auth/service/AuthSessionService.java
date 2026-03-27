@@ -237,7 +237,11 @@ public class AuthSessionService {
 
             boolean updated = authSessionRepository.updateLastActiveTime(sessionId, activeTime);
             if (updated) {
-                stringRedisTemplate.opsForSet().remove(DIRTY_SESSION_KEY, sessionId);
+                Object latestActiveTimeRaw = stringRedisTemplate.opsForHash().get(sessionKey, "lastActiveTime");
+                LocalDateTime latestActiveTime = parseTime(latestActiveTimeRaw);
+                if (activeTime.equals(latestActiveTime)) {
+                    stringRedisTemplate.opsForSet().remove(DIRTY_SESSION_KEY, sessionId);
+                }
                 return true;
             }
             return false;
