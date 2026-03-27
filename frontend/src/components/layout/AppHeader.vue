@@ -124,6 +124,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  width: 100%;
+  max-width: 100%;
   padding: 1.2rem 1.6rem;
   border-bottom: 1px solid var(--color-border);
   background: rgba(255, 255, 255, 0.72);
@@ -145,6 +147,7 @@ onBeforeUnmount(() => {
   gap: 0.75rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+  min-width: 0;
 }
 
 .app-header__title {
@@ -208,7 +211,8 @@ onBeforeUnmount(() => {
     top: 0;
     left: 0;
     right: 0;
-    width: 100%;
+    width: auto;
+    max-width: none;
     z-index: 40;
     border-radius: 0;
     border-bottom-color: rgba(255, 255, 255, 0.16);
@@ -218,6 +222,10 @@ onBeforeUnmount(() => {
 
   .app-header__title {
     font-size: 1.05rem;
+    max-width: 58vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Hide desktop actions, show mobile compact actions */

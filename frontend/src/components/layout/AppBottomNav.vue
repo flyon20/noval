@@ -50,6 +50,7 @@ function getIcon(name: string) {
     0 20px 44px rgba(15, 23, 42, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
   z-index: 45;
+  overflow: hidden;
 }
 
 .app-bottom-nav__link {

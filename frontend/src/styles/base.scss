@@ -4,6 +4,7 @@ html,
 body,
 #app {
   min-height: 100%;
+  max-width: 100%;
 }
 
 html {
@@ -12,6 +13,7 @@ html {
     radial-gradient(circle at 85% 0%, rgba(255, 255, 255, 0.2), transparent 35%),
     linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
   color: var(--color-text);
+  overflow-x: hidden;
 }
 
 body {
@@ -20,10 +22,12 @@ body {
   color: var(--color-text);
   font-family: var(--font-body);
   transition: background 0.25s ease, color 0.25s ease;
+  overflow-x: hidden;
 }
 
 #app {
   background: var(--color-bg);
+  overflow-x: clip;
 }
 
 * {

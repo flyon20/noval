@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { mount } from '@vue/test-utils';
 import AnalysisContextBar from '@/components/analysis/AnalysisContextBar.vue';
 import AnalysisEmptyState from '@/components/analysis/AnalysisEmptyState.vue';
@@ -103,6 +105,17 @@ test('also strips preserved progress markers when they use a space separator', (
 });
 
 describe('AnalysisContextBar', () => {
+  test('uses the refreshed theme tokens instead of the legacy beige surface palette', () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../AnalysisContextBar.vue'),
+      'utf-8',
+    );
+
+    expect(source).toContain('var(--color-surface)');
+    expect(source).toContain('var(--color-glass)');
+    expect(source).not.toContain('rgba(242, 236, 226, 0.98)');
+  });
+
   test('falls back when metadata is missing', () => {
     const wrapper = mount(AnalysisContextBar);
 

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import AppBottomNav from '../AppBottomNav.vue';
@@ -10,6 +12,12 @@ const routes = [
 ];
 
 describe('AppBottomNav', () => {
+  test('avoids viewport-width sizing that can trigger horizontal overflow in mobile emulation', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppBottomNav.vue'), 'utf-8');
+
+    expect(source).not.toMatch(/100vw/);
+  });
+
   test('renders four nav items and highlights active path', async () => {
     const router = createRouter({
       history: createMemoryHistory(),

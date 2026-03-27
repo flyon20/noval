@@ -38,6 +38,7 @@ const emit = defineEmits<{
   grid-template-columns: minmax(290px, 330px) 1fr;
   gap: 1.5rem;
   min-height: 100vh;
+  max-width: 100%;
   padding: 1.35rem;
   background:
     radial-gradient(circle at top left, rgba(199, 146, 92, 0.15), transparent 24%),
@@ -62,7 +63,6 @@ const emit = defineEmits<{
   border-radius: var(--radius-xl);
   background: var(--color-surface);
   box-shadow: var(--shadow-soft);
-  backdrop-filter: blur(10px);
 }
 
 .app-shell__sidebar {
@@ -70,17 +70,23 @@ const emit = defineEmits<{
   top: 1.35rem;
   align-self: start;
   overflow: hidden;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .app-shell__surface {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  max-width: 100%;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .app-shell__content {
   padding: 1.5rem;
   flex: 1;
+  min-width: 0;
 }
 
 /* Tablet breakpoint */
@@ -104,6 +110,7 @@ const emit = defineEmits<{
     padding: 0;
     min-height: 100dvh;
     background: var(--color-bg);
+    overflow-x: clip;
   }
 
   .app-shell__backdrop {
@@ -129,6 +136,9 @@ const emit = defineEmits<{
       calc(0.875rem + 56px)
       0.875rem
       calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 1.5rem);
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
   }
 }
 </style>
