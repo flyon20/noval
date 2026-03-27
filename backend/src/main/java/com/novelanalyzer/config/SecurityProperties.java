@@ -25,7 +25,8 @@ public class SecurityProperties {
         "/api/system/health",
         "/api/auth/login",
         "/api/auth/register",
-        "/api/auth/refresh"
+        "/api/auth/refresh",
+        "/api/auth/logout"
     ));
     private List<String> trustedProxyIps = new ArrayList<>();
 

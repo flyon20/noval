@@ -86,11 +86,11 @@ public class AuthController {
     @PostMapping("/logout")
     public Result<Void> logout(HttpServletRequest httpServletRequest,
                                HttpServletResponse httpServletResponse) {
-        String bearerToken = extractBearerToken(httpServletRequest);
-        if (bearerToken == null) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
-        }
-        authService.logout(bearerToken);
+        assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/logout");
+        authService.logout(
+            extractBearerToken(httpServletRequest),
+            extractOptionalRefreshToken(httpServletRequest)
+        );
         clearRefreshCookie(httpServletResponse);
         return Result.success();
     }
@@ -105,9 +105,17 @@ public class AuthController {
     }
 
     private String extractRefreshToken(HttpServletRequest request) {
+        String refreshToken = extractOptionalRefreshToken(request);
+        if (refreshToken != null) {
+            return refreshToken;
+        }
+        throw new BusinessException(ResultCode.BAD_REQUEST, "refresh token is required");
+    }
+
+    private String extractOptionalRefreshToken(HttpServletRequest request) {
         Cookie[] cookies = request.getCookies();
         if (cookies == null || cookies.length == 0) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "refresh token is required");
+            return null;
         }
         for (Cookie cookie : cookies) {
             if (authProperties.getRefreshCookieName().equals(cookie.getName())) {
@@ -115,10 +123,10 @@ public class AuthController {
                 if (value != null && !value.isBlank()) {
                     return value.trim();
                 }
-                break;
+                return null;
             }
         }
-        throw new BusinessException(ResultCode.BAD_REQUEST, "refresh token is required");
+        return null;
     }
 
     private String extractBearerToken(HttpServletRequest request) {

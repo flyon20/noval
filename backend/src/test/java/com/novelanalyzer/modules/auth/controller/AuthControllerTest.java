@@ -116,6 +116,30 @@ class AuthControllerTest {
     }
 
     @Test
+    void shouldAllowLogoutUsingRefreshCookieWhenAccessTokenIsUnavailable() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String refreshToken = extractRefreshToken(loginResult);
+
+        mockMvc.perform(post("/api/auth/logout")
+                .cookie(refreshCookie(refreshToken)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
+
+        mockMvc.perform(post("/api/auth/refresh")
+                .cookie(refreshCookie(refreshToken)))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value(401))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
+    }
+
+    @Test
     void shouldKickOldestActiveSessionWhenFourthDeviceLogsIn() throws Exception {
         for (int i = 1; i <= 4; i++) {
             mockMvc.perform(post("/api/auth/login")

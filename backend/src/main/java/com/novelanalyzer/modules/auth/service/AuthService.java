@@ -175,22 +175,34 @@ public class AuthService {
         return new RefreshResult(issueToken(userId, username, roleCodes, session.getSessionId()), nextRefreshToken);
     }
 
-    public void logout(String token) {
-        if (token == null || token.isBlank()) {
-            throw new BusinessException(ResultCode.BAD_REQUEST, "token is required");
-        }
-        try {
-            Claims claims = jwtUtils.parseClaims(token, authProperties.getJwtSecret());
-            String sessionId = claims.get("sid", String.class);
-            if (sessionId == null || sessionId.isBlank()) {
-                throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+    public void logout(String accessToken, String refreshToken) {
+        String sessionId = null;
+
+        if (accessToken != null && !accessToken.isBlank()) {
+            try {
+                Claims claims = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret());
+                sessionId = claims.get("sid", String.class);
+                if (sessionId != null && !sessionId.isBlank()) {
+                    long expireSeconds = Math.max(1L, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000L);
+                    tokenBlacklistService.blacklist(accessToken, expireSeconds);
+                }
+            } catch (JwtException ignored) {
+                // Fall back to refresh-token-based logout when access token is expired or invalid.
             }
-            authSessionService.revokeSession(sessionId, AuthSessionStatus.REVOKED, "logout");
-            long expireSeconds = Math.max(1L, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000L);
-            tokenBlacklistService.blacklist(token, expireSeconds);
-        } catch (JwtException ex) {
+        }
+
+        if ((sessionId == null || sessionId.isBlank()) && refreshToken != null && !refreshToken.isBlank()) {
+            String refreshTokenHash = refreshTokenService.hashRefreshToken(refreshToken);
+            sessionId = authSessionService.findActiveSessionByRefreshTokenHash(refreshTokenHash)
+                .map(session -> session.getSessionId())
+                .orElse(null);
+        }
+
+        if (sessionId == null || sessionId.isBlank()) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
+
+        authSessionService.revokeSession(sessionId, AuthSessionStatus.REVOKED, "logout");
     }
 
     private void validateDemoUser(String username, String password, String loginIp) {

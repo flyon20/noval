@@ -77,7 +77,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String requestPath = request.getRequestURI();
-        if (isWhitelisted(requestPath) || !isProtectedPath(requestPath)) {
+        if (requestPath.startsWith("/api/auth/logout") || isWhitelisted(requestPath) || !isProtectedPath(requestPath)) {
             filterChain.doFilter(request, response);
             return;
         }
