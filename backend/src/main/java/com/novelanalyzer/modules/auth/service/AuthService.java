@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
@@ -127,6 +128,7 @@ public class AuthService {
         try {
             Claims claims = jwtUtils.parseClaims(token, authProperties.getJwtSecret());
             Long userId = claims.get("uid", Long.class);
+            String sessionId = claims.get("sid", String.class);
             if (userId == null || userId <= 0) {
                 throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
             }
@@ -135,7 +137,7 @@ public class AuthService {
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
             long expireSeconds = Math.max(1L, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000L);
             tokenBlacklistService.blacklist(token, expireSeconds);
-            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, null);
+            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, sessionId);
         } catch (JwtException ex) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
@@ -221,6 +223,7 @@ public class AuthService {
         claims.put("uid", userId);
         claims.put("username", username);
         claims.put("roles", String.join(",", roleCodes));
+        claims.put("jti", UUID.randomUUID().toString());
         if (sessionId != null && !sessionId.isBlank()) {
             claims.put("sid", sessionId);
         }

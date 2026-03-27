@@ -1,6 +1,8 @@
 package com.novelanalyzer.modules.auth.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.novelanalyzer.common.utils.JwtUtils;
+import com.novelanalyzer.config.AuthProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -45,6 +47,12 @@ class AuthControllerTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private JwtUtils jwtUtils;
+
+    @Autowired
+    private AuthProperties authProperties;
+
     @Test
     void shouldLoginRefreshAndLogoutSuccessfully() throws Exception {
         MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
@@ -57,6 +65,7 @@ class AuthControllerTest {
 
         String responseBody = loginResult.getResponse().getContentAsString();
         String accessToken = JsonPath.read(responseBody, "$.data.accessToken");
+        String originalSessionId = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret()).get("sid", String.class);
 
         MvcResult refreshResult = mockMvc.perform(post("/api/auth/refresh")
                 .header("Authorization", "Bearer " + accessToken))
@@ -66,6 +75,10 @@ class AuthControllerTest {
             .andReturn();
 
         String refreshedAccessToken = JsonPath.read(refreshResult.getResponse().getContentAsString(), "$.data.accessToken");
+        String refreshedSessionId = jwtUtils.parseClaims(refreshedAccessToken, authProperties.getJwtSecret()).get("sid", String.class);
+
+        assertThat(originalSessionId).isNotBlank();
+        assertThat(refreshedSessionId).isEqualTo(originalSessionId);
 
         mockMvc.perform(post("/api/auth/refresh")
                 .header("Authorization", "Bearer " + accessToken))
