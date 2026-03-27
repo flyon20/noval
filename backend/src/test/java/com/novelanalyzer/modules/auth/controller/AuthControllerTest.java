@@ -3,6 +3,7 @@ package com.novelanalyzer.modules.auth.controller;
 import com.jayway.jsonpath.JsonPath;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -94,15 +95,22 @@ class AuthControllerTest {
             .andExpect(jsonPath("$.code").value(401))
             .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
 
+        mockMvc.perform(post("/api/auth/logout")
+                .cookie(refreshCookie(firstRefreshToken)))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value(401))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
+
         MvcResult logoutResult = mockMvc.perform(post("/api/auth/logout")
                 .header("Authorization", "Bearer " + refreshedAccessToken))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
 
-        String logoutCookie = logoutResult.getResponse().getHeader("Set-Cookie");
-        assertThat(logoutCookie).contains(REFRESH_COOKIE_NAME + "=");
-        assertThat(logoutCookie).contains("Max-Age=0");
+        Cookie logoutCookie = logoutResult.getResponse().getCookie(REFRESH_COOKIE_NAME);
+        assertThat(logoutCookie).isNotNull();
+        assertThat(logoutCookie.getMaxAge()).isZero();
+        assertThat(logoutCookie.isHttpOnly()).isTrue();
 
         mockMvc.perform(post("/api/auth/refresh")
                 .cookie(refreshCookie(secondRefreshToken)))

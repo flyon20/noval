@@ -87,12 +87,19 @@ public class AuthController {
     public Result<Void> logout(HttpServletRequest httpServletRequest,
                                HttpServletResponse httpServletResponse) {
         assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/logout");
-        authService.logout(
-            extractBearerToken(httpServletRequest),
-            extractOptionalRefreshToken(httpServletRequest)
-        );
-        clearRefreshCookie(httpServletResponse);
-        return Result.success();
+        try {
+            authService.logout(
+                extractBearerToken(httpServletRequest),
+                extractOptionalRefreshToken(httpServletRequest)
+            );
+            clearRefreshCookie(httpServletResponse);
+            return Result.success();
+        } catch (BusinessException ex) {
+            if (ex.getResultCode() == ResultCode.UNAUTHORIZED || ex.getResultCode() == ResultCode.BAD_REQUEST) {
+                clearRefreshCookie(httpServletResponse);
+            }
+            throw ex;
+        }
     }
 
     private String assertPublicAuthRequestAllowed(HttpServletRequest httpServletRequest, String path) {

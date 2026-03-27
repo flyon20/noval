@@ -170,6 +170,7 @@ public class AuthService {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
 
+        authSessionService.removeRefreshTokenMapping(refreshTokenHash);
         authSessionService.rehydrateSessionBySessionId(session.getSessionId());
         Long userId = dbUser != null ? dbUser.getId() : 0L;
         return new RefreshResult(issueToken(userId, username, roleCodes, session.getSessionId()), nextRefreshToken);
@@ -194,6 +195,7 @@ public class AuthService {
         if ((sessionId == null || sessionId.isBlank()) && refreshToken != null && !refreshToken.isBlank()) {
             String refreshTokenHash = refreshTokenService.hashRefreshToken(refreshToken);
             sessionId = authSessionService.findActiveSessionByRefreshTokenHash(refreshTokenHash)
+                .filter(session -> refreshTokenHash.equals(session.getRefreshTokenHash()))
                 .map(session -> session.getSessionId())
                 .orElse(null);
         }

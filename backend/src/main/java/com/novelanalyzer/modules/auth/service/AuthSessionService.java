@@ -136,6 +136,17 @@ public class AuthSessionService {
         return persisted;
     }
 
+    public void removeRefreshTokenMapping(String refreshTokenHash) {
+        if (refreshTokenHash == null || refreshTokenHash.isBlank()) {
+            return;
+        }
+        try {
+            stringRedisTemplate.delete(buildRefreshKey(refreshTokenHash));
+        } catch (Exception ignored) {
+            // Ignore cache delete failures.
+        }
+    }
+
     public Optional<AuthSessionEntity> rehydrateSessionByRefreshHash(String refreshTokenHash) {
         Optional<AuthSessionEntity> persisted = authSessionRepository.findActiveSessionByRefreshTokenHash(refreshTokenHash);
         persisted.ifPresent(this::cacheSessionState);
