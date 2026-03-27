@@ -1,5 +1,6 @@
 import ElementPlus from 'element-plus';
 import { ElMessage } from 'element-plus';
+import { nextTick } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import TrendView from '../TrendView.vue';
@@ -646,6 +647,103 @@ describe('TrendView', () => {
     expect(wrapper.text()).toContain('玄幻热升');
   });
 
+
+  test('switching board clears the previous board result immediately before the new visual payload returns', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    let resolveNextVisual:
+      | ((value: {
+        data: {
+          code: number;
+          message: string;
+          data: Record<string, unknown>;
+          timestamp: number;
+          traceId: string;
+        };
+      }) => void)
+      | null = null;
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(crawlerApi.savePreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference('fantasy-rise', 'male-new', 40),
+        timestamp: 1,
+        traceId: 'trace-save-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual)
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: createVisualPayload({
+            boardSummary: 'old board summary',
+            detailContent: 'old board detail',
+            trendPreview: 'old board preview',
+          }),
+          timestamp: 1,
+          traceId: 'trace-visual-1',
+        },
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveNextVisual = resolve as typeof resolveNextVisual;
+      }) as never);
+
+    const wrapper = await mountTrendView();
+
+    expect(wrapper.text()).toContain('old board summary');
+
+    const [, boardSelect] = getTrendSelects(wrapper);
+    boardSelect.vm.$emit('update:modelValue', 'fantasy-rise');
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="trend-result-preview"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="analysis-result-card"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('old board summary');
+    expect(analysisApi.streamTrend).not.toHaveBeenCalled();
+
+    resolveNextVisual?.({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload({
+          boardCode: 'fantasy-rise',
+          boardName: '??????',
+          boardSummary: 'new board summary',
+          detailContent: 'new board detail',
+          trendPreview: 'new board preview',
+        }),
+        timestamp: 1,
+        traceId: 'trace-visual-2',
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('new board summary');
+  });
+
   test('switching channel from select loads the first board without auto rerunning analysis', async () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
@@ -830,6 +928,61 @@ describe('TrendView', () => {
     expect(wrapper.get('[data-test="analysis-result-card"]').text()).toContain('都市脑洞持续领跑');
     expect(wrapper.get('[data-test="analysis-result-card"]').text()).not.toContain('"analysisType"');
     expect(wrapper.get('[data-test="analysis-result-card"]').text()).not.toContain('"summary"');
+
+    wrapper.unmount();
+  });
+
+
+  test('rerunning trend hides stale stored summary while the new stream is still pending', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload({
+          boardSummary: 'stale board summary',
+          detailContent: 'stale board detail',
+          trendPreview: 'stale board preview',
+        }),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createPendingStreamTask(`{
+  "analysisType": "theme",
+  "boardSummary": "????????"
+}`) as never);
+
+    const wrapper = await mountTrendView();
+
+    expect(wrapper.text()).toContain('stale board summary');
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain('stale board summary');
+    expect(wrapper.get('[data-test="analysis-result-card"]').text()).toContain('????????');
 
     wrapper.unmount();
   });

@@ -289,12 +289,8 @@ function resolveTrendSelection(
   return resolveInitialSelection(preference);
 }
 
-function ensureVisualShell() {
-  if (visualData.value) {
-    return visualData.value;
-  }
-
-  visualData.value = {
+function createVisualShell(overrides: Partial<VisualData> = {}): VisualData {
+  return {
     platform: PLATFORM,
     channelCode: selectedChannelCode.value,
     boardCode: selectedBoardCode.value,
@@ -312,9 +308,29 @@ function ensureVisualShell() {
     snapshotComparisons: [],
     trendPreview: '',
     detailContent: '',
+    ...overrides,
   };
+}
+
+function ensureVisualShell() {
+  if (visualData.value) {
+    return visualData.value;
+  }
+
+  visualData.value = createVisualShell();
 
   return visualData.value;
+}
+
+function clearVisualResultState(options: { preserveSnapshots?: boolean } = {}) {
+  const current = visualData.value;
+
+  visualData.value = createVisualShell({
+    boardName: activeBoard.value?.boardName ?? current?.boardName ?? '',
+    sourceSnapshotCount: options.preserveSnapshots ? current?.sourceSnapshotCount ?? 0 : 0,
+    historyAnalysisCount: options.preserveSnapshots ? current?.historyAnalysisCount ?? 0 : 0,
+    latestSnapshots: options.preserveSnapshots ? current?.latestSnapshots ?? [] : [],
+  });
 }
 
 function mergeVisualFromResult(result: TrendAnalysisResult) {
@@ -547,6 +563,7 @@ async function handleContextSelect(payload: { channelCode: string; boardCode: st
     channelCode: payload.channelCode,
     boardCode: payload.boardCode,
   });
+  clearVisualResultState();
   await persistTrendContext(payload.channelCode, payload.boardCode);
   await maybeSavePreference(payload.channelCode, payload.boardCode);
   await loadVisualData();
@@ -558,6 +575,7 @@ function isUserAbortedTrendRun(error: unknown) {
 
 async function handleRerun() {
   try {
+    clearVisualResultState({ preserveSnapshots: true });
     const result = await trend.rerunTrend();
     if (result) {
       mergeVisualFromResult(result);
