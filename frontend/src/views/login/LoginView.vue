@@ -129,6 +129,24 @@ function resolveAuthErrorMessage(message: string | undefined, mode: AuthMode) {
   return mode === 'register' ? '注册失败，请检查输入信息后重试' : '登录失败，请检查用户名和密码';
 }
 
+function getDeviceLabel() {
+  if (typeof navigator === 'undefined') {
+    return undefined;
+  }
+
+  const platform = navigator.platform?.trim() || 'Unknown OS';
+  const userAgent = navigator.userAgent?.trim();
+
+  if (!userAgent) {
+    return platform;
+  }
+
+  const browserMatch = userAgent.match(/(Edg|Chrome|Firefox|Safari)\/[\d.]+/);
+  const browserLabel = browserMatch ? browserMatch[0] : 'Browser';
+
+  return `${browserLabel} on ${platform}`;
+}
+
 async function handleSubmit() {
   if (!validateForm()) {
     return;
@@ -142,6 +160,7 @@ async function handleSubmit() {
     const payload = {
       username: form.username.trim(),
       password: form.password,
+      deviceLabel: getDeviceLabel(),
     };
     const response = isRegisterMode.value
       ? await authApi.register(payload)

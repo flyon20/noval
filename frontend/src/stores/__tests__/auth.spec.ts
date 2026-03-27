@@ -64,3 +64,90 @@ describe('auth store', () => {
     expect(authStore.restoreStatus).toBe('logged_out');
   });
 });
+
+describe('auth api logout contract', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  test('logout posts to backend with credentials and without token body payload', async () => {
+    const clearCurrentSession = vi.fn();
+    const getAccessToken = vi.fn().mockReturnValue('access-token');
+    const post = vi.fn().mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-logout',
+      },
+    });
+
+    vi.doMock('@/lib/auth-session', () => ({
+      clearCurrentSession,
+      getAccessToken,
+    }));
+    vi.doMock('@/lib/http', () => ({
+      httpClient: {
+        post,
+      },
+      rawHttpClient: {
+        post: vi.fn(),
+      },
+    }));
+
+    const { authApi } = await import('@/api/auth');
+
+    await authApi.logout();
+
+    expect(getAccessToken).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('/api/auth/logout', undefined, {
+      skipAuthRefresh: true,
+      withCredentials: true,
+    });
+    expect(clearCurrentSession).not.toHaveBeenCalled();
+  });
+
+  test('login and register call auth endpoints with credentials for refresh cookie', async () => {
+    const rawPost = vi.fn().mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-auth',
+      },
+    });
+
+    vi.doMock('@/lib/auth-session', () => ({
+      clearCurrentSession: vi.fn(),
+      getAccessToken: vi.fn().mockReturnValue(null),
+    }));
+    vi.doMock('@/lib/http', () => ({
+      httpClient: {
+        post: vi.fn(),
+      },
+      rawHttpClient: {
+        post: rawPost,
+      },
+    }));
+
+    const { authApi } = await import('@/api/auth');
+
+    await authApi.login({ username: 'demo', password: 'Password123' });
+    await authApi.register({ username: 'new-user', password: 'Password123' });
+
+    expect(rawPost).toHaveBeenNthCalledWith(1, '/api/auth/login', {
+      username: 'demo',
+      password: 'Password123',
+    }, {
+      withCredentials: true,
+    });
+    expect(rawPost).toHaveBeenNthCalledWith(2, '/api/auth/register', {
+      username: 'new-user',
+      password: 'Password123',
+    }, {
+      withCredentials: true,
+    });
+  });
+});

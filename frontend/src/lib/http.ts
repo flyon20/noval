@@ -12,7 +12,7 @@ type RequestConfig = InternalAxiosRequestConfig & {
 export interface HttpClientAuthAdapter {
   baseURL: string;
   getAccessToken(): string | null;
-  refreshToken(token: string): Promise<TokenResponse>;
+  refreshToken(): Promise<TokenResponse>;
   applyTokenResponse(response: TokenResponse): void;
   clearSession(): void;
 }
@@ -25,8 +25,10 @@ export const rawHttpClient = axios.create({
   timeout: 15000,
 });
 
-async function refreshWithRawClient(token: string) {
-  const response = await rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', { token });
+async function refreshWithRawClient() {
+  const response = await rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', undefined, {
+    withCredentials: true,
+  });
   return response.data.data;
 }
 
@@ -71,7 +73,7 @@ export function createHttpClient(adapter: HttpClientAuthAdapter): AxiosInstance 
 
       try {
         if (!refreshPromise) {
-          refreshPromise = adapter.refreshToken(currentToken);
+          refreshPromise = adapter.refreshToken();
         }
 
         const tokenResponse = await refreshPromise;

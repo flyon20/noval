@@ -3,12 +3,27 @@ import { httpClient, rawHttpClient } from '@/lib/http';
 import type { ApiResponse } from '@/types/api';
 import type { LoginRequest, RegisterRequest, TokenResponse } from '@/types/auth';
 
+type AuthRequestPayload = {
+  username: string;
+  password: string;
+  deviceLabel?: string;
+};
+
 export const authApi = {
-  login(payload: LoginRequest) {
-    return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/login', payload);
+  login(payload: LoginRequest | AuthRequestPayload) {
+    return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/login', payload, {
+      withCredentials: true,
+    });
   },
-  register(payload: RegisterRequest) {
-    return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/register', payload);
+  register(payload: RegisterRequest | AuthRequestPayload) {
+    return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/register', payload, {
+      withCredentials: true,
+    });
+  },
+  refresh() {
+    return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', undefined, {
+      withCredentials: true,
+    });
   },
   async logout() {
     const token = getAccessToken();
@@ -28,9 +43,10 @@ export const authApi = {
 
     return httpClient.post<ApiResponse<null>>(
       '/api/auth/logout',
-      { token },
+      undefined,
       {
         skipAuthRefresh: true,
+        withCredentials: true,
       },
     );
   },
