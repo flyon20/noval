@@ -1,10 +1,15 @@
 package com.novelanalyzer.modules.auth.repository;
 
 import com.novelanalyzer.modules.auth.model.AuthUserEntity;
+import com.novelanalyzer.modules.auth.model.AuthSessionEntity;
+import com.novelanalyzer.modules.auth.model.AuthSessionStatus;
+import com.novelanalyzer.config.AuthProperties;
+import com.novelanalyzer.modules.auth.service.RefreshTokenService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,9 +26,18 @@ public class AuthRepository {
     };
 
     private final JdbcTemplate jdbcTemplate;
+    private final AuthSessionRepository authSessionRepository;
+    private final RefreshTokenService refreshTokenService;
+    private final AuthProperties authProperties;
 
-    public AuthRepository(JdbcTemplate jdbcTemplate) {
+    public AuthRepository(JdbcTemplate jdbcTemplate,
+                          AuthSessionRepository authSessionRepository,
+                          RefreshTokenService refreshTokenService,
+                          AuthProperties authProperties) {
         this.jdbcTemplate = jdbcTemplate;
+        this.authSessionRepository = authSessionRepository;
+        this.refreshTokenService = refreshTokenService;
+        this.authProperties = authProperties;
     }
 
     public Optional<AuthUserEntity> findActiveUserByUsername(String username) {
@@ -129,6 +143,7 @@ public class AuthRepository {
             "UPDATE sys_user SET last_login_time = CURRENT_TIMESTAMP, update_time = CURRENT_TIMESTAMP WHERE id = ?",
             userId
         );
+        insertSessionSnapshotForLogin(userId);
     }
 
     public void insertLoginLog(Long userId, String username, String loginIp, int status, String message) {
@@ -143,5 +158,22 @@ public class AuthRepository {
             status,
             message
         );
+    }
+
+    public Optional<AuthSessionEntity> findOldestActiveSessionForEviction(Long userId) {
+        return authSessionRepository.findOldestActiveSessionForUser(userId);
+    }
+
+    private void insertSessionSnapshotForLogin(Long userId) {
+        LocalDateTime now = LocalDateTime.now();
+        AuthSessionEntity session = new AuthSessionEntity();
+        session.setUserId(userId);
+        session.setSessionId(refreshTokenService.generateSessionId());
+        session.setRefreshTokenHash(refreshTokenService.hashRefreshToken(refreshTokenService.generateOpaqueRefreshToken()));
+        session.setStatus(AuthSessionStatus.ACTIVE);
+        session.setLastActiveTime(now);
+        session.setLastRefreshTime(now);
+        session.setRefreshExpireTime(now.plusSeconds(authProperties.getRefreshTokenExpireSeconds()));
+        authSessionRepository.insertSession(session);
     }
 }

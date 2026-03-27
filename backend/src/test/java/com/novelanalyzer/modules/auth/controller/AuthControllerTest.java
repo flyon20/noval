@@ -1,6 +1,9 @@
 package com.novelanalyzer.modules.auth.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.novelanalyzer.modules.auth.model.AuthSessionEntity;
+import com.novelanalyzer.modules.auth.model.AuthSessionStatus;
+import com.novelanalyzer.modules.auth.repository.AuthRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -11,6 +14,11 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
+
+import java.time.LocalDateTime;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -39,6 +47,9 @@ class AuthControllerTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private AuthRepository authRepository;
 
     @Test
     void shouldLoginRefreshAndLogoutSuccessfully() throws Exception {
@@ -92,6 +103,56 @@ class AuthControllerTest {
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value(401))
             .andExpect(jsonPath("$.message").value("用户名不存在，请先注册"));
+    }
+
+
+
+    @Test
+    void shouldPersistActiveSessionWhenLoginSucceeds() throws Exception {
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        Integer sessionIdCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(session_id) FROM sys_user_session WHERE user_id = ?",
+            Integer.class,
+            1L
+        );
+        Integer refreshHashCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(refresh_token_hash) FROM sys_user_session WHERE user_id = ?",
+            Integer.class,
+            1L
+        );
+        Integer status = jdbcTemplate.queryForObject(
+            "SELECT status FROM sys_user_session WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            Integer.class,
+            1L
+        );
+        LocalDateTime refreshExpireTime = jdbcTemplate.queryForObject(
+            "SELECT refresh_expire_time FROM sys_user_session WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            LocalDateTime.class,
+            1L
+        );
+
+        assertThat(sessionIdCount).isEqualTo(1);
+        assertThat(refreshHashCount).isEqualTo(1);
+        assertThat(status).isEqualTo(AuthSessionStatus.ACTIVE);
+        assertThat(refreshExpireTime).isNotNull();
+    }
+
+    @Test
+    void shouldSelectOldestActiveSessionForEvictionWhenUserReachesDeviceLimit() {
+        LocalDateTime now = LocalDateTime.now();
+        insertActiveSession(1L, "sid-oldest", "hash-oldest", now.minusHours(3));
+        insertActiveSession(1L, "sid-middle", "hash-middle", now.minusHours(2));
+        insertActiveSession(1L, "sid-newest", "hash-newest", now.minusHours(1));
+
+        Optional<AuthSessionEntity> oldest = authRepository.findOldestActiveSessionForEviction(1L);
+
+        assertThat(oldest).isPresent();
+        assertThat(oldest.map(AuthSessionEntity::getSessionId)).hasValue("sid-oldest");
     }
 
     @Test
@@ -227,6 +288,25 @@ class AuthControllerTest {
         );
 
         org.assertj.core.api.Assertions.assertThat(loginIp).isEqualTo("127.0.0.1");
+    }
+
+
+    private void insertActiveSession(Long userId, String sessionId, String refreshHash, LocalDateTime activeTime) {
+        jdbcTemplate.update(
+            """
+            INSERT INTO sys_user_session (
+                user_id, session_id, refresh_token_hash, status, last_active_time,
+                refresh_expire_time, create_time, update_time, deleted, version
+            )
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0)
+            """,
+            userId,
+            sessionId,
+            refreshHash,
+            AuthSessionStatus.ACTIVE,
+            activeTime,
+            activeTime.plusDays(7)
+        );
     }
 
     private RequestPostProcessor remoteAddr(String ip) {
