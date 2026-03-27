@@ -86,6 +86,24 @@ public class AuthSessionRepository {
         );
     }
 
+    public List<AuthSessionEntity> findActiveSessionsByUserIdForUpdate(Long userId) {
+        return jdbcTemplate.query(
+            """
+            SELECT *
+            FROM sys_user_session
+            WHERE user_id = ?
+              AND status = ?
+              AND deleted = 0
+              AND refresh_expire_time > CURRENT_TIMESTAMP
+            ORDER BY last_active_time DESC, id DESC
+            FOR UPDATE
+            """,
+            AUTH_SESSION_ROW_MAPPER,
+            userId,
+            AuthSessionStatus.ACTIVE
+        );
+    }
+
     public Optional<AuthSessionEntity> findSessionBySessionId(String sessionId) {
         List<AuthSessionEntity> sessions = jdbcTemplate.query(
             """
@@ -146,6 +164,7 @@ public class AuthSessionRepository {
     }
 
     public boolean updateSessionOnRefresh(String sessionId,
+                                          String currentRefreshTokenHash,
                                           String newRefreshTokenHash,
                                           LocalDateTime lastRefreshTime,
                                           LocalDateTime refreshExpireTime) {
@@ -158,13 +177,18 @@ public class AuthSessionRepository {
                 refresh_expire_time = ?,
                 update_time = CURRENT_TIMESTAMP,
                 version = version + 1
-            WHERE session_id = ? AND status = ? AND deleted = 0
+            WHERE session_id = ?
+              AND refresh_token_hash = ?
+              AND status = ?
+              AND deleted = 0
+              AND refresh_expire_time > CURRENT_TIMESTAMP
             """,
             newRefreshTokenHash,
             lastRefreshTime,
             lastRefreshTime,
             refreshExpireTime,
             sessionId,
+            currentRefreshTokenHash,
             AuthSessionStatus.ACTIVE
         );
         return affected > 0;
@@ -201,6 +225,29 @@ public class AuthSessionRepository {
               AND refresh_expire_time > CURRENT_TIMESTAMP
             ORDER BY last_active_time ASC, create_time ASC, id ASC
             LIMIT 1
+            """,
+            AUTH_SESSION_ROW_MAPPER,
+            userId,
+            AuthSessionStatus.ACTIVE
+        );
+        if (sessions.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(sessions.get(0));
+    }
+
+    public Optional<AuthSessionEntity> findOldestActiveSessionForUserForUpdate(Long userId) {
+        List<AuthSessionEntity> sessions = jdbcTemplate.query(
+            """
+            SELECT *
+            FROM sys_user_session
+            WHERE user_id = ?
+              AND status = ?
+              AND deleted = 0
+              AND refresh_expire_time > CURRENT_TIMESTAMP
+            ORDER BY last_active_time ASC, create_time ASC, id ASC
+            LIMIT 1
+            FOR UPDATE
             """,
             AUTH_SESSION_ROW_MAPPER,
             userId,

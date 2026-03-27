@@ -183,6 +183,5 @@ public class AuthTokenFilter extends OncePerRequestFilter {
         if (!userId.equals(session.getUserId())) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
-        authSessionService.updateActivity(sessionId);
     }
 }

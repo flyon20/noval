@@ -149,6 +149,7 @@ public class AuthService {
         LocalDateTime refreshExpireTime = now.plusSeconds(authProperties.getRefreshTokenExpireSeconds());
         boolean updated = authSessionRepository.updateSessionOnRefresh(
             session.getSessionId(),
+            refreshTokenHash,
             nextRefreshTokenHash,
             now,
             refreshExpireTime
