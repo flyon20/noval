@@ -113,10 +113,13 @@ function handleBoardChange(boardCode: string) {
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.35rem;
   background:
-    radial-gradient(circle at top right, rgba(92, 124, 250, 0.18), transparent 26%),
-    radial-gradient(circle at bottom left, rgba(255, 147, 186, 0.16), transparent 22%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
-    color-mix(in srgb, var(--color-surface) 92%, transparent);
+    radial-gradient(circle at top right, color-mix(in srgb, var(--color-accent) 18%, transparent), transparent 26%),
+    radial-gradient(circle at bottom left, color-mix(in srgb, #ff93ba 16%, transparent), transparent 22%),
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px) saturate(1.1);
   -webkit-backdrop-filter: blur(18px) saturate(1.1);
@@ -178,7 +181,7 @@ function handleBoardChange(boardCode: string) {
   padding: 0.35rem 0.8rem;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  background: color-mix(in srgb, var(--color-glass) 80%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 92%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   color: var(--color-text);
@@ -192,8 +195,8 @@ function handleBoardChange(boardCode: string) {
 :deep(.trend-context__select .el-select__wrapper) {
   min-height: 42px;
   border-radius: 0.95rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
-  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
   box-shadow: none;
 }
 

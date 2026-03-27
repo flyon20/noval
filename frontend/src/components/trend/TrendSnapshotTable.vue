@@ -98,8 +98,14 @@ onBeforeUnmount(() => {
   padding: 1rem;
   border-radius: 1.25rem;
   border: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.92);
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-soft);
+  color: var(--color-text);
 }
 
 .trend-snapshot-table__header {
@@ -140,7 +146,7 @@ onBeforeUnmount(() => {
   gap: 0.55rem;
   padding: 0.95rem 1rem;
   border-radius: 1rem;
-  background: rgba(35, 65, 58, 0.05);
+  background: color-mix(in srgb, var(--color-primary-soft) 78%, transparent);
 }
 
 .trend-snapshot-table__mobile-row {

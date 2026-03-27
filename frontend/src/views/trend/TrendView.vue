@@ -891,13 +891,17 @@ onBeforeUnmount(() => {
   border-radius: 1.25rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   background:
-    linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
-    color-mix(in srgb, var(--color-surface) 90%, transparent);
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px) saturate(1.1);
   -webkit-backdrop-filter: blur(18px) saturate(1.1);
   flex-wrap: wrap;
   min-width: 0;
+  color: var(--color-text);
 }
 
 .trend-page__toolbar-title,
@@ -930,18 +934,22 @@ onBeforeUnmount(() => {
   border-radius: 1.2rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
-    color-mix(in srgb, var(--color-surface) 90%, transparent);
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px) saturate(1.1);
   -webkit-backdrop-filter: blur(18px) saturate(1.1);
   min-width: 0;
+  color: var(--color-text);
 }
 
 .trend-page__support-card--summary {
   background:
     radial-gradient(circle at top right, rgba(92, 124, 250, 0.14), transparent 26%),
-    linear-gradient(145deg, color-mix(in srgb, var(--color-surface) 94%, transparent), color-mix(in srgb, var(--color-bg-secondary) 88%, transparent));
+    linear-gradient(145deg, color-mix(in srgb, var(--color-surface-strong) 98%, transparent), color-mix(in srgb, var(--color-surface) 94%, transparent));
 }
 
 .trend-page__support-card-head {
@@ -1017,7 +1025,7 @@ onBeforeUnmount(() => {
   gap: 0.35rem;
   padding: 0.85rem 0.95rem;
   border-radius: 1rem;
-  background: rgba(35, 65, 58, 0.05);
+  background: color-mix(in srgb, var(--color-primary-soft) 78%, transparent);
 }
 
 .trend-page__support-copy {
@@ -1045,11 +1053,15 @@ onBeforeUnmount(() => {
   border-radius: 1.25rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
-    color-mix(in srgb, var(--color-surface) 90%, transparent);
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px) saturate(1.08);
   -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  color: var(--color-text);
 }
 
 .trend-page__visual-eyebrow,

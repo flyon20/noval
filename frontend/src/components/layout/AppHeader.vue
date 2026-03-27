@@ -128,12 +128,13 @@ onBeforeUnmount(() => {
   max-width: 100%;
   padding: 1.2rem 1.6rem;
   border-bottom: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  background: color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
+  backdrop-filter: blur(10px) saturate(1.08);
+  -webkit-backdrop-filter: blur(10px) saturate(1.08);
   position: sticky;
   top: 0;
   z-index: 30;
+  box-shadow: 0 10px 24px rgba(18, 25, 58, 0.06);
 }
 
 .app-header__identity {
@@ -174,9 +175,7 @@ onBeforeUnmount(() => {
 .app-header__mobile-theme,
 .app-header__mobile-logout {
   border-color: color-mix(in srgb, var(--color-border-strong) 76%, transparent);
-  background: color-mix(in srgb, var(--color-glass) 76%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--color-surface-strong) 88%, transparent);
 }
 
 /* Mobile: hide desktop elements, show compact ones */
@@ -216,8 +215,10 @@ onBeforeUnmount(() => {
     z-index: 40;
     border-radius: 0;
     border-bottom-color: rgba(255, 255, 255, 0.16);
-    background: color-mix(in srgb, var(--color-glass) 88%, transparent);
-    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+    background: color-mix(in srgb, var(--color-surface-strong) 94%, transparent);
+    backdrop-filter: blur(8px) saturate(1.04);
+    -webkit-backdrop-filter: blur(8px) saturate(1.04);
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
   }
 
   .app-header__title {

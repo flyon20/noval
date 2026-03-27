@@ -203,6 +203,24 @@ class AuthControllerTest {
     }
 
     @Test
+    void shouldDropSecureFlagForLoopbackHttpOrigin() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .header("Origin", "http://127.0.0.1:5173")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String setCookie = loginResult.getResponse().getHeader("Set-Cookie");
+        assertThat(setCookie).isNotBlank();
+        assertThat(setCookie).contains(REFRESH_COOKIE_NAME + "=");
+        assertThat(setCookie).contains("HttpOnly");
+        assertThat(setCookie).doesNotContain("Secure");
+        assertThat(setCookie).contains("SameSite=Strict");
+    }
+
+    @Test
     void shouldRejectWrongPasswordWithHelpfulMessage() throws Exception {
         mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)

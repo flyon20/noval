@@ -70,8 +70,9 @@ const emit = defineEmits<{
   top: 1.35rem;
   align-self: start;
   overflow: hidden;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
 }
 
 .app-shell__surface {
@@ -87,6 +88,39 @@ const emit = defineEmits<{
   padding: 1.5rem;
   flex: 1;
   min-width: 0;
+}
+
+.app-shell__surface :deep(.rank-page__hero),
+.app-shell__surface :deep(.rank-page__panel),
+.app-shell__surface :deep(.rank-page__hero-badge),
+.app-shell__surface :deep(.rank-page__page-size),
+.app-shell__surface :deep(.rank-page__snapshot-card),
+.app-shell__surface :deep(.rank-page__mobile-update),
+.app-shell__surface :deep(.rank-page__item),
+.app-shell__surface :deep(.trend-context),
+.app-shell__surface :deep(.trend-page__toolbar),
+.app-shell__surface :deep(.trend-page__support-card),
+.app-shell__surface :deep(.trend-page__visual-header),
+.app-shell__surface :deep(.trend-chart-card),
+.app-shell__surface :deep(.trend-summary__card),
+.app-shell__surface :deep(.trend-comparison-list),
+.app-shell__surface :deep(.trend-result-preview__card),
+.app-shell__surface :deep(.analysis-context),
+.app-shell__surface :deep(.analysis-result-card) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
+  box-shadow: 0 12px 28px rgba(18, 25, 58, 0.08);
+}
+
+.app-shell__surface :deep(.rank-page__item:hover),
+.app-shell__surface :deep(.analysis-result-card:hover) {
+  box-shadow: 0 14px 30px rgba(18, 25, 58, 0.1);
 }
 
 /* Tablet breakpoint */

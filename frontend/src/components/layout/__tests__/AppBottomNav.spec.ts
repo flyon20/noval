@@ -18,6 +18,13 @@ describe('AppBottomNav', () => {
     expect(source).not.toMatch(/100vw/);
   });
 
+  test('keeps the floating nav blur and shadow lightweight for smoother scrolling', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppBottomNav.vue'), 'utf-8');
+
+    expect(source).not.toContain('blur(24px)');
+    expect(source).not.toContain('0 20px 44px');
+  });
+
   test('renders four nav items and highlights active path', async () => {
     const router = createRouter({
       history: createMemoryHistory(),

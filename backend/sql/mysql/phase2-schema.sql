@@ -116,3 +116,27 @@ CREATE TABLE IF NOT EXISTS sys_ip_blacklist (
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='IP黑名单表';
 
+CREATE TABLE IF NOT EXISTS sys_user_session (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'auth session id',
+    user_id BIGINT NOT NULL COMMENT 'user id',
+    session_id VARCHAR(64) NOT NULL COMMENT 'session identifier',
+    refresh_token_hash VARCHAR(128) NOT NULL COMMENT 'opaque refresh token hash',
+    status TINYINT DEFAULT 1 COMMENT '1 active 2 revoked 3 kicked',
+    device_label VARCHAR(100) COMMENT 'device label',
+    user_agent VARCHAR(255) COMMENT 'user agent',
+    login_ip VARCHAR(50) COMMENT 'login ip',
+    last_active_time DATETIME COMMENT 'last active time',
+    last_refresh_time DATETIME COMMENT 'last refresh time',
+    refresh_expire_time DATETIME NOT NULL COMMENT 'refresh token expire time',
+    revoke_reason VARCHAR(200) COMMENT 'revoke reason',
+    revoked_at DATETIME COMMENT 'revoked at',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    version INT DEFAULT 0 COMMENT 'optimistic lock version',
+    UNIQUE KEY uk_user_session_session_id (session_id),
+    UNIQUE KEY uk_user_session_refresh_hash (refresh_token_hash),
+    INDEX idx_user_session_user_status (user_id, status, deleted),
+    INDEX idx_user_session_user_active_time (user_id, last_active_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='auth user session';
+

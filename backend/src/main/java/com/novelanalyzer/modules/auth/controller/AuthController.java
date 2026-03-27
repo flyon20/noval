@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 
 @Validated
@@ -56,7 +58,7 @@ public class AuthController {
                                        HttpServletResponse httpServletResponse) {
         String requestIp = assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/login");
         AuthService.LoginResult loginResult = authService.login(request, requestIp);
-        writeRefreshCookie(httpServletResponse, loginResult.refreshToken());
+        writeRefreshCookie(httpServletRequest, httpServletResponse, loginResult.refreshToken());
         return Result.success(loginResult.tokenResponse());
     }
 
@@ -66,7 +68,7 @@ public class AuthController {
                                           HttpServletResponse httpServletResponse) {
         String requestIp = assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/register");
         AuthService.LoginResult registerResult = authService.register(request, requestIp);
-        writeRefreshCookie(httpServletResponse, registerResult.refreshToken());
+        writeRefreshCookie(httpServletRequest, httpServletResponse, registerResult.refreshToken());
         return Result.success(registerResult.tokenResponse());
     }
 
@@ -76,11 +78,11 @@ public class AuthController {
         assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/refresh");
         try {
             AuthService.RefreshResult refreshResult = authService.refresh(extractRefreshToken(httpServletRequest));
-            writeRefreshCookie(httpServletResponse, refreshResult.refreshToken());
+            writeRefreshCookie(httpServletRequest, httpServletResponse, refreshResult.refreshToken());
             return Result.success(refreshResult.tokenResponse());
         } catch (BusinessException ex) {
             if (ex.getResultCode() == ResultCode.UNAUTHORIZED || ex.getResultCode() == ResultCode.BAD_REQUEST) {
-                clearRefreshCookie(httpServletResponse);
+                clearRefreshCookie(httpServletRequest, httpServletResponse);
             }
             throw ex;
         }
@@ -95,11 +97,11 @@ public class AuthController {
                 extractBearerToken(httpServletRequest),
                 extractOptionalRefreshToken(httpServletRequest)
             );
-            clearRefreshCookie(httpServletResponse);
+            clearRefreshCookie(httpServletRequest, httpServletResponse);
             return Result.success();
         } catch (BusinessException ex) {
             if (ex.getResultCode() == ResultCode.UNAUTHORIZED || ex.getResultCode() == ResultCode.BAD_REQUEST) {
-                clearRefreshCookie(httpServletResponse);
+                clearRefreshCookie(httpServletRequest, httpServletResponse);
             }
             throw ex;
         }
@@ -148,13 +150,13 @@ public class AuthController {
         return token.isBlank() ? null : token;
     }
 
-    private void writeRefreshCookie(HttpServletResponse response, String refreshToken) {
+    private void writeRefreshCookie(HttpServletRequest request, HttpServletResponse response, String refreshToken) {
         if (refreshToken == null || refreshToken.isBlank()) {
             return;
         }
         ResponseCookie cookie = ResponseCookie.from(authProperties.getRefreshCookieName(), refreshToken)
             .httpOnly(true)
-            .secure(authProperties.isRefreshCookieSecure())
+            .secure(shouldUseSecureCookie(request))
             .path(authProperties.getRefreshCookiePath())
             .sameSite(authProperties.getRefreshCookieSameSite())
             .maxAge(Duration.ofSeconds(authProperties.getRefreshTokenExpireSeconds()))
@@ -162,14 +164,54 @@ public class AuthController {
         response.addHeader("Set-Cookie", cookie.toString());
     }
 
-    private void clearRefreshCookie(HttpServletResponse response) {
+    private void clearRefreshCookie(HttpServletRequest request, HttpServletResponse response) {
         ResponseCookie cookie = ResponseCookie.from(authProperties.getRefreshCookieName(), "")
             .httpOnly(true)
-            .secure(authProperties.isRefreshCookieSecure())
+            .secure(shouldUseSecureCookie(request))
             .path(authProperties.getRefreshCookiePath())
             .sameSite(authProperties.getRefreshCookieSameSite())
             .maxAge(Duration.ZERO)
             .build();
         response.addHeader("Set-Cookie", cookie.toString());
+    }
+
+    private boolean shouldUseSecureCookie(HttpServletRequest request) {
+        if (!authProperties.isRefreshCookieSecure()) {
+            return false;
+        }
+        if (request == null) {
+            return true;
+        }
+        if (request.isSecure()) {
+            return true;
+        }
+        String forwardedProto = request.getHeader("X-Forwarded-Proto");
+        if (forwardedProto != null && forwardedProto.toLowerCase().contains("https")) {
+            return true;
+        }
+        return !isLoopbackHttpUrl(request.getHeader("Origin")) && !isLoopbackHttpUrl(request.getHeader("Referer"));
+    }
+
+    private boolean isLoopbackHttpUrl(String candidate) {
+        if (candidate == null || candidate.isBlank()) {
+            return false;
+        }
+        try {
+            URI uri = new URI(candidate);
+            String host = uri.getHost();
+            return "http".equalsIgnoreCase(uri.getScheme()) && isLoopbackHost(host);
+        } catch (URISyntaxException ex) {
+            return false;
+        }
+    }
+
+    private boolean isLoopbackHost(String host) {
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        return "localhost".equalsIgnoreCase(host)
+            || "127.0.0.1".equals(host)
+            || "::1".equals(host)
+            || "[::1]".equals(host);
     }
 }

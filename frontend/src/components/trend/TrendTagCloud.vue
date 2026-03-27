@@ -201,11 +201,16 @@ const normalizedItems = computed(() => {
   border-radius: 1.25rem;
   border: 1px solid var(--color-border);
   background:
-    radial-gradient(circle at 20% 20%, rgba(255, 233, 230, 0.72), transparent 32%),
-    radial-gradient(circle at 80% 18%, rgba(233, 248, 255, 0.68), transparent 28%),
-    radial-gradient(circle at 50% 84%, rgba(242, 239, 255, 0.7), transparent 34%),
-    rgba(255, 255, 255, 0.92);
+    radial-gradient(circle at 20% 20%, color-mix(in srgb, #ffd9d1 34%, transparent), transparent 32%),
+    radial-gradient(circle at 80% 18%, color-mix(in srgb, #d1f4ff 30%, transparent), transparent 28%),
+    radial-gradient(circle at 50% 84%, color-mix(in srgb, #dccfff 28%, transparent), transparent 34%),
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-soft);
+  color: var(--color-text);
 }
 
 .trend-tag-cloud__header h3,

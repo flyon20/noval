@@ -1,9 +1,20 @@
 import ElementPlus from 'element-plus';
+import fs from 'node:fs';
+import path from 'node:path';
 import { mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import AppShell from '../AppShell.vue';
 
 describe('AppShell', () => {
+  test('adds scroll-performance overrides for high-frequency glass surfaces', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppShell.vue'), 'utf-8');
+
+    expect(source).toContain(':deep(.rank-page__item)');
+    expect(source).toContain(':deep(.trend-chart-card)');
+    expect(source).toContain(':deep(.analysis-result-card)');
+    expect(source).toContain('backdrop-filter: none;');
+  });
+
   test('renders app shell slots and top actions', async () => {
     const router = createRouter({
       history: createMemoryHistory(),

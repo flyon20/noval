@@ -170,8 +170,11 @@ onUnmounted(() => {
   border-radius: 1.25rem;
   border: 1px solid color-mix(in srgb, var(--color-danger) 32%, transparent);
   background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08)),
-    color-mix(in srgb, var(--color-surface) 90%, transparent);
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 96%, transparent),
+      color-mix(in srgb, var(--color-surface) 92%, transparent)
+    );
   color: var(--color-danger);
 }
 

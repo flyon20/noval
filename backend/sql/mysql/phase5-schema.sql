@@ -56,24 +56,110 @@ CREATE TABLE IF NOT EXISTS user_rank_preference (
     INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='user rank preference';
 
-ALTER TABLE user_rank_preference
-    ADD COLUMN IF NOT EXISTS rank_fetch_count INT DEFAULT 30 COMMENT 'preferred rank fetch count';
+DROP PROCEDURE IF EXISTS add_column_if_missing;
+DELIMITER $$
 
-ALTER TABLE crawl_rank
-    ADD COLUMN IF NOT EXISTS snapshot_id BIGINT COMMENT 'rank snapshot id',
-    ADD COLUMN IF NOT EXISTS channel_code VARCHAR(50) COMMENT 'channel code',
-    ADD COLUMN IF NOT EXISTS board_code VARCHAR(50) COMMENT 'board code';
+CREATE PROCEDURE add_column_if_missing(
+    IN p_table_name VARCHAR(64),
+    IN p_column_name VARCHAR(64),
+    IN p_column_definition TEXT
+)
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = p_table_name
+          AND COLUMN_NAME = p_column_name
+    ) THEN
+        SET @ddl = CONCAT(
+            'ALTER TABLE `',
+            REPLACE(p_table_name, '`', '``'),
+            '` ADD COLUMN `',
+            REPLACE(p_column_name, '`', '``'),
+            '` ',
+            p_column_definition
+        );
+        PREPARE stmt FROM @ddl;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+END$$
 
-ALTER TABLE analysis_result
-    ADD COLUMN IF NOT EXISTS channel_code VARCHAR(50) COMMENT 'channel code',
-    ADD COLUMN IF NOT EXISTS board_code VARCHAR(50) COMMENT 'board code',
-    ADD COLUMN IF NOT EXISTS snapshot_id BIGINT COMMENT 'rank snapshot id',
-    ADD COLUMN IF NOT EXISTS result_json JSON COMMENT 'structured result json';
+DELIMITER ;
 
-ALTER TABLE prompt_config
-    ADD COLUMN IF NOT EXISTS input_json_schema JSON COMMENT 'input json schema',
-    ADD COLUMN IF NOT EXISTS input_example_json JSON COMMENT 'input example json',
-    ADD COLUMN IF NOT EXISTS output_json_schema JSON COMMENT 'output json schema',
-    ADD COLUMN IF NOT EXISTS output_example_json JSON COMMENT 'output example json',
-    ADD COLUMN IF NOT EXISTS post_process_type VARCHAR(50) COMMENT 'post process type',
-    ADD COLUMN IF NOT EXISTS parse_config_json JSON COMMENT 'parse config json';
+CALL add_column_if_missing(
+    'user_rank_preference',
+    'rank_fetch_count',
+    'INT DEFAULT 30 COMMENT ''preferred rank fetch count'''
+);
+
+CALL add_column_if_missing(
+    'crawl_rank',
+    'snapshot_id',
+    'BIGINT COMMENT ''rank snapshot id'''
+);
+CALL add_column_if_missing(
+    'crawl_rank',
+    'channel_code',
+    'VARCHAR(50) COMMENT ''channel code'''
+);
+CALL add_column_if_missing(
+    'crawl_rank',
+    'board_code',
+    'VARCHAR(50) COMMENT ''board code'''
+);
+
+CALL add_column_if_missing(
+    'analysis_result',
+    'channel_code',
+    'VARCHAR(50) COMMENT ''channel code'''
+);
+CALL add_column_if_missing(
+    'analysis_result',
+    'board_code',
+    'VARCHAR(50) COMMENT ''board code'''
+);
+CALL add_column_if_missing(
+    'analysis_result',
+    'snapshot_id',
+    'BIGINT COMMENT ''rank snapshot id'''
+);
+CALL add_column_if_missing(
+    'analysis_result',
+    'result_json',
+    'JSON COMMENT ''structured result json'''
+);
+
+CALL add_column_if_missing(
+    'prompt_config',
+    'input_json_schema',
+    'JSON COMMENT ''input json schema'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
+    'input_example_json',
+    'JSON COMMENT ''input example json'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
+    'output_json_schema',
+    'JSON COMMENT ''output json schema'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
+    'output_example_json',
+    'JSON COMMENT ''output example json'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
+    'post_process_type',
+    'VARCHAR(50) COMMENT ''post process type'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
+    'parse_config_json',
+    'JSON COMMENT ''parse config json'''
+);
+
+DROP PROCEDURE IF EXISTS add_column_if_missing;

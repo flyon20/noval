@@ -130,7 +130,7 @@ const uiText = {
   min-height: 2.5rem;
   padding-inline: 0.95rem;
   border-color: color-mix(in srgb, var(--color-border-strong) 70%, transparent);
-  background: color-mix(in srgb, var(--color-glass) 72%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 92%, transparent);
   backdrop-filter: blur(14px);
 }
 
@@ -141,8 +141,11 @@ const uiText = {
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.1rem;
   background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
-    color-mix(in srgb, var(--color-surface) 88%, transparent);
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   backdrop-filter: blur(18px) saturate(1.12);
   -webkit-backdrop-filter: blur(18px) saturate(1.12);
   box-shadow: var(--shadow-card);

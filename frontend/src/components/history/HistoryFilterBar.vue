@@ -105,8 +105,14 @@ function reset() {
   border: 1px solid var(--color-border);
   border-radius: 1.25rem;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.88);
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-soft);
+  color: var(--color-text);
 }
 
 .history-filter__header {

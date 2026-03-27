@@ -37,10 +37,16 @@ const hasResultJson = computed(() => Boolean(props.item && Object.keys(props.ite
   border: 1px solid var(--color-border);
   border-radius: 1.25rem;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.92);
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   max-height: 100%;
   overflow: auto;
   box-shadow: var(--shadow-soft);
+  color: var(--color-text);
 }
 
 .history-detail__content-wrap {
@@ -62,7 +68,8 @@ const hasResultJson = computed(() => Boolean(props.item && Object.keys(props.ite
 }
 
 .history-detail__json {
-  background: rgba(35, 65, 58, 0.06);
+  background: color-mix(in srgb, var(--color-primary-soft) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 0.75rem;
   padding: 0.75rem;
   overflow: auto;

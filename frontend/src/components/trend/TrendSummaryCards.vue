@@ -73,11 +73,15 @@ const stats = computed(() => [
   border-radius: 1.2rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   background:
-    linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
-    color-mix(in srgb, var(--color-surface) 90%, transparent);
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px) saturate(1.1);
   -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  color: var(--color-text);
 }
 
 .trend-summary__card--wide {
