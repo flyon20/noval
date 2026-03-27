@@ -35,7 +35,13 @@ app:
     demo-username: ${APP_DEMO_USERNAME:}
     demo-password: ${APP_DEMO_PASSWORD:}
     jwt-secret: ${JWT_SECRET:}
-    access-token-expire-seconds: ${JWT_ACCESS_TOKEN_EXPIRE_SECONDS:7200}
+    access-token-expire-seconds: ${JWT_ACCESS_TOKEN_EXPIRE_SECONDS:900}
+    refresh-token-expire-seconds: ${JWT_REFRESH_TOKEN_EXPIRE_SECONDS:604800}
+    session-max-devices: ${AUTH_SESSION_MAX_DEVICES:3}
+    refresh-cookie-name: ${AUTH_REFRESH_COOKIE_NAME:refresh_token}
+    refresh-cookie-path: ${AUTH_REFRESH_COOKIE_PATH:/api/auth}
+    refresh-cookie-secure: ${AUTH_REFRESH_COOKIE_SECURE:true}
+    refresh-cookie-same-site: ${AUTH_REFRESH_COOKIE_SAME_SITE:Strict}
   security:
     rate-limit-per-minute: ${SECURITY_RATE_LIMIT_PER_MINUTE:100}
     auto-blacklist-threshold: ${SECURITY_AUTO_BLACKLIST_THRESHOLD:20}

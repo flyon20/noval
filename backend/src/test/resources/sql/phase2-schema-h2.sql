@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS sys_role;
 DROP TABLE IF EXISTS sys_login_log;
 DROP TABLE IF EXISTS sys_operation_log;
 DROP TABLE IF EXISTS sys_ip_blacklist;
+DROP TABLE IF EXISTS sys_user_session;
 DROP TABLE IF EXISTS sys_user;
 
 CREATE TABLE sys_user (
@@ -102,4 +103,32 @@ CREATE TABLE sys_ip_blacklist (
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE sys_user_session (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    session_id VARCHAR(64) NOT NULL,
+    refresh_token_hash VARCHAR(128) NOT NULL,
+    status TINYINT DEFAULT 1,
+    device_label VARCHAR(100),
+    user_agent VARCHAR(255),
+    login_ip VARCHAR(50),
+    last_active_time TIMESTAMP,
+    last_refresh_time TIMESTAMP,
+    refresh_expire_time TIMESTAMP NOT NULL,
+    revoke_reason VARCHAR(200),
+    revoked_at TIMESTAMP,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted TINYINT DEFAULT 0,
+    version INT DEFAULT 0,
+    CONSTRAINT uk_user_session_session_id UNIQUE (session_id),
+    CONSTRAINT uk_user_session_refresh_hash UNIQUE (refresh_token_hash)
+);
+
+CREATE INDEX idx_user_session_user_status
+    ON sys_user_session(user_id, status, deleted);
+
+CREATE INDEX idx_user_session_user_active_time
+    ON sys_user_session(user_id, last_active_time);
 
