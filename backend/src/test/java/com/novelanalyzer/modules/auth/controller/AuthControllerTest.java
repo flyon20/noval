@@ -3,6 +3,7 @@ package com.novelanalyzer.modules.auth.controller;
 import com.jayway.jsonpath.JsonPath;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
+import com.novelanalyzer.modules.auth.service.AuthSessionFlushScheduler;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,11 +12,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockCookie;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.sql.Timestamp;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,6 +60,12 @@ class AuthControllerTest {
 
     @Autowired
     private AuthProperties authProperties;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    private AuthSessionFlushScheduler authSessionFlushScheduler;
 
     @Test
     void shouldLoginRefreshAndLogoutSuccessfully() throws Exception {
@@ -356,6 +365,49 @@ class AuthControllerTest {
         );
 
         org.assertj.core.api.Assertions.assertThat(loginIp).isEqualTo("127.0.0.1");
+    }
+
+    @Test
+    void shouldFlushDirtySessionActivityToMysql() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String accessToken = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.data.accessToken");
+        String sessionId = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret()).get("sid", String.class);
+        assertThat(sessionId).isNotBlank();
+
+        jdbcTemplate.update(
+            "UPDATE sys_user_session SET last_active_time = DATEADD('MINUTE', -10, CURRENT_TIMESTAMP) WHERE session_id = ?",
+            sessionId
+        );
+        Timestamp oldLastActive = jdbcTemplate.queryForObject(
+            "SELECT last_active_time FROM sys_user_session WHERE session_id = ?",
+            Timestamp.class,
+            sessionId
+        );
+        assertThat(oldLastActive).isNotNull();
+
+        mockMvc.perform(get("/api/secure/user/ping")
+                .header("Authorization", "Bearer " + accessToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        assertThat(stringRedisTemplate.opsForSet().isMember("auth:session:dirty", sessionId)).isTrue();
+
+        authSessionFlushScheduler.flushDirtySessions();
+
+        assertThat(stringRedisTemplate.opsForSet().isMember("auth:session:dirty", sessionId)).isFalse();
+        Timestamp newLastActive = jdbcTemplate.queryForObject(
+            "SELECT last_active_time FROM sys_user_session WHERE session_id = ?",
+            Timestamp.class,
+            sessionId
+        );
+        assertThat(newLastActive).isNotNull();
+        assertThat(newLastActive.toLocalDateTime()).isAfter(oldLastActive.toLocalDateTime());
     }
 
     private RequestPostProcessor remoteAddr(String ip) {

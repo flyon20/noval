@@ -13,6 +13,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -153,6 +154,29 @@ public class AuthSessionService {
         return persisted;
     }
 
+    public int flushDirtySessions() {
+        Set<String> dirtySessionIds;
+        try {
+            dirtySessionIds = stringRedisTemplate.opsForSet().members(DIRTY_SESSION_KEY);
+        } catch (Exception ex) {
+            return 0;
+        }
+        if (dirtySessionIds == null || dirtySessionIds.isEmpty()) {
+            return 0;
+        }
+
+        int flushed = 0;
+        for (String sessionId : dirtySessionIds) {
+            if (sessionId == null || sessionId.isBlank()) {
+                continue;
+            }
+            if (flushSingleDirtySession(sessionId)) {
+                flushed++;
+            }
+        }
+        return flushed;
+    }
+
     private void cacheSessionState(AuthSessionEntity session) {
         try {
             String sessionKey = buildSessionKey(session.getSessionId());
@@ -190,6 +214,33 @@ public class AuthSessionService {
             stringRedisTemplate.opsForSet().remove(DIRTY_SESSION_KEY, session.getSessionId());
         } catch (Exception ignored) {
             // Ignore cache delete failures.
+        }
+    }
+
+    private boolean flushSingleDirtySession(String sessionId) {
+        try {
+            String sessionKey = buildSessionKey(sessionId);
+            Object activeTimeRaw = stringRedisTemplate.opsForHash().get(sessionKey, "lastActiveTime");
+            LocalDateTime activeTime = parseTime(activeTimeRaw);
+
+            if (activeTime == null) {
+                Optional<AuthSessionEntity> persisted = authSessionRepository.findActiveSessionBySessionId(sessionId);
+                if (persisted.isEmpty()) {
+                    stringRedisTemplate.opsForSet().remove(DIRTY_SESSION_KEY, sessionId);
+                    return false;
+                }
+                cacheSessionState(persisted.get());
+                activeTime = persisted.get().getLastActiveTime();
+            }
+
+            boolean updated = authSessionRepository.updateLastActiveTime(sessionId, activeTime);
+            if (updated) {
+                stringRedisTemplate.opsForSet().remove(DIRTY_SESSION_KEY, sessionId);
+                return true;
+            }
+            return false;
+        } catch (Exception ex) {
+            return false;
         }
     }
 

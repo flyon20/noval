@@ -1,12 +1,15 @@
 package com.novelanalyzer.modules.security;
 
 import com.jayway.jsonpath.JsonPath;
+import com.novelanalyzer.common.utils.JwtUtils;
+import com.novelanalyzer.config.AuthProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -40,6 +43,15 @@ class Phase2SecurityIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private JwtUtils jwtUtils;
+
+    @Autowired
+    private AuthProperties authProperties;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     @Test
     void shouldReturn401WhenNoToken() throws Exception {
         mockMvc.perform(get("/api/secure/admin/ping"))
@@ -61,12 +73,14 @@ class Phase2SecurityIntegrationTest {
         String adminToken = loginAndGetToken("admin", "admin123");
         for (int i = 0; i < 100; i++) {
             mockMvc.perform(get("/api/secure/user/ping")
+                    .with(remoteAddr("127.0.9.9"))
                     .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
         }
 
         mockMvc.perform(get("/api/secure/user/ping")
+                .with(remoteAddr("127.0.9.9"))
                 .header("Authorization", "Bearer " + adminToken))
             .andExpect(status().isTooManyRequests())
             .andExpect(jsonPath("$.code").value(429));
@@ -132,6 +146,31 @@ class Phase2SecurityIntegrationTest {
                 .header("Authorization", "Bearer " + firstToken))
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value(401));
+    }
+
+    @Test
+    void shouldRehydrateSessionFromMysqlWhenRedisSessionStateMissing() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String accessToken = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.data.accessToken");
+        String sessionId = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret()).get("sid", String.class);
+        assertThat(sessionId).isNotBlank();
+
+        stringRedisTemplate.delete("auth:session:" + sessionId);
+
+        mockMvc.perform(get("/api/secure/user/ping")
+                .with(remoteAddr("127.0.9.8"))
+                .header("Authorization", "Bearer " + accessToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        String cachedUserId = (String) stringRedisTemplate.opsForHash().get("auth:session:" + sessionId, "userId");
+        assertThat(cachedUserId).isEqualTo("1");
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
