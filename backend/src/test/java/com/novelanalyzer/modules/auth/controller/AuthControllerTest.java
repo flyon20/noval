@@ -224,12 +224,16 @@ class AuthControllerTest {
 
     @Test
     void shouldRegisterUserAndReturnToken() throws Exception {
-        mockMvc.perform(post("/api/auth/register")
+        MvcResult registerResult = mockMvc.perform(post("/api/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"username\":\"new-user\",\"password\":\"Password123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
+            .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+            .andExpect(header().string("Set-Cookie", containsString(REFRESH_COOKIE_NAME + "=")))
+            .andReturn();
+
+        String refreshToken = extractRefreshToken(registerResult);
 
         Integer userCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM sys_user WHERE username = ?",
@@ -251,6 +255,12 @@ class AuthControllerTest {
 
         org.assertj.core.api.Assertions.assertThat(userCount).isEqualTo(1);
         org.assertj.core.api.Assertions.assertThat(roleCode).isEqualTo("USER");
+
+        mockMvc.perform(post("/api/auth/refresh")
+                .cookie(refreshCookie(refreshToken)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
     }
 
     @Test

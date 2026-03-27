@@ -106,7 +106,7 @@ public class AuthService {
     }
 
     @Transactional
-    public TokenResponse register(RegisterRequest request, String registerIp) {
+    public LoginResult register(RegisterRequest request, String registerIp) {
         String username = normalizeUsername(request.getUsername());
         validatePasswordRule(request.getPassword());
         if (authRepository.existsUserByUsername(username)) {
@@ -123,7 +123,10 @@ public class AuthService {
             List<String> roleCodes = authRepository.findRoleCodesByUserId(userId);
             authRepository.insertLoginLog(userId, username, registerIp, 1, "register success");
             CreatedSession session = authSessionService.createSession(userId, null, null, registerIp);
-            return issueToken(userId, username, roleCodes, session.sessionId());
+            return new LoginResult(
+                issueToken(userId, username, roleCodes, session.sessionId()),
+                session.refreshToken()
+            );
         } catch (DuplicateKeyException ex) {
             authRepository.insertLoginLog(null, username, registerIp, 0, USERNAME_EXISTS_MESSAGE);
             throw new BusinessException(ResultCode.BAD_REQUEST, USERNAME_EXISTS_MESSAGE);

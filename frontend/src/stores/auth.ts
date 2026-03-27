@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { defineStore } from 'pinia';
 import { authApi } from '@/api/auth';
 import { HOME_ROUTE, LOGIN_ROUTE } from '@/constants/auth';
@@ -18,6 +18,13 @@ export const useAuthStore = defineStore('auth', () => {
   const restoreStatus = ref<AuthRestoreStatus>(authSessionRef.value ? 'authenticated' : 'logged_out');
   let restorePromise: Promise<ReturnType<typeof getCurrentSession>> | null = null;
   let restoreAttempted = Boolean(authSessionRef.value);
+
+  watch(authSessionRef, (value) => {
+    if (value) {
+      restoreAttempted = true;
+    }
+    syncRestoreStatus();
+  });
 
   function syncRestoreStatus() {
     restoreStatus.value = authSessionRef.value ? 'authenticated' : 'logged_out';
@@ -54,14 +61,12 @@ export const useAuthStore = defineStore('auth', () => {
   function applyTokenResponse(tokenResponse: TokenResponse) {
     const restored = applyTokenResponseToSession(tokenResponse);
     restoreAttempted = true;
-    syncRestoreStatus();
     return restored;
   }
 
   function clearSession() {
     clearCurrentSession();
     restoreAttempted = true;
-    syncRestoreStatus();
   }
 
   function hasRole(role: RoleCode) {
@@ -73,7 +78,6 @@ export const useAuthStore = defineStore('auth', () => {
       await authApi.logout();
     } finally {
       clearCurrentSession();
-      syncRestoreStatus();
     }
   }
 

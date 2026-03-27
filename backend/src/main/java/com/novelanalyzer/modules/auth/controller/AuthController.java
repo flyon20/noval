@@ -62,9 +62,12 @@ public class AuthController {
 
     @PostMapping("/register")
     public Result<TokenResponse> register(@Valid @RequestBody RegisterRequest request,
-                                          HttpServletRequest httpServletRequest) {
+                                          HttpServletRequest httpServletRequest,
+                                          HttpServletResponse httpServletResponse) {
         String requestIp = assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/register");
-        return Result.success(authService.register(request, requestIp));
+        AuthService.LoginResult registerResult = authService.register(request, requestIp);
+        writeRefreshCookie(httpServletResponse, registerResult.refreshToken());
+        return Result.success(registerResult.tokenResponse());
     }
 
     @PostMapping("/refresh")
