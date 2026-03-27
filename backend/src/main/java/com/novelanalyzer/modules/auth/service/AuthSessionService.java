@@ -67,9 +67,13 @@ public class AuthSessionService {
     }
 
     public boolean revokeSession(String sessionId, int revokedStatus, String revokeReason) {
+        AuthSessionEntity snapshot = readSessionFromCache(sessionId);
+        if (snapshot == null) {
+            snapshot = authSessionRepository.findSessionBySessionId(sessionId).orElse(null);
+        }
         boolean revoked = authSessionRepository.revokeSession(sessionId, revokedStatus, revokeReason, LocalDateTime.now());
-        if (revoked) {
-            removeSessionState(sessionId);
+        if (revoked && snapshot != null) {
+            removeSessionState(snapshot);
         }
         return revoked;
     }
@@ -163,35 +167,16 @@ public class AuthSessionService {
         }
     }
 
-    private void removeSessionState(String sessionId) {
-        Optional<AuthSessionEntity> sessionOptional = authSessionRepository.findActiveSessionBySessionId(sessionId);
-        String refreshHash = null;
-        Long userId = null;
-
-        AuthSessionEntity cached = readSessionFromCache(sessionId);
-        if (cached != null) {
-            refreshHash = cached.getRefreshTokenHash();
-            userId = cached.getUserId();
-        }
-        if (sessionOptional.isPresent()) {
-            AuthSessionEntity session = sessionOptional.get();
-            if (refreshHash == null) {
-                refreshHash = session.getRefreshTokenHash();
-            }
-            if (userId == null) {
-                userId = session.getUserId();
-            }
-        }
-
+    private void removeSessionState(AuthSessionEntity session) {
         try {
-            stringRedisTemplate.delete(buildSessionKey(sessionId));
-            if (refreshHash != null && !refreshHash.isBlank()) {
-                stringRedisTemplate.delete(buildRefreshKey(refreshHash));
+            stringRedisTemplate.delete(buildSessionKey(session.getSessionId()));
+            if (session.getRefreshTokenHash() != null && !session.getRefreshTokenHash().isBlank()) {
+                stringRedisTemplate.delete(buildRefreshKey(session.getRefreshTokenHash()));
             }
-            if (userId != null) {
-                stringRedisTemplate.opsForZSet().remove(buildUserSessionsKey(userId), sessionId);
+            if (session.getUserId() != null) {
+                stringRedisTemplate.opsForZSet().remove(buildUserSessionsKey(session.getUserId()), session.getSessionId());
             }
-            stringRedisTemplate.opsForSet().remove(DIRTY_SESSION_KEY, sessionId);
+            stringRedisTemplate.opsForSet().remove(DIRTY_SESSION_KEY, session.getSessionId());
         } catch (Exception ignored) {
             // Ignore cache delete failures.
         }

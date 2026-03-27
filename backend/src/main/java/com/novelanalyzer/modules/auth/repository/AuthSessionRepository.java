@@ -74,7 +74,10 @@ public class AuthSessionRepository {
             """
             SELECT *
             FROM sys_user_session
-            WHERE user_id = ? AND status = ? AND deleted = 0
+            WHERE user_id = ?
+              AND status = ?
+              AND deleted = 0
+              AND refresh_expire_time > CURRENT_TIMESTAMP
             ORDER BY last_active_time DESC, id DESC
             """,
             AUTH_SESSION_ROW_MAPPER,
@@ -83,12 +86,32 @@ public class AuthSessionRepository {
         );
     }
 
+    public Optional<AuthSessionEntity> findSessionBySessionId(String sessionId) {
+        List<AuthSessionEntity> sessions = jdbcTemplate.query(
+            """
+            SELECT *
+            FROM sys_user_session
+            WHERE session_id = ? AND deleted = 0
+            LIMIT 1
+            """,
+            AUTH_SESSION_ROW_MAPPER,
+            sessionId
+        );
+        if (sessions.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(sessions.get(0));
+    }
+
     public Optional<AuthSessionEntity> findActiveSessionBySessionId(String sessionId) {
         List<AuthSessionEntity> sessions = jdbcTemplate.query(
             """
             SELECT *
             FROM sys_user_session
-            WHERE session_id = ? AND status = ? AND deleted = 0
+            WHERE session_id = ?
+              AND status = ?
+              AND deleted = 0
+              AND refresh_expire_time > CURRENT_TIMESTAMP
             LIMIT 1
             """,
             AUTH_SESSION_ROW_MAPPER,
@@ -106,7 +129,10 @@ public class AuthSessionRepository {
             """
             SELECT *
             FROM sys_user_session
-            WHERE refresh_token_hash = ? AND status = ? AND deleted = 0
+            WHERE refresh_token_hash = ?
+              AND status = ?
+              AND deleted = 0
+              AND refresh_expire_time > CURRENT_TIMESTAMP
             LIMIT 1
             """,
             AUTH_SESSION_ROW_MAPPER,
@@ -169,7 +195,10 @@ public class AuthSessionRepository {
             """
             SELECT *
             FROM sys_user_session
-            WHERE user_id = ? AND status = ? AND deleted = 0
+            WHERE user_id = ?
+              AND status = ?
+              AND deleted = 0
+              AND refresh_expire_time > CURRENT_TIMESTAMP
             ORDER BY last_active_time ASC, create_time ASC, id ASC
             LIMIT 1
             """,
