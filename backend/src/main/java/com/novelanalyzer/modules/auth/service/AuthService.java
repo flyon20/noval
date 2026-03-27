@@ -79,7 +79,7 @@ public class AuthService {
 
         if (authProperties.isDemoEnabled()) {
             validateDemoUser(username, request.getPassword(), loginIp);
-            return issueToken(0L, username, List.of("ADMIN"));
+            return issueToken(0L, username, List.of("ADMIN"), null);
         }
 
         authRepository.insertLoginLog(null, username, loginIp, 0, USERNAME_NOT_FOUND_MESSAGE);
@@ -125,7 +125,7 @@ public class AuthService {
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
             long expireSeconds = Math.max(1L, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000L);
             tokenBlacklistService.blacklist(token, expireSeconds);
-            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes);
+            return issueToken(dbUser.getId(), dbUser.getUsername(), roleCodes, null);
         } catch (JwtException ex) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
         }
