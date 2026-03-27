@@ -1,6 +1,7 @@
 package com.novelanalyzer.modules.auth.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 public class LoginRequest {
 
@@ -9,6 +10,8 @@ public class LoginRequest {
 
     @NotBlank(message = "password is required")
     private String password;
+
+    @Size(max = 100, message = "deviceLabel must be at most 100 characters")
     private String deviceLabel;
 
     public String getUsername() {

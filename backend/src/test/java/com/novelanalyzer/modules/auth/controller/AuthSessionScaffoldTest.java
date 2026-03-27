@@ -2,11 +2,15 @@ package com.novelanalyzer.modules.auth.controller;
 
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
+
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,14 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
-        "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration",
-        "app.auth.access-token-expire-seconds=900",
-        "app.auth.refresh-token-expire-seconds=604800",
-        "app.auth.session-max-devices=3",
-        "app.auth.refresh-cookie-name=refresh_token",
-        "app.auth.refresh-cookie-path=/api/auth",
-        "app.auth.refresh-cookie-secure=true",
-        "app.auth.refresh-cookie-same-site=Strict"
+        "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration"
     }
 )
 @Sql(
@@ -38,14 +35,23 @@ class AuthSessionScaffoldTest {
     @Autowired
     private AuthProperties authProperties;
 
+    @Autowired
+    private Validator validator;
+
     @Test
     void shouldLoadUserSessionTableFromSharedSchema() {
+        Integer tableCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'SYS_USER_SESSION'",
+            Integer.class
+        );
+        assertThat(tableCount).isEqualTo(1);
+
         Integer total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_user_session", Integer.class);
         assertThat(total).isZero();
     }
 
     @Test
-    void shouldBindSessionAuthProperties() {
+    void shouldBindSessionAuthPropertiesFromApplicationDefaults() {
         assertThat(authProperties.getAccessTokenExpireSeconds()).isEqualTo(900L);
         assertThat(authProperties.getRefreshTokenExpireSeconds()).isEqualTo(604800L);
         assertThat(authProperties.getSessionMaxDevices()).isEqualTo(3);
@@ -56,14 +62,20 @@ class AuthSessionScaffoldTest {
     }
 
     @Test
-    void shouldKeepDeviceLabelOptionalInLoginRequest() {
+    void shouldValidateDeviceLabelLengthConstraint() {
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");
         request.setPassword("admin123");
-
         assertThat(request.getDeviceLabel()).isNull();
 
+        request.setDeviceLabel("a".repeat(101));
+        Set<ConstraintViolation<LoginRequest>> violations = validator.validate(request);
+        assertThat(violations)
+            .anyMatch(v -> "deviceLabel".equals(v.getPropertyPath().toString()));
+
         request.setDeviceLabel("Chrome on Windows");
-        assertThat(request.getDeviceLabel()).isEqualTo("Chrome on Windows");
+        Set<ConstraintViolation<LoginRequest>> okViolations = validator.validate(request);
+        assertThat(okViolations)
+            .noneMatch(v -> "deviceLabel".equals(v.getPropertyPath().toString()));
     }
 }

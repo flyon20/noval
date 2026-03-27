@@ -7,7 +7,13 @@ app:
   auth:
     jwt-secret: test-jwt-secret-should-be-long-enough-1234567890
     demo-enabled: false
-    access-token-expire-seconds: 7200
+    access-token-expire-seconds: 900
+    refresh-token-expire-seconds: 604800
+    session-max-devices: 3
+    refresh-cookie-name: refresh_token
+    refresh-cookie-path: /api/auth
+    refresh-cookie-secure: true
+    refresh-cookie-same-site: Strict
   security:
     protected-path-prefixes:
       - /api/auth
