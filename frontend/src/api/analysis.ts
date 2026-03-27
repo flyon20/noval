@@ -31,9 +31,9 @@ function createStreamTask(
 ) {
   const runner = createAnalysisStreamRunner({
     getAccessToken,
-    refreshToken: async (token) => {
-      const response = await rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', {
-        token,
+    refreshToken: async () => {
+      const response = await rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', undefined, {
+        withCredentials: true,
       });
 
       return response.data.data;
@@ -60,9 +60,9 @@ async function runTrendBlocking(payload: TrendRequest) {
 function createTrendStreamTask(payload: TrendRequest, callbacks: AnalysisStreamCallbacks<TrendAnalysisResult>) {
   const runner = createAnalysisStreamRunner<TrendRequest, TrendAnalysisResult>({
     getAccessToken,
-    refreshToken: async (token) => {
-      const response = await rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', {
-        token,
+    refreshToken: async () => {
+      const response = await rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', undefined, {
+        withCredentials: true,
       });
 
       return response.data.data;
