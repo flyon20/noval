@@ -209,11 +209,11 @@ public class AuthService {
 
     private void enforceDeviceLimit(Long userId) {
         int maxDevices = Math.max(1, authProperties.getSessionMaxDevices());
-        int activeSessionCount = authSessionRepository.findActiveSessionsByUserId(userId).size();
+        int activeSessionCount = authSessionRepository.findActiveSessionsByUserIdForUpdate(userId).size();
         if (activeSessionCount < maxDevices) {
             return;
         }
-        authSessionService.findOldestActiveSessionForUser(userId).ifPresent(session ->
+        authSessionRepository.findOldestActiveSessionForUserForUpdate(userId).ifPresent(session ->
             authSessionService.revokeSession(
                 session.getSessionId(),
                 AuthSessionStatus.KICKED,
