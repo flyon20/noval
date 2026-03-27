@@ -13,6 +13,7 @@ vi.mock('@/api/crawler', () => ({
     getPreference: vi.fn(),
     savePreference: vi.fn(),
     refreshRankBoard: vi.fn(),
+    getRankStatus: vi.fn(),
     getRankPage: vi.fn(),
     getBookDetail: vi.fn(),
     getChapters: vi.fn(),
@@ -131,6 +132,19 @@ describe('RankView', () => {
         traceId: 'trace-preference',
       },
     } as never);
+    vi.mocked(crawlerApi.getRankStatus).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+        },
+        timestamp: 1,
+        traceId: 'trace-status',
+      },
+    });
     vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
       data: {
         code: 200,
@@ -986,6 +1000,186 @@ describe('RankView', () => {
       page: 1,
       pageSize: 10,
     });
+  });
+
+  test('does not poll the rank page on mobile while keeping refresh-flow auto paging available', async () => {
+    vi.useFakeTimers();
+    setViewportWidth(390);
+    const { crawlerApi } = await import('@/api/crawler');
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          {
+            channelCode: 'male-new',
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
+          },
+        ],
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 404,
+        message: 'not found',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    } as never);
+    vi.mocked(crawlerApi.getRankPage).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 6001,
+          snapshotTime: '2026-03-22T10:00:00',
+          total: 12,
+          page: 1,
+          pageSize: 5,
+          items: buildPageItems(1, 5),
+        },
+        timestamp: 1,
+        traceId: 'trace-page',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: RankView }],
+    });
+    await router.push('/rank');
+
+    const wrapper = mount(RankView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    vi.mocked(crawlerApi.getRankPage).mockClear();
+
+    await vi.advanceTimersByTimeAsync(12000);
+    await flushPromises();
+
+    expect(crawlerApi.getRankPage).not.toHaveBeenCalled();
+    expect(crawlerApi.getRankStatus).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+    });
+    expect(wrapper.find('[data-testid="rank-mobile-sentinel"]').exists()).toBe(true);
+  });
+
+  test('shows a mobile update prompt when lightweight rank status detects a newer snapshot', async () => {
+    vi.useFakeTimers();
+    setViewportWidth(390);
+    const { crawlerApi } = await import('@/api/crawler');
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          {
+            channelCode: 'male-new',
+            channelName: 'Male New',
+            boards: [{ boardCode: 'urban-brain', boardName: 'Urban Brain' }],
+          },
+        ],
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 404,
+        message: 'not found',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    } as never);
+    vi.mocked(crawlerApi.getRankPage)
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: {
+            snapshotId: 6001,
+            snapshotTime: '2026-03-22T10:00:00',
+            total: 12,
+            page: 1,
+            pageSize: 5,
+            items: buildPageItems(1, 5),
+          },
+          timestamp: 1,
+          traceId: 'trace-page-1',
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: {
+            snapshotId: 7002,
+            snapshotTime: '2026-03-22T10:12:00',
+            total: 15,
+            page: 1,
+            pageSize: 5,
+            items: buildPageItems(1, 5),
+          },
+          timestamp: 1,
+          traceId: 'trace-page-2',
+        },
+      });
+    vi.mocked(crawlerApi.getRankStatus).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          snapshotId: 7002,
+          snapshotTime: '2026-03-22T10:12:00',
+          total: 15,
+        },
+        timestamp: 1,
+        traceId: 'trace-status',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/rank', component: RankView }],
+    });
+    await router.push('/rank');
+
+    const wrapper = mount(RankView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    vi.mocked(crawlerApi.getRankPage).mockClear();
+
+    await vi.advanceTimersByTimeAsync(12000);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="rank-mobile-update-banner"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="rank-mobile-update-action"]').trigger('click');
+    await flushPromises();
+
+    expect(crawlerApi.getRankPage).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      channelCode: 'male-new',
+      boardCode: 'urban-brain',
+      page: 1,
+      pageSize: 5,
+    });
+    expect(wrapper.find('[data-testid="rank-mobile-update-banner"]').exists()).toBe(false);
   });
 
   test('restores persisted chapter count and saves changes independently from rank fetch count', async () => {

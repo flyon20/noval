@@ -23,6 +23,7 @@ import com.novelanalyzer.modules.crawler.vo.BookDetailVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterRefreshResultVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import com.novelanalyzer.modules.crawler.vo.RankBoardCatalogVO;
+import com.novelanalyzer.modules.crawler.vo.RankBoardStatusVO;
 import com.novelanalyzer.modules.crawler.vo.RankBoardOptionVO;
 import com.novelanalyzer.modules.crawler.vo.RankBookItemVO;
 import com.novelanalyzer.modules.crawler.vo.RankPageVO;
@@ -182,6 +183,21 @@ public class CrawlerService {
         vo.setPage(safePage);
         vo.setPageSize(safePageSize);
         vo.setItems(items);
+        return vo;
+    }
+
+    public RankBoardStatusVO getRankStatus(String platform,
+                                           String channelCode,
+                                           String boardCode) {
+        RankBoardEntity board = crawlerRepository.findRankBoard(platform, channelCode, boardCode)
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank board not found"));
+        RankSnapshotEntity snapshot = crawlerRepository.findLatestBoardSnapshot(board.getId())
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found"));
+
+        RankBoardStatusVO vo = new RankBoardStatusVO();
+        vo.setSnapshotId(snapshot.getId());
+        vo.setSnapshotTime(snapshot.getSnapshotTime());
+        vo.setTotal(resolveSnapshotTotal(snapshot));
         return vo;
     }
 

@@ -9,6 +9,7 @@ import type {
   Platform,
   RankFetchCount,
   RankBoardCatalog,
+  RankBoardStatus,
   RankBookItem,
   RankPageRequest,
   RankPageResult,
@@ -38,6 +39,11 @@ export const crawlerApi = {
   },
   getRankPage(params: RankPageRequest) {
     return httpClient.get<ApiResponse<RankPageResult>>('/api/crawler/rank/page', {
+      params,
+    });
+  },
+  getRankStatus(params: { platform: Platform; channelCode: string; boardCode: string }) {
+    return httpClient.get<ApiResponse<RankBoardStatus>>('/api/crawler/rank/status', {
       params,
     });
   },

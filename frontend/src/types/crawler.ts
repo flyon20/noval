@@ -73,6 +73,12 @@ export interface RankPageResult {
   items: RankBookItem[];
 }
 
+export interface RankBoardStatus {
+  snapshotId: number;
+  snapshotTime?: string;
+  total: number;
+}
+
 export interface BookDetail {
   bookId: number;
   platform: Platform;

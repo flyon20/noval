@@ -73,6 +73,9 @@ const state = reactive({
   snapshotId: undefined as number | undefined,
   snapshotTime: '',
   refreshInfo: null as RankRefreshResult | null,
+  pendingSnapshotId: undefined as number | undefined,
+  pendingSnapshotTime: '',
+  pendingTotal: 0,
   isMobileViewport: false,
   loadingMore: false,
   loadMoreError: '',
@@ -441,6 +444,9 @@ function applyPageResult(pageResult: RankPageResult, options: { append?: boolean
   state.total = pageResult.total;
   state.snapshotId = pageResult.snapshotId;
   state.snapshotTime = pageResult.snapshotTime ?? '';
+  if (state.pendingSnapshotId && state.pendingSnapshotId === pageResult.snapshotId) {
+    clearPendingBoardUpdate();
+  }
   if (!state.loadedPages.includes(pageResult.page)) {
     state.loadedPages.push(pageResult.page);
   }
@@ -450,6 +456,13 @@ function resetRefreshFlowState() {
   state.loadedPages = [];
   state.loadingMore = false;
   state.loadMoreError = '';
+  clearPendingBoardUpdate();
+}
+
+function clearPendingBoardUpdate() {
+  state.pendingSnapshotId = undefined;
+  state.pendingSnapshotTime = '';
+  state.pendingTotal = 0;
 }
 
 function applyListError(error: unknown, fallbackMessage: string) {
@@ -576,6 +589,10 @@ function scheduleBoardPoll(delay = BOARD_POLL_INTERVAL_MS) {
   }
 
   boardPollTimer = setTimeout(() => {
+    if (useRefreshFlow.value) {
+      void pollCurrentBoardStatus();
+      return;
+    }
     void pollCurrentBoardPage();
   }, delay);
 }
@@ -623,6 +640,42 @@ async function pollCurrentBoardPage() {
   } catch (error) {
     scheduleBoardPoll(isSnapshotMissingError(error) ? BOARD_RETRY_INTERVAL_MS : BOARD_POLL_INTERVAL_MS);
   }
+}
+
+async function pollCurrentBoardStatus() {
+  if (!filters.channelCode || !filters.boardCode) {
+    return;
+  }
+
+  if (state.listLoading || state.detailLoading || state.chapterLoading || state.chapterRefreshLoading) {
+    scheduleBoardPoll();
+    return;
+  }
+
+  try {
+    const response = await crawlerApi.getRankStatus({
+      platform: filters.platform,
+      channelCode: filters.channelCode,
+      boardCode: filters.boardCode,
+    });
+    const latestStatus = response.data.data;
+    if (state.snapshotId && latestStatus.snapshotId !== state.snapshotId) {
+      state.pendingSnapshotId = latestStatus.snapshotId;
+      state.pendingSnapshotTime = latestStatus.snapshotTime ?? '';
+      state.pendingTotal = latestStatus.total;
+    }
+    scheduleBoardPoll();
+  } catch {
+    scheduleBoardPoll();
+  }
+}
+
+async function applyPendingBoardUpdate() {
+  if (!state.pendingSnapshotId) {
+    return;
+  }
+
+  await loadCurrentBoard();
 }
 
 onMounted(() => {
@@ -781,6 +834,30 @@ watch(
       <div class="rank-page__snapshot-note">
         <span data-testid="rank-current-total">当前快照 {{ state.total }} 本</span>
         <span data-testid="rank-next-fetch-count">下次重新抓取按 {{ filters.rankFetchCount }} 本执行</span>
+      </div>
+
+      <div
+        v-if="useRefreshFlow && state.pendingSnapshotId"
+        class="rank-page__mobile-update"
+        data-testid="rank-mobile-update-banner"
+      >
+        <span class="rank-page__mobile-update-copy">
+          ?????
+          <template v-if="state.pendingSnapshotTime">
+            ? {{ state.pendingSnapshotTime }}
+          </template>
+          <template v-if="state.pendingTotal > 0">
+            ? {{ state.pendingTotal }} ?
+          </template>
+        </span>
+        <button
+          class="rank-page__mobile-update-button"
+          data-testid="rank-mobile-update-action"
+          type="button"
+          @click="applyPendingBoardUpdate"
+        >
+          ????
+        </button>
       </div>
 
       <el-alert
@@ -1094,6 +1171,39 @@ watch(
   -webkit-backdrop-filter: blur(14px);
 }
 
+.rank-page__mobile-update {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
+  border-radius: 1rem;
+  background:
+    linear-gradient(135deg, rgba(92, 124, 250, 0.12), rgba(255, 147, 186, 0.1)),
+    color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: var(--shadow-card);
+}
+
+.rank-page__mobile-update-copy {
+  color: var(--color-text);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.rank-page__mobile-update-button {
+  flex-shrink: 0;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.95rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .rank-page__snapshot-card {
   display: grid;
   gap: 0.35rem;
@@ -1274,6 +1384,15 @@ watch(
 
   .rank-page__snapshot {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rank-page__mobile-update {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rank-page__mobile-update-button {
+    width: 100%;
   }
 
   .rank-page__snapshot-note {
