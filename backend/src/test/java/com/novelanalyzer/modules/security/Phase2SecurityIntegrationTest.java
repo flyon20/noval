@@ -159,9 +159,11 @@ class Phase2SecurityIntegrationTest {
 
         String accessToken = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.data.accessToken");
         String sessionId = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret()).get("sid", String.class);
+        String userSessionsKey = "auth:user:sessions:1";
         assertThat(sessionId).isNotBlank();
 
         stringRedisTemplate.delete("auth:session:" + sessionId);
+        stringRedisTemplate.opsForZSet().remove(userSessionsKey, sessionId);
 
         mockMvc.perform(get("/api/secure/user/ping")
                 .with(remoteAddr("127.0.9.8"))
@@ -170,7 +172,9 @@ class Phase2SecurityIntegrationTest {
             .andExpect(jsonPath("$.code").value(200));
 
         String cachedUserId = (String) stringRedisTemplate.opsForHash().get("auth:session:" + sessionId, "userId");
+        Double zsetScore = stringRedisTemplate.opsForZSet().score(userSessionsKey, sessionId);
         assertThat(cachedUserId).isEqualTo("1");
+        assertThat(zsetScore).isNotNull();
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {

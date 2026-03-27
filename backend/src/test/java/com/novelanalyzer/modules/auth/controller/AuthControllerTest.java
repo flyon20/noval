@@ -410,6 +410,49 @@ class AuthControllerTest {
         assertThat(newLastActive.toLocalDateTime()).isAfter(oldLastActive.toLocalDateTime());
     }
 
+    @Test
+    void shouldKeepDirtyMarkerWhenRedisSessionTimestampIsMissingBeforeFlush() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String accessToken = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.data.accessToken");
+        String sessionId = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret()).get("sid", String.class);
+        assertThat(sessionId).isNotBlank();
+
+        jdbcTemplate.update(
+            "UPDATE sys_user_session SET last_active_time = DATEADD('MINUTE', -10, CURRENT_TIMESTAMP) WHERE session_id = ?",
+            sessionId
+        );
+        Timestamp oldLastActive = jdbcTemplate.queryForObject(
+            "SELECT last_active_time FROM sys_user_session WHERE session_id = ?",
+            Timestamp.class,
+            sessionId
+        );
+        assertThat(oldLastActive).isNotNull();
+
+        mockMvc.perform(get("/api/secure/user/ping")
+                .header("Authorization", "Bearer " + accessToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        assertThat(stringRedisTemplate.opsForSet().isMember("auth:session:dirty", sessionId)).isTrue();
+
+        stringRedisTemplate.delete("auth:session:" + sessionId);
+        authSessionFlushScheduler.flushDirtySessions();
+
+        assertThat(stringRedisTemplate.opsForSet().isMember("auth:session:dirty", sessionId)).isTrue();
+        Timestamp stillOldLastActive = jdbcTemplate.queryForObject(
+            "SELECT last_active_time FROM sys_user_session WHERE session_id = ?",
+            Timestamp.class,
+            sessionId
+        );
+        assertThat(stillOldLastActive).isEqualTo(oldLastActive);
+    }
+
     private RequestPostProcessor remoteAddr(String ip) {
         return request -> {
             request.setRemoteAddr(ip);

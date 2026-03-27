@@ -230,7 +230,9 @@ public class AuthSessionService {
                     return false;
                 }
                 cacheSessionState(persisted.get());
-                activeTime = persisted.get().getLastActiveTime();
+                // Do not flush using the persisted MySQL timestamp when the hot Redis timestamp is missing.
+                // Keep the session dirty so the next real activity can repopulate a fresh lastActiveTime.
+                return false;
             }
 
             boolean updated = authSessionRepository.updateLastActiveTime(sessionId, activeTime);
