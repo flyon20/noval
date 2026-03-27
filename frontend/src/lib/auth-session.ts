@@ -1,7 +1,7 @@
 import { shallowRef } from 'vue';
 import type { AuthSession, TokenResponse } from '@/types/auth';
-import { buildAuthSession, buildAuthSessionFromSnapshot } from '@/utils/jwt';
-import { clearTokenSnapshot, persistTokenSnapshot, readTokenSnapshot } from '@/utils/storage';
+import { buildAuthSession } from '@/utils/jwt';
+import { clearTokenSnapshot, persistTokenSnapshot } from '@/utils/storage';
 
 export const authSessionRef = shallowRef<AuthSession | null>(null);
 
@@ -10,7 +10,7 @@ export function getCurrentSession() {
 }
 
 export function getAccessToken() {
-  return authSessionRef.value?.accessToken ?? readTokenSnapshot()?.accessToken ?? null;
+  return authSessionRef.value?.accessToken ?? null;
 }
 
 export function setCurrentSession(session: AuthSession | null) {
@@ -21,6 +21,7 @@ export function setCurrentSession(session: AuthSession | null) {
     return;
   }
 
+  // Kept for compatibility, but storage no longer persists auth tokens.
   persistTokenSnapshot({
     accessToken: session.accessToken,
     tokenType: session.tokenType,
@@ -36,29 +37,9 @@ export function applyTokenResponse(response: TokenResponse) {
 }
 
 export function restoreSessionFromStorage() {
-  const snapshot = readTokenSnapshot();
-
-  if (!snapshot) {
-    authSessionRef.value = null;
-    return null;
-  }
-
-  try {
-    const session = buildAuthSessionFromSnapshot(snapshot);
-
-    if (!session) {
-      clearTokenSnapshot();
-      authSessionRef.value = null;
-      return null;
-    }
-
-    authSessionRef.value = session;
-    return session;
-  } catch {
-    clearTokenSnapshot();
-    authSessionRef.value = null;
-    return null;
-  }
+  clearTokenSnapshot();
+  authSessionRef.value = null;
+  return null;
 }
 
 export function clearCurrentSession() {

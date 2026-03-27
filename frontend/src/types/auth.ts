@@ -8,10 +8,6 @@ export interface RegisterRequest {
   password: string;
 }
 
-export interface RefreshTokenRequest {
-  token: string;
-}
-
 export interface TokenResponse {
   accessToken: string;
   tokenType: 'Bearer';
@@ -28,6 +24,7 @@ export interface JwtClaims {
 }
 
 export type RoleCode = 'ADMIN' | 'USER';
+export type AuthRestoreStatus = 'restoring' | 'authenticated' | 'logged_out';
 
 export interface AuthSession {
   userId: number;
