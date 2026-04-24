@@ -3,6 +3,7 @@
 *.iml
 .claude/
 .superpowers/
+.worktrees/
 
 # OS
 .DS_Store
