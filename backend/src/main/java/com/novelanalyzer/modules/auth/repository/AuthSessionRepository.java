@@ -214,6 +214,25 @@ public class AuthSessionRepository {
         return affected > 0;
     }
 
+    public int revokeAllActiveSessionsByUserId(Long userId, int revokedStatus, String reason, LocalDateTime revokedAt) {
+        return jdbcTemplate.update(
+            """
+            UPDATE sys_user_session
+            SET status = ?,
+                revoke_reason = ?,
+                revoked_at = ?,
+                update_time = CURRENT_TIMESTAMP,
+                version = version + 1
+            WHERE user_id = ? AND status = ? AND deleted = 0
+            """,
+            revokedStatus,
+            reason,
+            revokedAt,
+            userId,
+            AuthSessionStatus.ACTIVE
+        );
+    }
+
     public Optional<AuthSessionEntity> findOldestActiveSessionForUser(Long userId) {
         List<AuthSessionEntity> sessions = jdbcTemplate.query(
             """

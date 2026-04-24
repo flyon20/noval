@@ -31,3 +31,12 @@ logs/
 login-body.json
 redis_help_test.txt
 start_test*.txt
+analysis-current-context.json
+appendonly.aof
+patch.tmp
+deconstruct.txt
+local.sms.env.ps1
+backend/Dump*.java
+backend/ReadSmsLog.java
+.tmp-v4-restore/
+noval-deploy-*.tgz

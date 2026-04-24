@@ -6,10 +6,17 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.web.RequestIpResolver;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
+import com.novelanalyzer.modules.auth.dto.PasswordResetRequest;
 import com.novelanalyzer.modules.auth.dto.RegisterRequest;
+import com.novelanalyzer.modules.auth.dto.SmsLoginRequest;
+import com.novelanalyzer.modules.auth.dto.SmsSendRequest;
 import com.novelanalyzer.modules.auth.service.AuthService;
+import com.novelanalyzer.modules.auth.service.SmsAuthService;
+import com.novelanalyzer.modules.auth.service.TurnstileService;
+import com.novelanalyzer.modules.auth.vo.SmsSendResponse;
 import com.novelanalyzer.modules.auth.vo.TokenResponse;
 import com.novelanalyzer.modules.security.repository.IpBlacklistRepository;
+import com.novelanalyzer.modules.security.service.PasswordLoginRiskControlService;
 import com.novelanalyzer.modules.security.service.RateLimitService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,27 +46,60 @@ public class AuthController {
     private final RequestIpResolver requestIpResolver;
     private final IpBlacklistRepository ipBlacklistRepository;
     private final AuthProperties authProperties;
+    private final SmsAuthService smsAuthService;
+    private final TurnstileService turnstileService;
+    private final PasswordLoginRiskControlService passwordLoginRiskControlService;
 
     public AuthController(AuthService authService,
                           RateLimitService rateLimitService,
                           RequestIpResolver requestIpResolver,
                           IpBlacklistRepository ipBlacklistRepository,
-                          AuthProperties authProperties) {
+                          AuthProperties authProperties,
+                          SmsAuthService smsAuthService,
+                          TurnstileService turnstileService,
+                          PasswordLoginRiskControlService passwordLoginRiskControlService) {
         this.authService = authService;
         this.rateLimitService = rateLimitService;
         this.requestIpResolver = requestIpResolver;
         this.ipBlacklistRepository = ipBlacklistRepository;
         this.authProperties = authProperties;
+        this.smsAuthService = smsAuthService;
+        this.turnstileService = turnstileService;
+        this.passwordLoginRiskControlService = passwordLoginRiskControlService;
     }
 
-    @PostMapping("/login")
+    @PostMapping({"/login", "/login/password"})
     public Result<TokenResponse> login(@Valid @RequestBody LoginRequest request,
                                        HttpServletRequest httpServletRequest,
                                        HttpServletResponse httpServletResponse) {
-        String requestIp = assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/login");
+        String requestIp = assertPublicAuthRequestAllowed(httpServletRequest, resolveLoginRateLimitPath(httpServletRequest));
+        passwordLoginRiskControlService.assertAllowed(request.getPhone(), requestIp);
         AuthService.LoginResult loginResult = authService.login(request, requestIp);
         writeRefreshCookie(httpServletRequest, httpServletResponse, loginResult.refreshToken());
         return Result.success(loginResult.tokenResponse());
+    }
+
+    @PostMapping("/login/sms")
+    public Result<TokenResponse> loginWithSms(@Valid @RequestBody SmsLoginRequest request,
+                                              HttpServletRequest httpServletRequest,
+                                              HttpServletResponse httpServletResponse) {
+        String requestIp = assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/login/sms");
+        AuthService.LoginResult loginResult = authService.loginWithSms(request, requestIp);
+        writeRefreshCookie(httpServletRequest, httpServletResponse, loginResult.refreshToken());
+        return Result.success(loginResult.tokenResponse());
+    }
+
+    @PostMapping("/sms/send")
+    public Result<SmsSendResponse> sendSmsCode(@Valid @RequestBody SmsSendRequest request,
+                                               HttpServletRequest httpServletRequest) {
+        String requestIp = assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/sms/send");
+        turnstileService.assertSmsSendPassed(request.getTurnstileToken(), requestIp);
+        SmsAuthService.SendResult sendResult = smsAuthService.sendVerifyCode(request.getPhone(), request.getBizType(), requestIp);
+        String debugVerifyCode = isLoopbackHost(requestIp) ? sendResult.debugVerifyCode() : null;
+        SmsSendResponse response = new SmsSendResponse();
+        response.setDebugVerifyCode(debugVerifyCode);
+        response.setSmsOutId(sendResult.outId());
+        return Result.success(response);
     }
 
     @PostMapping("/register")
@@ -70,6 +110,14 @@ public class AuthController {
         AuthService.LoginResult registerResult = authService.register(request, requestIp);
         writeRefreshCookie(httpServletRequest, httpServletResponse, registerResult.refreshToken());
         return Result.success(registerResult.tokenResponse());
+    }
+
+    @PostMapping("/password/reset")
+    public Result<Void> resetPassword(@Valid @RequestBody PasswordResetRequest request,
+                                      HttpServletRequest httpServletRequest) {
+        assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/password/reset");
+        authService.resetPassword(request);
+        return Result.success();
     }
 
     @PostMapping("/refresh")
@@ -122,6 +170,17 @@ public class AuthController {
             return refreshToken;
         }
         throw new BusinessException(ResultCode.BAD_REQUEST, "refresh token is required");
+    }
+
+    private String resolveLoginRateLimitPath(HttpServletRequest request) {
+        if (request == null) {
+            return "/api/auth/login/password";
+        }
+        String uri = request.getRequestURI();
+        if ("/api/auth/login".equals(uri) || "/api/auth/login/password".equals(uri)) {
+            return "/api/auth/login/password";
+        }
+        return uri;
     }
 
     private String extractOptionalRefreshToken(HttpServletRequest request) {

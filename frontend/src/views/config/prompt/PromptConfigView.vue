@@ -3,7 +3,7 @@ import { ElMessage } from 'element-plus';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { promptConfigApi, systemConfigApi } from '@/api/config';
 import { getErrorPayload } from '@/lib/http-error';
-import type { AiModelOption, PromptConfig, PromptType } from '@/types/config';
+import type { AiModelOption, PromptConfig, PromptTemplateOption, PromptType } from '@/types/config';
 
 const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
   { label: '拆文分析', value: 'deconstruct' },
@@ -13,11 +13,14 @@ const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
 ];
 
 const activeType = ref<PromptType>('deconstruct');
+const activeTemplateName = ref('');
 const loading = ref(false);
 const saving = ref(false);
+const deleting = ref(false);
 const traceId = ref('');
 const errorMessage = ref('');
 const contractUnlocked = ref(false);
+const templateOptions = ref<PromptTemplateOption[]>([]);
 
 const formState = reactive({
   promptName: '',
@@ -43,6 +46,8 @@ const contractFieldCount = computed(() => [
 ].filter((item) => item.trim().length > 0).length);
 
 const hasLoadedContract = computed(() => contractFieldCount.value > 0);
+const isDefaultTemplate = computed(() => currentPromptIsDefault.value || formState.promptName.trim() === 'default');
+const currentPromptIsDefault = ref(false);
 const contractStatusDescription = computed(() => (
   hasLoadedContract.value
     ? `当前已加载 ${contractFieldCount.value} 项系统结构约束，运行时会以这些字段作为框架侧的输入 / 输出合同基础。`
@@ -50,6 +55,8 @@ const contractStatusDescription = computed(() => (
 ));
 
 function applyPromptConfig(config: PromptConfig) {
+  activeTemplateName.value = config.promptName;
+  currentPromptIsDefault.value = Boolean(config.isDefault);
   formState.promptName = config.promptName;
   formState.promptContent = config.promptContent;
   formState.modelName = config.modelName;
@@ -65,13 +72,21 @@ function applyPromptConfig(config: PromptConfig) {
 }
 
 async function loadPromptConfig(promptType = activeType.value) {
+  return loadPromptConfigByName(promptType);
+}
+
+async function loadPromptConfigByName(promptType = activeType.value, promptName?: string) {
   loading.value = true;
   errorMessage.value = '';
   traceId.value = '';
 
   try {
-    const response = await promptConfigApi.getByType(promptType);
+    const [templatesResponse, response] = await Promise.all([
+      promptConfigApi.listTemplates(promptType),
+      promptConfigApi.getByType(promptType, promptName),
+    ]);
     activeType.value = promptType;
+    templateOptions.value = templatesResponse.data.data ?? [];
     traceId.value = response.data.traceId;
     applyPromptConfig(response.data.data);
   } catch (error) {
@@ -81,6 +96,22 @@ async function loadPromptConfig(promptType = activeType.value) {
   } finally {
     loading.value = false;
   }
+}
+
+async function handleTemplateChange(promptName: string) {
+  if (!promptName) {
+    return;
+  }
+  if (!templateOptions.value.some((item) => item.promptName === promptName)) {
+    activeTemplateName.value = promptName;
+    currentPromptIsDefault.value = false;
+    formState.promptName = promptName;
+    return;
+  }
+  if (promptName === formState.promptName) {
+    return;
+  }
+  await loadPromptConfigByName(activeType.value, promptName);
 }
 
 function buildUpdatePayload() {
@@ -138,6 +169,26 @@ async function handleSave() {
   }
 }
 
+async function handleDeleteTemplate() {
+  if (isDefaultTemplate.value) {
+    ElMessage.warning('默认模板不能删除');
+    return;
+  }
+
+  deleting.value = true;
+  try {
+    await promptConfigApi.remove(activeType.value, formState.promptName.trim());
+    ElMessage.success('模板已删除');
+    await loadPromptConfigByName(activeType.value, 'default');
+  } catch (error) {
+    const payload = getErrorPayload(error);
+    traceId.value = payload.traceId ?? traceId.value;
+    ElMessage.error(payload.message ?? '模板删除失败');
+  } finally {
+    deleting.value = false;
+  }
+}
+
 const modelOptions = ref<AiModelOption[]>([]);
 
 onMounted(() => {
@@ -192,9 +243,30 @@ onMounted(() => {
       label-position="top"
     >
       <div class="prompt-config-page__grid">
+        <el-form-item label="模板选择">
+          <el-select
+            v-model="activeTemplateName"
+            allow-create
+            filterable
+            default-first-option
+            data-test="prompt-template-select"
+            placeholder="选择模板名称"
+            style="width: 100%"
+            @change="handleTemplateChange"
+          >
+            <el-option
+              v-for="template in templateOptions"
+              :key="`${template.promptType}-${template.promptName}`"
+              :label="`${template.promptName} (${template.modelName})`"
+              :value="template.promptName"
+            />
+          </el-select>
+        </el-form-item>
+
         <el-form-item label="提示词名称">
           <el-input
             v-model="formState.promptName"
+            :disabled="isDefaultTemplate"
             data-test="prompt-name-input"
             placeholder="请输入提示词名称"
           />
@@ -254,6 +326,14 @@ onMounted(() => {
 
       <div class="prompt-config-page__hint">
         保存前必须保留 <code v-pre>{{content}}</code> 占位符。提示词写法保持业务专业性，JSON 契约则放到下方锁定区单独维护。
+      </div>
+
+      <div
+        v-if="isDefaultTemplate"
+        class="prompt-config-page__hint"
+        data-test="prompt-default-template-hint"
+      >
+        默认模板名称不可修改，只能修改内容和参数。
       </div>
 
       <section class="prompt-config-page__contract">
@@ -358,6 +438,16 @@ onMounted(() => {
       </div>
 
       <div class="prompt-config-page__actions">
+        <el-button
+          v-if="!isDefaultTemplate"
+          plain
+          type="danger"
+          :loading="deleting"
+          data-test="prompt-delete-button"
+          @click="handleDeleteTemplate"
+        >
+          删除模板
+        </el-button>
         <el-button
           type="primary"
           :loading="saving"

@@ -1,6 +1,7 @@
 package com.novelanalyzer.modules.config.repository;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.novelanalyzer.modules.config.mapper.PromptConfigMapper;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import org.springframework.stereotype.Repository;
@@ -39,6 +40,30 @@ public class PromptConfigRepository {
                 .last("LIMIT 1")
         );
         return Optional.ofNullable(entity);
+    }
+
+    public Optional<PromptConfigEntity> findActiveByTypeAndName(String promptType, String promptName) {
+        PromptConfigEntity entity = promptConfigMapper.selectOne(
+            new LambdaQueryWrapper<PromptConfigEntity>()
+                .eq(PromptConfigEntity::getPromptType, promptType)
+                .eq(PromptConfigEntity::getPromptName, promptName)
+                .eq(PromptConfigEntity::getStatus, 1)
+                .eq(PromptConfigEntity::getDeleted, 0)
+                .last("LIMIT 1")
+        );
+        return Optional.ofNullable(entity);
+    }
+
+    public List<PromptConfigEntity> findActiveByType(String promptType) {
+        return promptConfigMapper.selectList(
+            new LambdaQueryWrapper<PromptConfigEntity>()
+                .eq(PromptConfigEntity::getPromptType, promptType)
+                .eq(PromptConfigEntity::getStatus, 1)
+                .eq(PromptConfigEntity::getDeleted, 0)
+                .orderByDesc(PromptConfigEntity::getIsDefault)
+                .orderByAsc(PromptConfigEntity::getPromptName)
+                .orderByAsc(PromptConfigEntity::getId)
+        );
     }
 
     public List<PromptConfigEntity> findAllActive() {
@@ -87,5 +112,16 @@ public class PromptConfigRepository {
             throw new IllegalStateException("failed to save prompt_config");
         }
         return entity.getId();
+    }
+
+    public void softDeleteById(Long id) {
+        promptConfigMapper.update(
+            null,
+            new LambdaUpdateWrapper<PromptConfigEntity>()
+                .eq(PromptConfigEntity::getId, id)
+                .set(PromptConfigEntity::getStatus, 0)
+                .set(PromptConfigEntity::getDeleted, 1)
+                .set(PromptConfigEntity::getUpdateTime, java.time.LocalDateTime.now())
+        );
     }
 }

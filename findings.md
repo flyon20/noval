@@ -391,3 +391,418 @@
 - Trend word cloud needed to become a genuinely visual, colorful cloud rather than a pill list.
 - The theme distribution pie chart needed labels removed from the pie itself to stop legend/metric text colliding inside the chart.
 - Theme-table content was clearer as an actual table than as stacked descriptive cards.
+
+## Session Addendum 2026-03-29 (Admin Bootstrap + Secret Config Hardening)
+
+### Confirmed Root Causes
+- Model registry `apiKey` values were stored in `system_config.ai.model-registry.json` as plaintext and returned to the frontend unchanged.
+- The generic system-config endpoint also exposed plaintext values for secret-like keys such as `ai.langgraph-worker.internal-api-key`.
+- Authentication already moved to phone-based login, but some backend integration tests still used legacy username payloads.
+- The requested phone `15599316908` had no automatic promotion path to `ADMIN`; role state depended only on existing DB rows.
+
+### Locked Implementation Direction
+- Keep secrets server-side only: admin can submit a real key, but subsequent reads return only masked state.
+- Encrypt persisted runtime secrets at rest in the backend and decrypt only inside the server process when invoking providers.
+- Keep env-var fallback for deployment, but allow admin-configured keys to override and take effect immediately.
+- Add a backend-managed bootstrap admin phone list so `15599316908` can become `ADMIN` automatically on login/register/refresh without manual DB surgery.
+
+## Session Addendum 2026-03-29 (Turnstile + SMS Anti-Abuse)
+
+### Confirmed Integration Seams
+- SMS send currently enters through `AuthController.sendSmsCode(...)`, so Turnstile should be enforced there instead of buried inside Aliyun send logic.
+- Login page already centralizes all SMS-triggering modes in `LoginView.vue`, so one shared Turnstile widget/state is enough.
+- Existing SMS risk control only throttled by phone cooldown, which is insufficient against proxy-distributed abuse.
+
+### Locked Direction
+- Add a public auth-config endpoint exposing only Turnstile enabled/site-key state.
+- Gate `/api/auth/sms/send` with backend Turnstile siteverify before Aliyun send.
+- Expand SMS risk control to phone/IP/bizType dimensions with Redis-first behavior and local fallback.
+
+## Session Addendum 2026-03-29 (Password Login Anti-Bruteforce)
+
+### Confirmed Root Cause
+- Existing password login protection only reused the generic per-IP request rate limiter.
+- That generic limiter could slow obvious hammering, but it could not reliably stop:
+  - same phone across multiple IPs
+  - same IP sweeping many phones
+  - repeated password guessing against one phone+IP pair
+
+### Locked Direction
+- Add a dedicated password-login risk-control service separate from the generic request limiter.
+- Enforce three dimensions before auth execution:
+  - phone
+  - IP
+  - phone+IP pair
+- Record failures on wrong password / unknown phone / disabled account, and clear phone-scoped counters on successful login.
+
+## Session Addendum 2026-04-24 (Project Understanding Review)
+
+### Runtime / Topology Findings
+- The repository is still organized as a four-service stack:
+  - `frontend/`: Vue 3 + Vite + Element Plus + Pinia
+  - `backend/`: Spring Boot 3.2 + MyBatis-Plus + Redis
+  - `crawler/`: FastAPI crawler for rank/book/chapter data
+  - `langgraph-worker/`: FastAPI internal AI worker
+- `docker-compose.yml` confirms the production-like topology:
+  - `nginx` fronts `backend`
+  - `backend` depends on `mysql`, `redis`, `crawler`, and `langgraph-worker`
+  - `crawler` and `langgraph-worker` are internal-only service dependencies, not direct user-facing services
+- Backend env config shows the current architecture is still dual-runtime for AI:
+  - Java backend can call direct OpenAI-compatible providers
+  - Java backend can also call the internal LangGraph worker
+
+### Frontend Bootstrap Findings
+- `frontend/src/main.ts` restores auth before mounting the app, so route resolution depends on an early auth bootstrap.
+- `frontend/src/router/index.ts` uses a single protected layout with child pages for:
+  - `/rank`
+  - `/analysis`
+  - `/trend`
+  - `/history`
+  - `/config/prompt`
+  - `/config/system`
+- `frontend/src/router/guards.ts` keeps the route guard simple:
+  - unauthenticated users are redirected to `/login`
+  - authenticated users visiting `/login` are redirected to `/rank`
+  - role-gated pages are enforced client-side by `meta.roles`
+
+### Frontend Auth / Session Findings
+- `frontend/src/stores/auth.ts` models auth state as:
+  - `authenticated`
+  - `logged_out`
+  - `restoring`
+- Frontend access tokens are memory-only:
+  - `frontend/src/lib/auth-session.ts` clears token snapshot persistence instead of restoring from storage
+  - real session restoration relies on refresh-cookie bootstrap, not local token persistence
+- `frontend/src/lib/http.ts` centralizes auth header injection and automatic refresh-on-401 behavior.
+- `frontend/src/lib/auth-bootstrap.ts` performs the initial silent refresh through `POST /api/auth/refresh` with cookies.
+
+### Frontend API Layer Findings
+- `frontend/src/api/auth.ts` shows the current auth contract is phone-first:
+  - password login -> `/api/auth/login/password`
+  - SMS login -> `/api/auth/login/sms`
+  - registration -> `/api/auth/register`
+  - SMS send -> `/api/auth/sms/send`
+- `frontend/src/api/crawler.ts` confirms the rank module is board-oriented, not just a one-shot crawler call:
+  - board catalog
+  - user preference
+  - rank page
+  - rank refresh
+  - rank status
+  - book detail
+  - chapters / refresh
+- `frontend/src/api/analysis.ts` confirms both single-book and trend analysis support:
+  - blocking requests
+  - streaming requests
+  - automatic stream fallback to blocking
+- Long single-book analysis is treated as a special path:
+  - chapter count `>= 10` gets a much larger frontend blocking timeout (`180000ms`)
+- `frontend/src/api/data.ts` shows trend visualization and history are read from backend read models, not recomputed in the client.
+- `frontend/src/api/config.ts` confirms the config UI is split into:
+  - prompt config
+  - system config
+  - model registry / model options
+  - generic user config persistence
+
+### Frontend Page / State Findings
+- `frontend/src/views/login/LoginView.vue` is no longer a simple username/password page:
+  - password login, SMS login, register, and reset-password are all handled in one view
+  - SMS send can be gated by Cloudflare Turnstile public config from `/api/system/auth-public-config`
+  - password rules are enforced both in UI and backend contract
+- `frontend/src/views/rank/RankView.vue` is the operational hub before analysis:
+  - loads board catalog + saved preference + saved chapter-count preference
+  - supports board refresh, paged rank browsing, book detail, chapter preview, and jump-to-analysis
+  - mobile mode switches from classic pagination to refresh-flow / infinite-scroll behavior
+  - board polling continues in the background to surface newer snapshots
+- `frontend/src/views/analysis/AnalysisView.vue` is organized around three independent modes:
+  - `deconstruct`
+  - `structure`
+  - `plot`
+- Analysis page behavior is intentionally stateful:
+  - current book context is restored from route or `user_config.analysis.current-context`
+  - persisted history is rehydrated from `/api/data/history`
+  - first manual run starts only the active panel, not all three at once
+  - model selection is shared through `user_config.ai.preferred-model`
+- `frontend/src/views/trend/TrendView.vue` is board-scoped and click-to-run:
+  - restores board context from `user_config.trend.current-context`
+  - falls back to crawler preference only if dedicated trend context is missing
+  - visual cards/charts poll `/api/data/visual`
+  - trend analysis itself is manual and streamed through `/api/analysis/trend/stream`
+
+### Frontend Stream / Display Findings
+- `frontend/src/lib/analysis-stream.ts` is the core SSE runner for both analysis and trend:
+  - parses raw SSE frames manually
+  - auto-refreshes token on `401`
+  - falls back to blocking HTTP if SSE is unsupported, malformed, or fails before real content arrives
+- The stream runner intentionally ignores transport-only placeholder deltas such as `[analysis-progress] ...`.
+- `frontend/src/lib/analysis-display.ts` and `frontend/src/lib/trend-display.ts` are important presentation adapters:
+  - they parse structured JSON embedded in model output
+  - they normalize partially structured results into UI-friendly text/cards/tables
+  - trend display heavily prefers stored structured JSON over ad-hoc frontend guessing
+
+### Backend Auth / Security Findings
+- Backend auth is based on:
+  - bearer access token in memory on the frontend
+  - refresh token in HttpOnly cookie
+  - session validation against MySQL/Redis-backed auth-session state
+- `backend/.../AuthTokenFilter.java` is the main gateway for protected APIs:
+  - checks whitelist/protected path prefixes
+  - resolves trusted client IP
+  - enforces IP blacklist
+  - validates bearer token and blacklist status
+  - rehydrates caller session via `sid`
+  - applies generic rate limiting
+- `RequireRoleInterceptor` adds method/class-level role checks after authentication.
+- `GlobalExceptionHandler` maps validation failures to `400` and business errors to structured JSON responses with real HTTP status codes.
+
+### Backend Auth Business Findings
+- `AuthController` is already phone-first:
+  - password login
+  - SMS login
+  - SMS send
+  - register
+  - password reset
+  - refresh
+  - logout
+- `AuthService` centralizes the real auth business rules:
+  - password verification and password rule enforcement
+  - SMS verification use
+  - refresh-token rotation
+  - token blacklisting on logout
+  - active-device limit enforcement
+  - bootstrap-admin phone promotion
+- `AuthSessionService` shows session state is hybrid:
+  - MySQL is the source of truth
+  - Redis caches active session / refresh-token mappings / dirty-session activity timestamps
+  - activity is flushed back to MySQL later
+- `SmsAuthService` integrates Aliyun verification code sending and checking, while risk control is handled separately.
+
+### Backend Config Findings
+- `SystemConfigService` is a major runtime pivot, not just a CRUD wrapper:
+  - provides typed config lookup with defaults
+  - stores AI model registry
+  - encrypts secret config values at rest
+  - syncs registry back to legacy flat config keys for compatibility
+- `PromptConfigService` is part of the analysis runtime path:
+  - resolves runtime prompt templates
+  - backfills default IO contract fields
+  - validates `{{content}}` placeholder
+  - supports model-bound prompt template selection
+- `UserConfigService` is the persistence seam used by the frontend for:
+  - preferred model
+  - analysis current context
+  - trend current context
+  - rank chapter-count preference
+
+### Backend Analysis Findings
+- `AnalysisService` is the real orchestration center of the product.
+- For single-book analysis it handles:
+  - prompt resolution
+  - cache lookup
+  - history reuse
+  - chapter loading through `CrawlerService`
+  - runtime branch: legacy Java AI gateway vs internal LangGraph worker
+  - optional chunk splitting for long books
+  - SSE event emission
+  - persistence into `analysis_result`
+- For trend analysis it handles:
+  - board lookup
+  - latest board snapshots + rank rows loading
+  - structured trend-result reuse from persisted history
+  - runtime branch: legacy vs LangGraph
+  - normalization of trend JSON into a board-scoped stable contract
+- Current runtime selection is controlled by `analysis.runtime.mode`, with `legacy` still the default in config.
+- Long single-book analysis has special timeout/chunking policy:
+  - larger timeout budgets
+  - forced chunk mode when chapter count is large enough
+
+### Backend AI Integration Findings
+- `AiGatewayService` is the legacy/direct AI runtime:
+  - renders prompt templates through LangChain4j `PromptTemplate`
+  - supports OpenAI-compatible providers and Dify fallback
+  - supports true streaming for OpenAI-compatible models
+  - parses/normalizes structured result JSON
+  - chooses model runtime from prompt config + user preference + system model registry
+- `LangGraphWorkerClient` is the internal bridge from Java to Python worker:
+  - blocking call endpoint: `/internal/analysis/run`
+  - streaming endpoint: `/internal/analysis/run/stream`
+  - internal authentication uses `X-Internal-Service-Token`
+  - runtime metrics from Python are merged into `resultJson.meta.runtime`
+
+### Backend Data / Read Model Findings
+- `DataQueryService` is the read-side assembler for frontend history and trend visual pages.
+- `/api/data/history` reads `analysis_result` and joins book metadata for analysis-page restoration.
+- `/api/data/visual` combines:
+  - `rank_board`
+  - recent `rank_snapshot`
+  - related `crawl_rank`
+  - latest reusable structured trend result
+- Trend visual data is therefore a backend-composed read model, not raw frontend-side synthesis.
+
+### Crawler Findings
+- `crawler/app/main.py` exposes only `/health` publicly; business endpoints are all under `/internal/*`.
+- `crawler/app/security.py` enforces a required internal service token and startup validation of key length.
+- `crawler/app/services/fanqie_crawler.py` is the real Fanqie implementation:
+  - board catalog comes from rank page state
+  - rank list is fetched primarily through a Fanqie API endpoint, with page-state fallback
+  - book detail comes from book page embedded state
+  - chapter catalog comes from `chapterListWithVolume` / `itemIds`
+  - chapter content comes from reader page state
+  - confuse-font / PUA text is decoded through `ConfuseFontDecoder`
+- Chapter fetching is resilient:
+  - it can skip broken chapter pages and continue collecting later valid chapters
+  - threaded fetching is used when multiple chapters are requested
+
+### LangGraph Worker Findings
+- `langgraph-worker/app/api/analysis.py` exposes internal-only blocking and streaming analysis endpoints.
+- `langgraph-worker/app/services/analysis_service.py` shows the worker is currently a single LangGraph-based orchestration service, not a fully split multi-agent codebase.
+- The worker graph currently covers:
+  - request preparation
+  - direct vs chunk route
+  - chunk fan-out / merge
+  - structured JSON validation and repair
+  - runtime metrics capture
+- `provider_client.py` talks directly to an OpenAI-compatible `/chat/completions` API with retry logic.
+
+## Session Addendum 2026-04-25 (Prompt Governance Brainstorming)
+
+### Confirmed Requirement Direction
+- Prompt governance must move from the current "model binding only" design to a two-layer model:
+  - admin global templates and publishable global versions
+  - user-level bindings / personal copies that still remain subordinate to the latest admin-published version
+- User confirmed the audit/history requirement should keep both:
+  - user-side template choice history
+  - actual effective template snapshot after admin publish events
+- User confirmed the product should support both user behaviors:
+  - bind to an existing admin-managed template
+  - create a personal copy derived from the current admin default, with limited editable fields
+- User confirmed admin rollout should use a draft + explicit publish model:
+  - admin edits individual prompt types as drafts
+  - only an explicit publish action makes a new global version effective
+
+### Current Code Constraints That Matter
+- Current runtime prompt resolution is still:
+  - user preferred model -> model-registry promptBindings
+  - fallback to `deepseek-chat` promptBindings
+  - fallback to `prompt_name = default`
+  - fallback to repository `is_default DESC, id ASC`
+- Current `prompt_config` is a global shared template library with no user ownership field and no version table.
+- Current prompt write API is still shared by `ADMIN` and `USER`, and current DTO allows editing JSON contract fields.
+- Current frontend prompt page already treats `promptName = default` as the undeletable / non-renamable system template.
+
+### Design Implication
+- A clean solution likely needs new DB tables instead of overloading `prompt_config` further, because the new requirements include:
+  - versioned admin publish units
+  - effective-template snapshots per user across publish events
+  - user-visible/private template scope
+  - stricter field-level edit permissions between admin and normal users
+
+## Session Addendum 2026-04-25 (Architecture Flow Review)
+
+### Current Topology
+- 当前仓库是四服务主链路：rontend Vue/Vite、ackend Spring Boot、crawler FastAPI、langgraph-worker FastAPI。
+- docker-compose.yml 中 
+ginx -> backend，后端依赖 mysql、edis、crawler、langgraph-worker；Python 两个服务都作为内部服务被后端调用。
+- 前端 dev 通过 Vite /api proxy 转发到后端；生产/compose 由 nginx 对外。
+
+### Frontend Flow
+- rontend/src/main.ts 在挂载前执行 uthStore.ensureAuthRestored()，通过 refresh cookie 做静默会话恢复。
+- rontend/src/router/index.ts 页面为 /login 和受保护布局下的 /rank、/analysis、/trend、/history、/config/prompt、/config/system。
+- rontend/src/lib/http.ts 统一注入 Bearer access token，并在 401 时调用 /api/auth/refresh 轮换 token 后重试。
+- rontend/src/api/* 是后端接口适配层；nalysis-stream.ts 是单书/趋势 SSE 统一 runner，支持 token refresh 和流失败回退阻塞请求。
+- /rank 负责榜单上下文、偏好、分页/移动端加载、书籍详情和抓章；跳转 /analysis 时携带书籍和章数。
+- /analysis 负责三类单书分析 deconstruct/structure/plot，按 active panel 手动触发，并从 /api/data/history 恢复历史结果。
+- /trend 是榜单维度的趋势页，先读 board context 与 /api/data/visual，只有点击开始分析才跑 /api/analysis/trend/stream。
+
+### Backend Flow
+- TraceIdFilter 注入 traceId；AuthTokenFilter 做 protected path 判断、IP 黑名单、JWT、session、token blacklist 和 rate limit；RequireRoleInterceptor 处理 @RequireRole。
+- AuthController/AuthService 当前是手机号优先：密码登录、短信登录、注册、重置、refresh、logout；refresh token 存 HttpOnly cookie，access token 由前端内存持有。
+- AuthSessionService 以 MySQL 为真源，Redis 缓存 session、refresh-token 映射和活跃时间脏集合。
+- CrawlerController/CrawlerService 管 board catalog、preference、rank refresh/page/status、book detail、chapters/refresh；优先读 Redis/DB，缺失或强刷时调用 PythonCrawlerClient。
+- AnalysisController/AnalysisService 是 AI 编排中心：解析 prompt/model、复用缓存/历史、加载章节/快照、选择 legacy 或 langgraph runtime、SSE 输出、保存 nalysis_result。
+- DataQueryService 是读模型聚合器：/history 恢复单书历史，/visual 聚合 board、snapshot、rank rows 和最新结构化 theme 结果。
+- SystemConfigService 提供模型注册表、默认配置、密钥加密/脱敏；PromptConfigService 选择运行时模板并补齐 IO JSON contract。
+
+### Crawler Flow
+- crawler/app/main.py 暴露 /health，业务路由 /internal/board-catalog、/internal/rank、/internal/book、/internal/chapters 都要求 X-Internal-Service-Token。
+- FanqieCrawler 从番茄 rank/page/reader 页面解析 window.__INITIAL_STATE__，榜单优先调用番茄 rank API，失败回退页面状态。
+- 书籍详情来自 page state；目录来自 chapterListWithVolume / itemIds；正文来自 reader state 的 chapterData.content。
+- 混淆字体/PUA 文本通过 ConfuseFontDecoder 解码；章节抓取支持多线程，并跳过坏章节继续收集可用章节。
+
+### AI / LangGraph Flow
+- 默认配置 nalysis.runtime.mode=legacy，即 Java AiGatewayService 直接走 LangChain4j + OpenAI-Compatible/Dify fallback。
+- LangGraph 模式下，Java LangGraphWorkerClient 调 /internal/analysis/run 或 /internal/analysis/run/stream，传 prompt config、模型注册表解析后的 baseUrl/apiKey/model、sourcePayload 和 limits。
+- Python Worker 当前是一个通用 LangGraphAnalysisService，StateGraph 节点为 prepare、direct analyze、split chunks、analyze chunks、merge chunks。
+- Worker 通过 OpenAI-compatible /chat/completions 调模型，支持 blocking 和 stream；theme 趋势要求 JSON contract，并会尝试 JSON 解析/修复。
+
+## Session Addendum 2026-04-25 (Server Migration Runbook)
+
+### Deployment Documentation Findings
+- Current production-like compose topology uses nginx, backend, crawler, langgraph-worker, mysql, and redis.
+- Nginx container expects certificate files inside /etc/nginx/ssl: panch-origin.crt, panch-origin.key, and cloudflare-origin-pull-ca.pem.
+- The user's current host SSL directory is /etc/nginx/ssl; therefore NGINX_SSL_DIR=/etc/nginx/ssl is the safest env value for migration docs.
+- Existing .env.example did not include the full set of runtime variables provided by the user, and its SSL directory default differed from the current server path.
+- Backend legacy AI runtime resolves DEEPSEEK_API_KEY from the backend process environment unless an encrypted model key is configured in system config, so compose should pass OpenAI-compatible variables into backend as well as langgraph-worker.
+
+### Documentation / Config Decisions
+- Added a dedicated migration runbook at docs/server-migration-runbook.md instead of expanding the Cloudflare-only document.
+- Synced .env.example with the runbook variables, including OpenAI-compatible, LangGraph, SMS, and password-login risk-control settings.
+- Updated docker-compose.yml backend environment mapping so migration .env values are actually visible to the Java backend container.
+- MySQL backup command in the runbook uses docker compose exec -T mysql to avoid TTY output corrupting SQL dumps.
+
+## Session Addendum 2026-04-25 (AI Request Latency Investigation)
+
+### Symptom Framing
+- 用户反馈“每次发起 AI 请求都很慢”，当前需要先区分：是首次出字慢、总完成时间慢、还是缓存未命中导致每次都重新跑全链路。
+- 当前前端单书/趋势默认都优先走 SSE；若 SSE 在拿到真实内容前失败，才回退阻塞请求。
+
+### Confirmed Frontend Behavior
+- rontend/src/api/analysis.ts 对单书和趋势都优先调用 /stream 接口。
+- rontend/src/lib/analysis-stream.ts 只有在未拿到真实 delta 时才触发 fallback blocking；一旦拿到任何真实 delta，就不会回退。
+- AnalysisView.vue 会把 [analysis-progress] 和 [chunk-progress] 从展示文本里过滤掉，因此 chunk 模式下用户可能长时间只看到“没有正文输出”，体感会觉得更慢。
+- Analysis 页首次只跑当前 active panel，不会一次并发三路，但每次点击 rerun 仍然会重新走完整后端链路。
+
+### Confirmed Backend Latency Sources
+- AnalysisService.analyze(...) 有缓存和历史复用：先查 Redis/local cache，再查 nalysis_result 可复用结果，再抓章和调 AI。
+- AnalysisService.streamAnalyze(...) 当前**不会先查缓存/历史复用**；它会直接解析 prompt、抓章、判断 chunk、再决定真实流式 / chunk / 阻塞降级。这意味着前端默认走 /stream 时，即使已有缓存，后端也通常不会直接复用缓存结果。
+- 单书分析前置步骤固定包含：
+  - 解析运行时 prompt
+  - 从 CrawlerService 抓章节或补抓缺失章节
+  - 构建完整 prompt 文本
+  - 按 token 或章数判断是否 chunk
+- CrawlerService.getChapters(...) 若缓存不足，会先查库，再调用 Python crawler 抓缺失章节并落库；这一步可能先于任何 AI token 输出。
+- 代码中 LARGE_BOOK_FORCE_CHUNK_CHAPTER_COUNT = 8、LARGE_BOOK_FORCE_CHUNK_SEGMENT_SIZE = 3，所以 8 章以上会强制分段，不只是按 token 估算。
+- Chunk 模式实际调用次数 = 分段数 + 1 次 merge；例如 10 章通常会拆成 4 段，再做 1 次汇总，总共 5 次模型请求。
+- Java legacy chunk 默认并发度来自 nalysis.chunk.parallelism，上限 6，默认 3；但 merge 仍然是串行的最后一步。
+- Trend 主题分析默认要求结构化 JSON；若首轮模型文本无法解析 JSON，LangGraph worker 会额外发起一次 JSON repair 请求。
+- LangGraph worker _repair_result_json(...) 对 	heme 会再调用一次模型，因此一次趋势请求可能至少 2 次 provider 调用。
+
+### Streaming Reality Check
+- Java legacy 真流式只覆盖“非 chunk 且 OpenAI-compatible streaming 可用”的单书场景。
+- 单书 chunk 流式本质上发送的是 [chunk-progress] 进度文本；正文要等所有 chunk 分析完成并 merge 后才一次性出来。
+- 因为前端把 [chunk-progress] 文本过滤掉，用户在 chunk 模式下基本只能等最终正文，体感上接近“假流式”。
+- LangGraph worker 的单书/趋势 stream 会把 provider 的 delta 往前传，但如果 worker内部正在 chunk / merge / JSON repair，首个真正可见 delta 仍可能推迟。
+
+### Observed Log Evidence
+- ackend_local_20260326-011503.out.log 多次出现 dev.langchain4j.exception.TimeoutException: request timed out 和 java.net.http.HttpTimeoutException: request timed out，调用栈落在 AiGatewayService.invokeOpenAiCompatible -> AnalysisService.invokeLegacyBookAnalysis/streamAnalyze。
+- 同一批日志还出现 crawler 相关 fallback/失败记录，说明部分请求在模型前已经被抓章/抓榜阶段拖慢或扰动。
+- crawler_runtime_wmic.out.log 中确实有 /internal/chapters 的 500 Internal Server Error 记录，说明章节前置获取并不总是稳定。
+- langgraph_worker_live.out.log 只有少量请求记录，没有看到足够多的成功样本；当前默认 runtime 仍更可能是 legacy。
+
+### Root Cause Hypotheses (ranked)
+1. **默认流式路径绕过缓存复用**：前端总是先打 /stream，但后端流式路径没有像阻塞 nalyze(...) 那样先命中 Redis/历史结果，导致“每次发起都重新抓章+重新调模型”。
+2. **长内容 chunk + merge 导致真实 provider 调用次数膨胀**：8+ 章强制分段，10 章常见是 4 段 + 1 次 merge，耗时天然比单次调用高很多。
+3. **chunk 进度被前端过滤，放大了体感延迟**：实际上服务端有进度输出，但界面不展示，所以用户只能等最终正文。
+4. **章节抓取在 AI 前置且不完全稳定**：章节缓存不足时会同步补抓，Python crawler 的 500/repair/fallback 会把首 token 时间拖后。
+5. **theme JSON contract 可能触发二次模型修复**：趋势分析若首轮 JSON 不合法，会额外走 repair 请求。
+6. **15s legacy 默认 timeout 偏紧**：日志里已有多次 provider timeout，尤其长内容 legacy 路径会先慢后超时，再触发降级/重跑，进一步放大总时长。
+
+### Highest-Value Optimization Directions
+- P0: 在 streamAnalyze(...) / streamTrend(...) 开始时先复用缓存和最近历史结果；若命中，直接把结果切片为 delta 返回，而不是重新抓章/重新调模型。
+- P0: 给前端保留 chunk 进度的可见展示，不要把 [chunk-progress] 全部过滤掉，至少显示“第 N/M 段分析中 / 汇总中”。
+- P0: 为 AI 请求加入结构化耗时埋点：抓章耗时、prompt 构建耗时、provider 首 token 时间、provider 总耗时、chunk 数、merge 耗时、JSON repair 次数。
+- P1: 单书分析对已抓章节做更积极的预热/缓存命中，例如用户在 /rank 抓章后，分析页直接复用已落库章节，不再同步补抓。
+- P1: 对 8-10 章场景重新评估“强制 chunk”阈值和分段大小；如果模型和内容质量允许，可减少分段数，降低 provider_call_count。
+- P1: 对趋势 theme 场景审查 prompt/schema，降低 JSON repair 触发率；repair 是隐性的第二次模型请求。
+- P1: 若使用 LangGraph runtime，可直接利用 worker 返回的 meta.runtime.providerCallCount / queueWaitMillis / providerLatencyMillis / totalDurationMillis 做可视化排障。
+- P2: 提高 nalysisStreamTaskExecutor 并发或拆分 chunk executor 资源，仅在确认为服务端线程池阻塞时再调；当前更像外部调用慢，不像本地线程池先打满。
+- P2: 对 trend /api/analysis/trend/stream 也考虑先命中持久化结构化结果，再决定是否真的重跑模型。

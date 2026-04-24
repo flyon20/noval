@@ -5,8 +5,8 @@ import jakarta.validation.constraints.Size;
 
 public class LoginRequest {
 
-    @NotBlank(message = "username is required")
-    private String username;
+    @NotBlank(message = "phone is required")
+    private String phone;
 
     @NotBlank(message = "password is required")
     private String password;
@@ -14,12 +14,12 @@ public class LoginRequest {
     @Size(max = 100, message = "deviceLabel must be at most 100 characters")
     private String deviceLabel;
 
-    public String getUsername() {
-        return username;
+    public String getPhone() {
+        return phone;
     }
 
-    public void setUsername(String username) {
-        this.username = username;
+    public void setPhone(String phone) {
+        this.phone = phone;
     }
 
     public String getPassword() {

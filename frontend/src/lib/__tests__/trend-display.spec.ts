@@ -96,6 +96,19 @@ describe('buildTrendDisplayModel', () => {
     expect(result.detailContent).toBe('这里才是真正要展示的趋势正文，而不是整段 JSON。');
     expect(result.detailContent).not.toContain('"analysisType"');
   });
+
+  test('uses nested summary values when resultJson summary is itself json text', () => {
+    const result = buildTrendDisplayModel({
+      resultJson: {
+        summary: '{"summary":"本次榜单娱乐明星与都市脑洞分庭抗礼","boardSummary":"主赛道为娱乐明星","trendPreview":"宽泛系统流持续退潮"}',
+      },
+    });
+
+    expect(result.summaryText).toBe('本次榜单娱乐明星与都市脑洞分庭抗礼');
+    expect(result.boardSummary).toBe('主赛道为娱乐明星');
+    expect(result.previewText).not.toContain('{"summary"');
+  });
+
   test('normalizes legacy trend json fields before rendering', () => {
     const legacyJsonText = JSON.stringify({
       summary: {

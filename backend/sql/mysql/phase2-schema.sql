@@ -4,18 +4,21 @@
 
 CREATE TABLE IF NOT EXISTS sys_user (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
-    username VARCHAR(50) NOT NULL UNIQUE COMMENT '用户名',
+    username VARCHAR(50) COMMENT '昵称',
     password VARCHAR(100) NOT NULL COMMENT '密码(Bcrypt或{noop}前缀)',
-    phone VARCHAR(20) COMMENT '手机号',
+    phone VARCHAR(20) NOT NULL COMMENT '手机号',
+    phone_verified TINYINT DEFAULT 1 COMMENT '手机号是否已验证 0否 1是',
     email VARCHAR(100) COMMENT '邮箱',
     avatar VARCHAR(255) COMMENT '头像URL',
     status TINYINT DEFAULT 1 COMMENT '状态 0禁用 1正常',
     last_login_time DATETIME COMMENT '最后登录时间',
+    password_updated_time DATETIME COMMENT '密码更新时间',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     deleted TINYINT DEFAULT 0 COMMENT '逻辑删除 0未删除 1已删除',
     version INT DEFAULT 0 COMMENT '乐观锁版本号',
     INDEX idx_username (username),
+    UNIQUE KEY uk_phone (phone),
     INDEX idx_phone (phone),
     INDEX idx_create_time (create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
@@ -73,6 +76,8 @@ CREATE TABLE IF NOT EXISTS sys_login_log (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
     user_id BIGINT COMMENT '用户ID',
     username VARCHAR(50) COMMENT '用户名',
+    phone VARCHAR(20) COMMENT '手机号',
+    login_type VARCHAR(20) COMMENT '登录类型 PASSWORD/SMS',
     login_ip VARCHAR(50) COMMENT '登录IP',
     login_location VARCHAR(100) COMMENT '登录地点',
     browser VARCHAR(50) COMMENT '浏览器',
@@ -84,6 +89,31 @@ CREATE TABLE IF NOT EXISTS sys_login_log (
     INDEX idx_login_time (login_time),
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='登录日志表';
+
+CREATE TABLE IF NOT EXISTS sys_sms_code_log (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '短信验证码日志ID',
+    phone VARCHAR(20) NOT NULL COMMENT '手机号',
+    biz_type VARCHAR(32) NOT NULL COMMENT '业务类型 REGISTER/LOGIN/RESET_PASSWORD',
+    provider VARCHAR(32) NOT NULL DEFAULT 'aliyun-pnvs' COMMENT '服务商',
+    out_id VARCHAR(64) NOT NULL COMMENT '业务外部ID',
+    request_id VARCHAR(64) COMMENT '请求ID',
+    biz_id VARCHAR(64) COMMENT '运营商业务ID',
+    scheme_name VARCHAR(32) COMMENT '业务场景名',
+    status VARCHAR(32) NOT NULL COMMENT '发送/校验状态',
+    verify_result VARCHAR(32) COMMENT '校验结果',
+    send_ip VARCHAR(50) COMMENT '发送IP',
+    trace_id VARCHAR(64) COMMENT '链路追踪ID',
+    message VARCHAR(500) COMMENT '消息',
+    expire_time DATETIME COMMENT '过期时间',
+    verified_time DATETIME COMMENT '验证时间',
+    consumed_time DATETIME COMMENT '消费时间',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    deleted TINYINT DEFAULT 0 COMMENT '逻辑删除 0未删除 1已删除',
+    INDEX idx_sms_code_log_phone_biz_type (phone, biz_type),
+    INDEX idx_sms_code_log_status (status),
+    UNIQUE KEY uk_sms_code_log_out_id (out_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='短信验证码日志表';
 
 CREATE TABLE IF NOT EXISTS sys_operation_log (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',

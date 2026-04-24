@@ -170,6 +170,14 @@ function looksLikeTrendJsonStream(content?: string | null) {
 
 function readPrimaryString(value: unknown) {
   if (typeof value === 'string') {
+    const parsed = parseStructuredJsonText(value);
+    if (parsed) {
+      return readPrimaryString(parsed.summary)
+        || readPrimaryString(parsed.boardSummary)
+        || readPrimaryString(parsed.comparisonSummary)
+        || readPrimaryString(parsed.detailContent)
+        || value.trim();
+    }
     return value.trim();
   }
 
@@ -484,8 +492,23 @@ export function extractTrendSummary(
   resultJson?: Record<string, unknown> | null,
   fallbackContent?: string | null,
 ) {
-  const text = readNestedText(resultJson?.summary).join(' ')
+  const summaryJson = typeof resultJson?.summary === 'string'
+    ? parseStructuredJsonText(resultJson.summary)
+    : null;
+  const boardSummaryJson = typeof resultJson?.boardSummary === 'string'
+    ? parseStructuredJsonText(resultJson.boardSummary)
+    : null;
+  const detailJson = typeof resultJson?.detailContent === 'string'
+    ? parseStructuredJsonText(resultJson.detailContent)
+    : null;
+  const text = readNestedText(summaryJson?.summary).join(' ')
+    || readNestedText(summaryJson?.boardSummary).join(' ')
+    || readNestedText(resultJson?.summary).join(' ')
+    || readNestedText(boardSummaryJson?.boardSummary).join(' ')
+    || readNestedText(boardSummaryJson?.summary).join(' ')
     || readNestedText(resultJson?.boardSummary).join(' ')
+    || readNestedText(detailJson?.detailContent).join(' ')
+    || readNestedText(detailJson?.summary).join(' ')
     || readNestedText(resultJson?.detailContent).join(' ')
     || readNestedText(resultJson?.content).join(' ')
     || extractJsonLikeFieldText(fallbackContent, ['summary', 'boardSummary', 'overview', 'conclusion', 'comparisonSummary'])
@@ -532,6 +555,15 @@ export function buildTrendDisplayModel(input: BuildTrendDisplayModelInput): Tren
     ?? parseStructuredJsonText(input.resultContent)
     ?? parseStructuredJsonText(input.detailContent)
     ?? parseStructuredJsonText(input.trendPreview);
+  const nestedSummaryJson = typeof parsedFallbackJson?.summary === 'string'
+    ? parseStructuredJsonText(parsedFallbackJson.summary)
+    : null;
+  const nestedBoardSummaryJson = typeof parsedFallbackJson?.boardSummary === 'string'
+    ? parseStructuredJsonText(parsedFallbackJson.boardSummary)
+    : null;
+  const nestedDetailJson = typeof parsedFallbackJson?.detailContent === 'string'
+    ? parseStructuredJsonText(parsedFallbackJson.detailContent)
+    : null;
   const resultInsightCards = readArray(parsedFallbackJson?.insightCards, normalizeInsightCard);
   const resultThemeDistribution = readArray(parsedFallbackJson?.themeDistribution, normalizeThemeDistributionItem);
   const resultThemeTable = readArray(parsedFallbackJson?.themeTable, normalizeThemeTableItem);
@@ -578,10 +610,16 @@ export function buildTrendDisplayModel(input: BuildTrendDisplayModelInput): Tren
       reason: item.reason ? localizeTrendText(item.reason) : null,
     }));
   const comparisonSummary = cleanNestedText(parsedFallbackJson?.comparisonSummary)
+    || cleanNestedText(nestedSummaryJson?.comparisonSummary)
+    || cleanNestedText(nestedBoardSummaryJson?.comparisonSummary)
+    || cleanNestedText(nestedDetailJson?.comparisonSummary)
     || localizeTrendText(stripMarkdownToText(input.comparisonSummary))
     || extractJsonLikeFieldText(input.detailContent || input.resultContent || input.trendPreview, ['comparisonSummary'])
     || '';
   const boardSummary = cleanNestedText(parsedFallbackJson?.boardSummary)
+    || cleanNestedText(nestedSummaryJson?.boardSummary)
+    || cleanNestedText(nestedBoardSummaryJson?.boardSummary)
+    || cleanNestedText(nestedDetailJson?.boardSummary)
     || cleanNestedText(parsedFallbackJson?.summary)
     || localizeTrendText(stripMarkdownToText(input.boardSummary))
     || extractJsonLikeFieldText(input.detailContent || input.resultContent || input.trendPreview, ['boardSummary'])
@@ -591,6 +629,9 @@ export function buildTrendDisplayModel(input: BuildTrendDisplayModelInput): Tren
     input.detailContent || input.resultContent || input.trendPreview || input.comparisonSummary || input.boardSummary,
   ) || boardSummary || comparisonSummary;
   const detailContent = readPrimaryString(parsedFallbackJson?.detailContent)
+    || readPrimaryString(nestedSummaryJson?.detailContent)
+    || readPrimaryString(nestedBoardSummaryJson?.detailContent)
+    || readPrimaryString(nestedDetailJson?.detailContent)
     || (looksLikeStructuredJsonText(input.detailContent) ? '' : (input.detailContent?.trim() ?? ''))
     || (looksLikeStructuredJsonText(input.resultContent) ? '' : (input.resultContent?.trim() ?? ''))
     || summaryText;

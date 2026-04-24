@@ -13,6 +13,7 @@ from rapidocr_onnxruntime import RapidOCR
 
 
 class ConfuseFontDecoder:
+    BUNDLED_MAPPING_DIR = Path(__file__).resolve().parent / "font_mappings"
     BATCH_SIZE = 10
     ROW_FONT_SIZE = 150
     SINGLE_FONT_SIZES = (220, 280, 340)
@@ -24,18 +25,23 @@ class ConfuseFontDecoder:
         "dc027189e0ba4cd": {
             0xE403: "3",
             0xE3F3: "只",
+            0xE3FA: "g",
             0xE3FC: "儿",
+            0xE408: "o",
             0xE418: "当",
             0xE41C: "些",
             0xE41F: "十",
             0xE422: "气",
             0xE42D: "1",
             0xE436: "了",
+            0xE448: "l",
             0xE4DE: "一",
             0xE4E2: "光",
             0xE44B: "少",
+            0xE45F: "I",
             0xE485: "位",
             0xE48C: "马",
+            0xE4A3: "j",
             0xE4B0: "或",
             0xE503: "属",
             0xE510: "口",
@@ -72,7 +78,7 @@ class ConfuseFontDecoder:
             return raw_text
 
         font_signature, font_path = self._ensure_font_path(css)
-        mapping = self._mapping_cache.setdefault(font_signature, self._load_cached_mapping(font_signature))
+        mapping = self._mapping_cache.setdefault(font_signature, self._load_mapping(font_signature))
         if self._apply_known_overrides(font_signature, mapping):
             self._save_cached_mapping(font_signature, mapping)
         missing = [ch for ch in obfuscated_chars if ch not in mapping]
@@ -209,8 +215,18 @@ class ConfuseFontDecoder:
     def _mapping_file(self, font_signature: str) -> Path:
         return self._workdir / f"{font_signature}.mapping.json"
 
+    def _bundled_mapping_file(self, font_signature: str) -> Path:
+        return self.BUNDLED_MAPPING_DIR / f"{font_signature}.mapping.json"
+
+    def _load_mapping(self, font_signature: str) -> dict[str, str]:
+        mapping = self._load_mapping_file(self._bundled_mapping_file(font_signature))
+        mapping.update(self._load_mapping_file(self._mapping_file(font_signature)))
+        return mapping
+
     def _load_cached_mapping(self, font_signature: str) -> dict[str, str]:
-        path = self._mapping_file(font_signature)
+        return self._load_mapping_file(self._mapping_file(font_signature))
+
+    def _load_mapping_file(self, path: Path) -> dict[str, str]:
         if not path.exists():
             return {}
         try:

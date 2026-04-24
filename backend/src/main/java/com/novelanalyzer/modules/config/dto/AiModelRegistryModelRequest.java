@@ -5,6 +5,8 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 
+import java.util.Map;
+
 public class AiModelRegistryModelRequest {
 
     @NotBlank(message = "modelKey is required")
@@ -22,6 +24,7 @@ public class AiModelRegistryModelRequest {
     @Min(value = 1, message = "maxTokens must be greater than 0")
     private Integer maxTokens;
     private String temperatureSpecJson;
+    private Map<String, String> promptBindings;
 
     public String getModelKey() {
         return modelKey;
@@ -109,5 +112,13 @@ public class AiModelRegistryModelRequest {
 
     public void setTemperatureSpecJson(String temperatureSpecJson) {
         this.temperatureSpecJson = temperatureSpecJson;
+    }
+
+    public Map<String, String> getPromptBindings() {
+        return promptBindings;
+    }
+
+    public void setPromptBindings(Map<String, String> promptBindings) {
+        this.promptBindings = promptBindings;
     }
 }

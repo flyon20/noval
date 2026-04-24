@@ -6,6 +6,7 @@ import SystemConfigView from '../SystemConfigView.vue';
 vi.mock('@/api/config', () => ({
   promptConfigApi: {
     getByType: vi.fn(),
+    listTemplates: vi.fn(),
     update: vi.fn(),
   },
   systemConfigApi: {
@@ -13,6 +14,7 @@ vi.mock('@/api/config', () => ({
     update: vi.fn(),
     getModelRegistry: vi.fn(),
     updateModelRegistry: vi.fn(),
+    listPromptTemplates: vi.fn(),
   },
 }));
 
@@ -45,6 +47,7 @@ describe('SystemConfigView', () => {
       'analysis.chunk.max-input-tokens',
       'analysis.chunk.target-input-tokens',
       'analysis.chunk.parallelism',
+      'auth.bootstrap-admin-phones',
       'crawler.default.chapter-count',
       'crawler.http.timeout-seconds',
       'crawler.chapter.fetch-workers',
@@ -74,17 +77,39 @@ describe('SystemConfigView', () => {
               providerType: 'openai-compatible',
               modelName: 'deepseek-chat',
               baseUrl: 'https://api.deepseek.com/v1',
-              apiKey: 'registry-key',
+              apiKey: null,
+              apiKeyConfigured: true,
+              apiKeyMasked: '已配置',
               enabled: true,
               isDefault: true,
               defaultTemperature: 1,
               maxTokens: 8192,
               temperatureSpecJson: '{"min":0,"max":2}',
+              promptBindings: {
+                deconstruct: 'deepseek-chat',
+                structure: 'deepseek-chat',
+                plot: 'deepseek-chat',
+                theme: 'default',
+              },
             },
           ],
         },
         timestamp: 1,
         traceId: 'trace-registry',
+      },
+    });
+    vi.mocked(systemConfigApi.listPromptTemplates).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          { id: 1, promptType: 'deconstruct', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 2, promptType: 'structure', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 3, promptType: 'plot', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 4, promptType: 'theme', promptName: 'default', modelName: 'deepseek-chat' },
+        ],
+        timestamp: 1,
+        traceId: 'trace-templates',
       },
     });
 
@@ -136,17 +161,39 @@ describe('SystemConfigView', () => {
               providerType: 'openai-compatible',
               modelName: 'deepseek-chat',
               baseUrl: 'https://api.deepseek.com/v1',
-              apiKey: 'registry-key',
+              apiKey: null,
+              apiKeyConfigured: true,
+              apiKeyMasked: '已配置',
               enabled: true,
               isDefault: true,
               defaultTemperature: 1,
               maxTokens: 8192,
               temperatureSpecJson: '{"min":0,"max":2}',
+              promptBindings: {
+                deconstruct: 'deepseek-chat',
+                structure: 'deepseek-chat',
+                plot: 'deepseek-chat',
+                theme: 'default',
+              },
             },
           ],
         },
         timestamp: 1,
         traceId: 'trace-registry',
+      },
+    });
+    vi.mocked(systemConfigApi.listPromptTemplates).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          { id: 1, promptType: 'deconstruct', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 2, promptType: 'structure', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 3, promptType: 'plot', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 4, promptType: 'theme', promptName: 'default', modelName: 'deepseek-chat' },
+        ],
+        timestamp: 1,
+        traceId: 'trace-templates',
       },
     });
     vi.mocked(systemConfigApi.update).mockResolvedValue({
@@ -210,17 +257,39 @@ describe('SystemConfigView', () => {
               providerType: 'openai-compatible',
               modelName: 'deepseek-chat',
               baseUrl: 'https://api.deepseek.com/v1',
-              apiKey: 'registry-key',
+              apiKey: null,
+              apiKeyConfigured: true,
+              apiKeyMasked: '已配置',
               enabled: true,
               isDefault: true,
               defaultTemperature: 1,
               maxTokens: 8192,
               temperatureSpecJson: '{"min":0,"max":2}',
+              promptBindings: {
+                deconstruct: 'deepseek-chat',
+                structure: 'deepseek-chat',
+                plot: 'deepseek-chat',
+                theme: 'default',
+              },
             },
           ],
         },
         timestamp: 1,
         traceId: 'trace-registry',
+      },
+    });
+    vi.mocked(systemConfigApi.listPromptTemplates).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          { id: 1, promptType: 'deconstruct', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 2, promptType: 'structure', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 3, promptType: 'plot', promptName: 'default', modelName: 'deepseek-chat' },
+          { id: 4, promptType: 'theme', promptName: 'default', modelName: 'deepseek-chat' },
+        ],
+        timestamp: 1,
+        traceId: 'trace-templates',
       },
     });
     vi.mocked(systemConfigApi.updateModelRegistry).mockResolvedValue({
@@ -236,12 +305,20 @@ describe('SystemConfigView', () => {
               providerType: 'openai-compatible',
               modelName: 'deepseek-chat',
               baseUrl: 'https://api.deepseek.com/v1',
-              apiKey: 'registry-key-updated',
+              apiKey: null,
+              apiKeyConfigured: true,
+              apiKeyMasked: '已配置',
               enabled: true,
               isDefault: true,
               defaultTemperature: 0.8,
               maxTokens: 4096,
               temperatureSpecJson: '{"min":0,"max":2,"default":0.8}',
+              promptBindings: {
+                deconstruct: 'deepseek-chat',
+                structure: 'deepseek-chat',
+                plot: 'deepseek-chat',
+                theme: 'default',
+              },
             },
           ],
         },
@@ -287,6 +364,12 @@ describe('SystemConfigView', () => {
           defaultTemperature: 0.8,
           maxTokens: 4096,
           temperatureSpecJson: '{"min":0,"max":2,"default":0.8}',
+          promptBindings: {
+            deconstruct: 'deepseek-chat',
+            structure: 'deepseek-chat',
+            plot: 'deepseek-chat',
+            theme: 'default',
+          },
         },
       ],
     });

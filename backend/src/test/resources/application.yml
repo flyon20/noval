@@ -4,6 +4,11 @@ spring:
       encoding: UTF-8
 
 app:
+  cloudflare:
+    turnstile:
+      enabled: false
+      site-key: ""
+      secret-key: ""
   auth:
     jwt-secret: test-jwt-secret-should-be-long-enough-1234567890
     demo-enabled: false
@@ -24,9 +29,15 @@ app:
       - /api/data
     whitelist-paths:
       - /api/system/health
+      - /api/system/auth-public-config
       - /api/auth/login
+      - /api/auth/login/password
+      - /api/auth/login/sms
       - /api/auth/register
+      - /api/auth/sms/send
+      - /api/auth/password/reset
       - /api/auth/refresh
+      - /api/auth/logout
   crawler:
     base-url: http://127.0.0.1:5000
     internal-api-key: crawler-internal-test-key-1234567890

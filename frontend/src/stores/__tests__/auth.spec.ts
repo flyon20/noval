@@ -108,7 +108,7 @@ describe('auth api logout contract', () => {
     expect(clearCurrentSession).not.toHaveBeenCalled();
   });
 
-  test('login and register call auth endpoints with credentials for refresh cookie', async () => {
+  test('phone auth endpoints use credentials for refresh cookie', async () => {
     const rawPost = vi.fn().mockResolvedValue({
       data: {
         code: 200,
@@ -134,18 +134,42 @@ describe('auth api logout contract', () => {
 
     const { authApi } = await import('@/api/auth');
 
-    await authApi.login({ username: 'demo', password: 'Password123' });
-    await authApi.register({ username: 'new-user', password: 'Password123' });
+    await authApi.login({ phone: '13800138000', password: 'Password123' });
+    await authApi.loginWithSms({ phone: '13800138000', smsCode: '123456', deviceLabel: 'Chrome on Windows' });
+    await authApi.sendSmsCode({ phone: '13800138000', bizType: 'LOGIN' });
+    await authApi.register({ phone: '13800138000', smsCode: '123456', password: 'Password123' });
+    await authApi.resetPassword({ phone: '13800138000', smsCode: '123456', newPassword: 'NewPassword123' });
 
-    expect(rawPost).toHaveBeenNthCalledWith(1, '/api/auth/login', {
-      username: 'demo',
+    expect(rawPost).toHaveBeenNthCalledWith(1, '/api/auth/login/password', {
+      phone: '13800138000',
       password: 'Password123',
     }, {
       withCredentials: true,
     });
-    expect(rawPost).toHaveBeenNthCalledWith(2, '/api/auth/register', {
-      username: 'new-user',
+    expect(rawPost).toHaveBeenNthCalledWith(2, '/api/auth/login/sms', {
+      phone: '13800138000',
+      smsCode: '123456',
+      deviceLabel: 'Chrome on Windows',
+    }, {
+      withCredentials: true,
+    });
+    expect(rawPost).toHaveBeenNthCalledWith(3, '/api/auth/sms/send', {
+      phone: '13800138000',
+      bizType: 'LOGIN',
+    }, {
+      withCredentials: true,
+    });
+    expect(rawPost).toHaveBeenNthCalledWith(4, '/api/auth/register', {
+      phone: '13800138000',
+      smsCode: '123456',
       password: 'Password123',
+    }, {
+      withCredentials: true,
+    });
+    expect(rawPost).toHaveBeenNthCalledWith(5, '/api/auth/password/reset', {
+      phone: '13800138000',
+      smsCode: '123456',
+      newPassword: 'NewPassword123',
     }, {
       withCredentials: true,
     });

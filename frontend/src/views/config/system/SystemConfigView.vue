@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus';
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { systemConfigApi } from '@/api/config';
 import type {
   AiModelRegistry,
   AiModelRegistryModel,
   AiModelRegistryUpdateRequest,
+  PromptTemplateOption,
   KnownSystemConfigKey,
   SystemConfig,
+  PromptType,
 } from '@/types/config';
 
 const PASSWORD_KEYS = new Set(['ai.openai-compatible.api-key']);
@@ -19,6 +21,7 @@ const SYSTEM_CONFIG_KEYS: Array<{ key: KnownSystemConfigKey; label: string; hint
   { key: 'analysis.chunk.max-input-tokens', label: 'Analysis Chunk Max Tokens', hint: '单次分析允许的估算输入 Token 上限；超过后会自动切换为分段汇总。' },
   { key: 'analysis.chunk.target-input-tokens', label: 'Analysis Chunk Target Tokens', hint: '分段分析时每段的目标输入 Token 大小；数值越小分段越多。' },
   { key: 'analysis.chunk.parallelism', label: 'Analysis Chunk Parallelism', hint: '分段分析时的最大并发段数，在降低总耗时与避免请求过多之间取平衡。' },
+  { key: 'auth.bootstrap-admin-phones', label: 'Admin Phones', hint: '逗号分隔的管理员手机号列表，登录/注册/刷新时会自动补齐 ADMIN 角色。' },
   { key: 'crawler.default.chapter-count', label: 'Default Chapter Count', hint: '扫榜页默认抓章数量。' },
   { key: 'crawler.http.timeout-seconds', label: 'Crawler HTTP Timeout (s)', hint: 'Python crawler 请求页面时的超时。' },
   { key: 'crawler.chapter.fetch-workers', label: 'Chapter Fetch Workers', hint: '多章节抓取时的最大并发数。' },
@@ -31,9 +34,18 @@ type SystemConfigFormItem = SystemConfig & {
 };
 
 type ModelDraft = AiModelRegistryModel & {
+  draftApiKeyInput: string;
   draftDefaultTemperature: string;
   draftMaxTokens: string;
+  draftPromptBindings: Record<PromptType, string>;
 };
+
+const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
+  { label: '拆文模板', value: 'deconstruct' },
+  { label: '结构模板', value: 'structure' },
+  { label: '情节模板', value: 'plot' },
+  { label: '趋势模板', value: 'theme' },
+];
 
 const loading = ref(false);
 const items = ref<SystemConfigFormItem[]>([]);
@@ -42,6 +54,12 @@ const errorMessage = ref('');
 const registryLoading = ref(false);
 const registrySaving = ref(false);
 const registryError = ref('');
+const templateOptions = ref<Record<PromptType, PromptTemplateOption[]>>({
+  deconstruct: [],
+  structure: [],
+  plot: [],
+  theme: [],
+});
 const modelRegistry = ref<AiModelRegistry>({
   defaultModelKey: '',
   models: [],
@@ -50,8 +68,10 @@ const modelRegistry = ref<AiModelRegistry>({
 function toModelDraft(model: AiModelRegistryModel): ModelDraft {
   return {
     ...model,
+    draftApiKeyInput: '',
     draftDefaultTemperature: model.defaultTemperature == null ? '' : String(model.defaultTemperature),
     draftMaxTokens: model.maxTokens == null ? '' : String(model.maxTokens),
+    draftPromptBindings: normalizeBindings(model.promptBindings),
   };
 }
 
@@ -63,13 +83,32 @@ function createEmptyModelDraft(index: number): ModelDraft {
     modelName: '',
     baseUrl: '',
     apiKey: '',
+    apiKeyConfigured: false,
+    apiKeyMasked: '',
     enabled: true,
     isDefault: false,
+    promptBindings: {},
+    draftApiKeyInput: '',
     defaultTemperature: 1,
     maxTokens: 8192,
     temperatureSpecJson: '{"min":0.0,"max":2.0,"step":0.1,"default":1.0}',
     draftDefaultTemperature: '1',
     draftMaxTokens: '8192',
+    draftPromptBindings: {
+      deconstruct: '',
+      structure: '',
+      plot: '',
+      theme: '',
+    },
+  };
+}
+
+function normalizeBindings(bindings?: Partial<Record<PromptType, string>> | null) {
+  return {
+    deconstruct: bindings?.deconstruct ?? '',
+    structure: bindings?.structure ?? '',
+    plot: bindings?.plot ?? '',
+    theme: bindings?.theme ?? '',
   };
 }
 
@@ -116,6 +155,16 @@ async function loadModelRegistry() {
   } finally {
     registryLoading.value = false;
   }
+}
+
+async function loadPromptTemplates() {
+  const results = await Promise.all(
+    PROMPT_TYPES.map(async (item) => {
+      const response = await systemConfigApi.listPromptTemplates(item.value);
+      return [item.value, response.data.data ?? []] as const;
+    }),
+  );
+  templateOptions.value = Object.fromEntries(results) as Record<PromptType, PromptTemplateOption[]>;
 }
 
 async function saveItem(item: SystemConfigFormItem) {
@@ -168,6 +217,10 @@ function markDefaultModel(modelKey: string) {
   }));
 }
 
+function getPromptTemplateOptions(promptType: PromptType) {
+  return templateOptions.value[promptType] ?? [];
+}
+
 function buildRegistryPayload(): AiModelRegistryUpdateRequest {
   return {
     defaultModelKey: modelRegistry.value.defaultModelKey,
@@ -177,12 +230,18 @@ function buildRegistryPayload(): AiModelRegistryUpdateRequest {
       providerType: model.providerType.trim() || 'openai-compatible',
       modelName: model.modelName.trim(),
       ...(model.baseUrl?.trim() ? { baseUrl: model.baseUrl.trim() } : {}),
-      ...(model.apiKey?.trim() ? { apiKey: model.apiKey.trim() } : {}),
+      ...(model.draftApiKeyInput.trim() ? { apiKey: model.draftApiKeyInput.trim() } : {}),
       enabled: model.enabled,
       isDefault: modelRegistry.value.defaultModelKey === model.modelKey,
       ...(model.draftDefaultTemperature !== '' ? { defaultTemperature: Number(model.draftDefaultTemperature) } : {}),
       ...(model.draftMaxTokens !== '' ? { maxTokens: Number(model.draftMaxTokens) } : {}),
       ...(model.temperatureSpecJson?.trim() ? { temperatureSpecJson: model.temperatureSpecJson.trim() } : {}),
+      promptBindings: {
+        deconstruct: model.draftPromptBindings.deconstruct || undefined,
+        structure: model.draftPromptBindings.structure || undefined,
+        plot: model.draftPromptBindings.plot || undefined,
+        theme: model.draftPromptBindings.theme || undefined,
+      },
     })),
   };
 }
@@ -202,7 +261,7 @@ async function saveModelRegistry() {
 }
 
 onMounted(() => {
-  void Promise.all([loadConfigs(), loadModelRegistry()]);
+  void Promise.all([loadConfigs(), loadPromptTemplates(), loadModelRegistry()]);
 });
 </script>
 
@@ -290,6 +349,13 @@ onMounted(() => {
                 :data-test="`model-key-${model.modelKey}`"
                 placeholder="例如 deepseek-chat"
               />
+              <div
+                v-if="model.apiKeyConfigured"
+                :data-test="`model-api-key-status-${model.modelKey}`"
+                class="system-config-page__field-hint"
+              >
+                当前状态：{{ model.apiKeyMasked || '已配置' }}，留空则保留原 key
+              </div>
             </el-form-item>
 
             <el-form-item label="显示名称">
@@ -326,7 +392,7 @@ onMounted(() => {
 
             <el-form-item label="API Key">
               <el-input
-                v-model="model.apiKey"
+                v-model="model.draftApiKeyInput"
                 :data-test="`model-api-key-${model.modelKey}`"
                 show-password
                 type="password"
@@ -354,6 +420,30 @@ onMounted(() => {
                 min="1"
                 placeholder="例如 8192"
               />
+            </el-form-item>
+</div>
+
+          <div class="system-config-page__model-grid">
+            <el-form-item
+              v-for="promptType in PROMPT_TYPES"
+              :key="`${model.modelKey}-${promptType.value}`"
+              :label="promptType.label"
+            >
+              <el-select
+                v-model="model.draftPromptBindings[promptType.value]"
+                :data-test="`model-prompt-binding-${promptType.value}-${model.modelKey}`"
+                clearable
+                filterable
+                placeholder="选择模板名称"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="template in getPromptTemplateOptions(promptType.value)"
+                  :key="`${promptType.value}-${template.promptName}`"
+                  :label="`${template.promptName} (${template.modelName})`"
+                  :value="template.promptName"
+                />
+              </el-select>
             </el-form-item>
           </div>
 

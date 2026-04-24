@@ -18,6 +18,7 @@ import com.novelanalyzer.modules.analysis.vo.AnalysisResultVO;
 import com.novelanalyzer.modules.analysis.vo.TrendAnalysisVO;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
+import com.novelanalyzer.modules.config.service.PromptConfigService;
 import com.novelanalyzer.modules.config.service.UserConfigService;
 import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
@@ -75,6 +76,7 @@ public class AnalysisService {
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final PromptConfigRepository promptConfigRepository;
+    private final PromptConfigService promptConfigService;
     private final CrawlerRepository crawlerRepository;
     private final AiGatewayService aiGatewayService;
     private final AnalysisRepository analysisRepository;
@@ -87,6 +89,7 @@ public class AnalysisService {
     private final AsyncTaskExecutor streamTaskExecutor;
 
     public AnalysisService(PromptConfigRepository promptConfigRepository,
+                           PromptConfigService promptConfigService,
                            CrawlerRepository crawlerRepository,
                            AiGatewayService aiGatewayService,
                            AnalysisRepository analysisRepository,
@@ -98,6 +101,7 @@ public class AnalysisService {
                            ObjectMapper objectMapper,
                            AsyncTaskExecutor analysisStreamTaskExecutor) {
         this.promptConfigRepository = promptConfigRepository;
+        this.promptConfigService = promptConfigService;
         this.crawlerRepository = crawlerRepository;
         this.aiGatewayService = aiGatewayService;
         this.analysisRepository = analysisRepository;
@@ -111,8 +115,7 @@ public class AnalysisService {
     }
 
     public AnalysisResultVO analyze(String analysisType, AnalysisRequest request) {
-        PromptConfigEntity promptConfig = promptConfigRepository.findDefaultByType(analysisType)
-            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
+        PromptConfigEntity promptConfig = resolveRuntimePromptConfig(analysisType);
         boolean forceReanalyze = Boolean.TRUE.equals(request.getForceReanalyze());
         String cacheKey = buildAnalysisCacheKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount());
         AnalysisResultVO cached = crawlerCacheService.get(cacheKey, new TypeReference<AnalysisResultVO>() {});
@@ -180,9 +183,7 @@ public class AnalysisService {
                 ensureNotCancelled(invocationHandle);
 
                 // 尝试真流式：非 chunk 场景直接推 token，避免等全文再切割
-                PromptConfigEntity promptConfig = promptConfigRepository
-                    .findDefaultByType(analysisType)
-                    .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
+                PromptConfigEntity promptConfig = resolveRuntimePromptConfig(analysisType);
                 List<ChapterVO> chapters = loadAnalysisChapters(request);
                 if (chapters.isEmpty()) {
                     throw new BusinessException(ResultCode.BAD_REQUEST, "chapter content not found");
@@ -280,8 +281,7 @@ public class AnalysisService {
     public TrendAnalysisVO analyzeTrend(String platform, String channelCode, String boardCode) {
         RankBoardEntity board = crawlerRepository.findRankBoard(platform, channelCode, boardCode)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank board not found"));
-        PromptConfigEntity promptConfig = promptConfigRepository.findDefaultByType("theme")
-            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "theme prompt config not found"));
+        PromptConfigEntity promptConfig = resolveRuntimePromptConfig("theme");
         String cacheKey = buildTrendCacheKey(promptConfig, platform, channelCode, boardCode);
         TrendAnalysisVO cached = crawlerCacheService.get(cacheKey, new TypeReference<TrendAnalysisVO>() {
         });
@@ -465,8 +465,7 @@ public class AnalysisService {
                 request.getBoardCode()
             )
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank board not found"));
-        PromptConfigEntity promptConfig = promptConfigRepository.findDefaultByType("theme")
-            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "theme prompt config not found"));
+        PromptConfigEntity promptConfig = resolveRuntimePromptConfig("theme");
         List<RankSnapshotEntity> snapshots = crawlerRepository.findRecentBoardSnapshots(board.getId(), 3);
         if (snapshots.isEmpty()) {
             throw new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found");
@@ -674,6 +673,32 @@ public class AnalysisService {
         }
     }
 
+    private PromptConfigEntity resolveRuntimePromptConfig(String analysisType) {
+        return promptConfigService.resolveRuntimePromptConfig(
+            analysisType,
+            resolveUserPreferredModelKey(),
+            systemConfigService.getModelRegistry().getModels()
+        );
+    }
+
+    private String resolveRuntimeModelCacheToken(PromptConfigEntity promptConfig) {
+        return systemConfigService.resolveEnabledModel(
+                resolveUserPreferredModelKey(),
+                resolvePromptConfiguredModel(promptConfig)
+            )
+            .map(model -> {
+                String modelName = model.getModelName();
+                if (modelName != null && !modelName.isBlank()) {
+                    return modelName;
+                }
+                return model.getModelKey();
+            })
+            .orElseGet(() -> {
+                String modelName = resolvePromptConfiguredModel(promptConfig);
+                return modelName == null || modelName.isBlank() ? "default-model" : modelName;
+            });
+    }
+
     private String resolvePromptConfiguredModel(PromptConfigEntity promptConfig) {
         if (promptConfig == null) {
             return null;
@@ -696,7 +721,10 @@ public class AnalysisService {
                                          Long bookId,
                                          String analysisType,
                                          Integer chapterCount) {
-        return "analysis:" + bookId + ":" + analysisType + ":" + chapterCount + ":" + buildPromptSignature(promptConfig);
+        return "analysis:" + bookId + ":" + analysisType + ":" + chapterCount + ":"
+            + resolveUserPreferredModelKey() + ":"
+            + resolveRuntimeModelCacheToken(promptConfig) + ":"
+            + buildPromptSignature(promptConfig);
     }
 
     private String buildTrendCacheKey(PromptConfigEntity promptConfig,
@@ -704,6 +732,8 @@ public class AnalysisService {
                                       String channelCode,
                                       String boardCode) {
         return "analysis:trend:" + platform + ":" + channelCode + ":" + boardCode + ":"
+            + resolveUserPreferredModelKey() + ":"
+            + resolveRuntimeModelCacheToken(promptConfig) + ":"
             + buildPromptSignature(promptConfig);
     }
 
@@ -885,6 +915,7 @@ public class AnalysisService {
     private String buildPromptSignature(PromptConfigEntity promptConfig) {
         return Integer.toHexString(Objects.hash(
             promptConfig.getId(),
+            promptConfig.getPromptName(),
             promptConfig.getPromptContent(),
             promptConfig.getModelName(),
             promptConfig.getTemperature(),

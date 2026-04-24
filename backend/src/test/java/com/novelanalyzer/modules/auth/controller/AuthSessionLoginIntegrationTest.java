@@ -30,7 +30,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 @AutoConfigureMockMvc
 @Sql(
-    scripts = {"classpath:sql/phase2-schema-h2.sql", "classpath:sql/phase2-data-h2.sql"},
+    scripts = {
+        "classpath:sql/phase2-schema-h2.sql",
+        "classpath:sql/phase3-schema-h2.sql",
+        "classpath:sql/phase4-schema-h2.sql",
+        "classpath:sql/phase5-schema-h2.sql",
+        "classpath:sql/phase2-data-h2.sql"
+    },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
 class AuthSessionLoginIntegrationTest {
@@ -43,9 +49,9 @@ class AuthSessionLoginIntegrationTest {
 
     @Test
     void shouldPersistActiveSessionWhenLoginSucceeds() throws Exception {
-        mockMvc.perform(post("/api/auth/login")
+        mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\",\"deviceLabel\":\"Chrome on Windows\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\",\"deviceLabel\":\"Chrome on Windows\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.accessToken").isNotEmpty());

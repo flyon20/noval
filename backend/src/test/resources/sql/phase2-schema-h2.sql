@@ -5,22 +5,26 @@ DROP TABLE IF EXISTS sys_role;
 DROP TABLE IF EXISTS sys_login_log;
 DROP TABLE IF EXISTS sys_operation_log;
 DROP TABLE IF EXISTS sys_ip_blacklist;
+DROP TABLE IF EXISTS sys_sms_code_log;
 DROP TABLE IF EXISTS sys_user_session;
 DROP TABLE IF EXISTS sys_user;
 
 CREATE TABLE sys_user (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    username VARCHAR(50) NOT NULL UNIQUE,
+    username VARCHAR(50),
     password VARCHAR(100) NOT NULL,
-    phone VARCHAR(20),
+    phone VARCHAR(20) NOT NULL,
+    phone_verified TINYINT DEFAULT 1,
     email VARCHAR(100),
     avatar VARCHAR(255),
     status TINYINT DEFAULT 1,
     last_login_time TIMESTAMP,
+    password_updated_time TIMESTAMP,
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0,
-    version INT DEFAULT 0
+    version INT DEFAULT 0,
+    CONSTRAINT uk_user_phone UNIQUE (phone)
 );
 
 CREATE TABLE sys_role (
@@ -69,6 +73,8 @@ CREATE TABLE sys_login_log (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT,
     username VARCHAR(50),
+    phone VARCHAR(20),
+    login_type VARCHAR(20),
     login_ip VARCHAR(50),
     login_location VARCHAR(100),
     browser VARCHAR(50),
@@ -76,6 +82,29 @@ CREATE TABLE sys_login_log (
     status TINYINT DEFAULT 1,
     message VARCHAR(500),
     login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE sys_sms_code_log (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    phone VARCHAR(20) NOT NULL,
+    biz_type VARCHAR(32) NOT NULL,
+    provider VARCHAR(32) NOT NULL DEFAULT 'aliyun-pnvs',
+    out_id VARCHAR(64) NOT NULL,
+    request_id VARCHAR(64),
+    biz_id VARCHAR(64),
+    scheme_name VARCHAR(32),
+    status VARCHAR(32) NOT NULL,
+    verify_result VARCHAR(32),
+    send_ip VARCHAR(50),
+    trace_id VARCHAR(64),
+    message VARCHAR(500),
+    expire_time TIMESTAMP,
+    verified_time TIMESTAMP,
+    consumed_time TIMESTAMP,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted TINYINT DEFAULT 0,
+    CONSTRAINT uk_sms_code_log_out_id UNIQUE (out_id)
 );
 
 CREATE TABLE sys_operation_log (

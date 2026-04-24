@@ -9,6 +9,7 @@ public class PromptConfigVO {
     private String modelName;
     private Double temperature;
     private Integer maxTokens;
+    private Boolean isDefault;
     private String inputJsonSchema;
     private String inputExampleJson;
     private String outputJsonSchema;
@@ -70,6 +71,14 @@ public class PromptConfigVO {
 
     public void setMaxTokens(Integer maxTokens) {
         this.maxTokens = maxTokens;
+    }
+
+    public Boolean getIsDefault() {
+        return isDefault;
+    }
+
+    public void setIsDefault(Boolean isDefault) {
+        this.isDefault = isDefault;
     }
 
     public String getInputJsonSchema() {

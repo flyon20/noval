@@ -35,7 +35,8 @@ VALUES
     (14, 'analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0),
     (15, 'analysis.chunk.max-input-tokens', '32000', 'analysis', 'Approximate max input tokens before analysis switches to chunk mode', 1, 0),
     (16, 'analysis.chunk.target-input-tokens', '24000', 'analysis', 'Approximate target input tokens for each chunked analysis request', 1, 0),
-    (17, 'analysis.chunk.parallelism', '3', 'analysis', 'Maximum parallel chunk analysis requests', 1, 0);
+    (17, 'analysis.chunk.parallelism', '3', 'analysis', 'Maximum parallel chunk analysis requests', 1, 0),
+    (18, 'auth.bootstrap-admin-phones', '15599316908', 'auth', 'Comma-separated admin phone bootstrap list', 1, 0);
 
 INSERT INTO crawl_book (id, platform, platform_book_id, book_name, author, intro, book_url, deleted)
 VALUES

@@ -17,9 +17,11 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class SystemConfigService {
@@ -28,6 +30,10 @@ public class SystemConfigService {
     private static final String OPENAI_COMPATIBLE_PROVIDER = "openai-compatible";
     private static final String DEFAULT_MODEL_KEY = "deepseek-chat";
     private static final String DEFAULT_TEMPERATURE_SPEC_JSON = "{\"min\":0.0,\"max\":2.0,\"step\":0.1,\"default\":1.0}";
+    private static final Set<String> SECRET_CONFIG_KEYS = Set.of(
+        "ai.openai-compatible.api-key",
+        "ai.langgraph-worker.internal-api-key"
+    );
 
     private static final Map<String, DefaultSystemConfig> DEFAULT_SYSTEM_CONFIGS = Map.ofEntries(
         Map.entry("ai.provider.type", new DefaultSystemConfig("openai-compatible", "ai", "AI provider type", true)),
@@ -41,6 +47,7 @@ public class SystemConfigService {
         Map.entry("ai.langgraph-worker.internal-api-key", new DefaultSystemConfig("", "ai", "LangGraph worker internal service token", true)),
         Map.entry("ai.langgraph-worker.timeout-millis", new DefaultSystemConfig("30000", "ai", "LangGraph worker timeout in milliseconds", true)),
         Map.entry("ai.available-models", new DefaultSystemConfig("deepseek-chat", "ai", "Comma-separated list of available AI models for user selection", true)),
+        Map.entry("auth.bootstrap-admin-phones", new DefaultSystemConfig("15599316908", "auth", "Comma-separated admin phone bootstrap list", true)),
         Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "Default crawler chapter count", true)),
         Map.entry("crawler.http.timeout-seconds", new DefaultSystemConfig("20", "crawler", "Python crawler page fetch timeout in seconds", true)),
         Map.entry("crawler.chapter.fetch-workers", new DefaultSystemConfig("3", "crawler", "Python crawler chapter fetch workers", true)),
@@ -58,11 +65,14 @@ public class SystemConfigService {
 
     private final SystemConfigRepository systemConfigRepository;
     private final ObjectMapper objectMapper;
+    private final ConfigSecretService configSecretService;
 
     public SystemConfigService(SystemConfigRepository systemConfigRepository,
-                               ObjectMapper objectMapper) {
+                               ObjectMapper objectMapper,
+                               ConfigSecretService configSecretService) {
         this.systemConfigRepository = systemConfigRepository;
         this.objectMapper = objectMapper;
+        this.configSecretService = configSecretService;
     }
 
     public SystemConfigVO getByKey(String configKey) {
@@ -76,44 +86,48 @@ public class SystemConfigService {
         if (existing != null && existing.getEditable() != null && existing.getEditable() == 0) {
             throw new BusinessException(ResultCode.FORBIDDEN, "system config is read only");
         }
-
         SystemConfigEntity entity = existing == null ? new SystemConfigEntity() : existing;
         entity.setConfigKey(request.getConfigKey());
-        entity.setConfigValue(request.getConfigValue());
+        entity.setConfigValue(prepareConfigValueForStorage(
+            request.getConfigKey(),
+            request.getConfigValue(),
+            existing == null ? null : existing.getConfigValue()
+        ));
         entity.setConfigType(request.getConfigType());
         entity.setDescription(request.getDescription());
-        SystemConfigEntity saved = systemConfigRepository.saveOrUpdate(entity);
-        return toVO(saved);
+        return toVO(systemConfigRepository.saveOrUpdate(entity));
     }
 
     public String getValueOrDefault(String configKey, String defaultValue) {
         return findOrCreateDefaultConfig(configKey)
             .map(SystemConfigEntity::getConfigValue)
+            .map(value -> isSecretConfigKey(configKey) ? configSecretService.decryptIfNecessary(value) : value)
             .filter(value -> value != null && !value.isBlank())
             .orElse(defaultValue);
     }
 
     public int getIntValueOrDefault(String configKey, int defaultValue) {
-        return parseInteger(getValueOrDefault(configKey, null))
-            .orElse(defaultValue);
+        return parseInteger(getValueOrDefault(configKey, null)).orElse(defaultValue);
     }
 
     public long getLongValueOrDefault(String configKey, long defaultValue) {
-        return parseLong(getValueOrDefault(configKey, null))
-            .orElse(defaultValue);
+        return parseLong(getValueOrDefault(configKey, null)).orElse(defaultValue);
     }
 
     public boolean getBooleanValueOrDefault(String configKey, boolean defaultValue) {
-        return parseBoolean(getValueOrDefault(configKey, null))
-            .orElse(defaultValue);
+        return parseBoolean(getValueOrDefault(configKey, null)).orElse(defaultValue);
     }
 
     public AiModelRegistryVO getModelRegistry() {
-        return parseModelRegistry(getOrCreateModelRegistryEntity().getConfigValue());
+        return sanitizeModelRegistry(getModelRegistryInternal());
     }
 
     public AiModelRegistryVO saveModelRegistry(AiModelRegistrySaveRequest request) {
-        AiModelRegistryVO registry = normalizeModelRegistry(request.getDefaultModelKey(), request.getModels());
+        AiModelRegistryVO existingRegistry = getModelRegistryInternal();
+        AiModelRegistryVO registry = normalizeModelRegistry(
+            request.getDefaultModelKey(),
+            mergeModelRegistryRequests(existingRegistry, request.getModels())
+        );
         SystemConfigEntity entity = new SystemConfigEntity();
         entity.setConfigKey(MODEL_REGISTRY_CONFIG_KEY);
         entity.setConfigType("ai");
@@ -121,11 +135,11 @@ public class SystemConfigService {
         entity.setConfigValue(writeJson(registry));
         systemConfigRepository.saveOrUpdate(entity);
         syncLegacyModelConfig(registry);
-        return registry;
+        return sanitizeModelRegistry(registry);
     }
 
     public List<AiModelOptionVO> getModelOptions() {
-        return getModelRegistry().getModels().stream()
+        return getModelRegistryInternal().getModels().stream()
             .filter(model -> Boolean.TRUE.equals(model.getEnabled()))
             .map(this::toModelOption)
             .toList();
@@ -150,7 +164,7 @@ public class SystemConfigService {
     }
 
     public Optional<AiModelRegistryModelVO> resolveEnabledModel(String... candidates) {
-        AiModelRegistryVO registry = getModelRegistry();
+        AiModelRegistryVO registry = getModelRegistryInternal();
         for (String candidate : candidates) {
             if (candidate == null || candidate.isBlank()) {
                 continue;
@@ -180,7 +194,9 @@ public class SystemConfigService {
         SystemConfigVO vo = new SystemConfigVO();
         vo.setId(entity.getId());
         vo.setConfigKey(entity.getConfigKey());
-        vo.setConfigValue(entity.getConfigValue());
+        vo.setConfigValue(isSecretConfigKey(entity.getConfigKey())
+            ? configSecretService.maskValue(entity.getConfigValue())
+            : entity.getConfigValue());
         vo.setConfigType(entity.getConfigType());
         vo.setDescription(entity.getDescription());
         vo.setEditable(entity.getEditable() == null || entity.getEditable() == 1);
@@ -219,17 +235,15 @@ public class SystemConfigService {
     private Optional<SystemConfigEntity> findOrCreateDefaultConfig(String configKey) {
         Optional<SystemConfigEntity> existing = systemConfigRepository.findByKey(configKey);
         if (existing.isPresent()) {
-            return existing;
+            return Optional.of(normalizeStoredSecretConfig(configKey, existing.get()));
         }
-
         DefaultSystemConfig defaultConfig = DEFAULT_SYSTEM_CONFIGS.get(configKey);
         if (defaultConfig == null) {
             return Optional.empty();
         }
-
         SystemConfigEntity entity = new SystemConfigEntity();
         entity.setConfigKey(configKey);
-        entity.setConfigValue(defaultConfig.configValue());
+        entity.setConfigValue(prepareConfigValueForStorage(configKey, defaultConfig.configValue(), null));
         entity.setConfigType(defaultConfig.configType());
         entity.setDescription(defaultConfig.description());
         entity.setEditable(defaultConfig.editable() ? 1 : 0);
@@ -237,17 +251,22 @@ public class SystemConfigService {
     }
 
     private SystemConfigEntity getOrCreateModelRegistryEntity() {
-        return systemConfigRepository.findByKey(MODEL_REGISTRY_CONFIG_KEY)
-            .filter(entity -> entity.getConfigValue() != null && !entity.getConfigValue().isBlank())
+        SystemConfigEntity entity = systemConfigRepository.findByKey(MODEL_REGISTRY_CONFIG_KEY)
+            .filter(current -> current.getConfigValue() != null && !current.getConfigValue().isBlank())
             .orElseGet(() -> {
-                SystemConfigEntity entity = new SystemConfigEntity();
-                entity.setConfigKey(MODEL_REGISTRY_CONFIG_KEY);
-                entity.setConfigType("ai");
-                entity.setDescription("Structured AI model registry");
-                entity.setConfigValue(writeJson(buildDefaultModelRegistry()));
-                entity.setEditable(1);
-                return systemConfigRepository.saveOrUpdate(entity);
+                SystemConfigEntity created = new SystemConfigEntity();
+                created.setConfigKey(MODEL_REGISTRY_CONFIG_KEY);
+                created.setConfigType("ai");
+                created.setDescription("Structured AI model registry");
+                created.setConfigValue(writeJson(buildDefaultModelRegistry()));
+                created.setEditable(1);
+                return systemConfigRepository.saveOrUpdate(created);
             });
+        return migratePlaintextModelSecrets(entity);
+    }
+
+    private AiModelRegistryVO getModelRegistryInternal() {
+        return parseModelRegistry(getOrCreateModelRegistryEntity().getConfigValue());
     }
 
     private AiModelRegistryVO buildDefaultModelRegistry() {
@@ -311,6 +330,7 @@ public class SystemConfigService {
                     request.setDefaultTemperature(model.getDefaultTemperature());
                     request.setMaxTokens(model.getMaxTokens());
                     request.setTemperatureSpecJson(model.getTemperatureSpecJson());
+                    request.setPromptBindings(model.getPromptBindings());
                     requests.add(request);
                 }
             }
@@ -371,6 +391,7 @@ public class SystemConfigService {
                 normalized.setDefaultTemperature(model.getDefaultTemperature());
                 normalized.setMaxTokens(model.getMaxTokens());
                 normalized.setTemperatureSpecJson(model.getTemperatureSpecJson());
+                normalized.setPromptBindings(model.getPromptBindings());
                 return normalized;
             })
             .toList());
@@ -388,7 +409,7 @@ public class SystemConfigService {
         model.setProviderType(firstNonBlank(trimToNull(request.getProviderType()), OPENAI_COMPATIBLE_PROVIDER));
         model.setModelName(firstNonBlank(trimToNull(request.getModelName()), modelKey));
         model.setBaseUrl(trimToNull(request.getBaseUrl()));
-        model.setApiKey(firstNonBlank(request.getApiKey(), ""));
+        model.setApiKey(firstNonBlank(trimToNull(request.getApiKey()), ""));
         model.setEnabled(request.getEnabled() == null || request.getEnabled());
         model.setIsDefault(request.getIsDefault() != null && request.getIsDefault());
         model.setDefaultTemperature(request.getDefaultTemperature() == null ? 1.0 : request.getDefaultTemperature());
@@ -397,6 +418,7 @@ public class SystemConfigService {
             trimToNull(request.getTemperatureSpecJson()),
             buildDefaultTemperatureSpecJson(model.getDefaultTemperature())
         ));
+        model.setPromptBindings(request.getPromptBindings());
         return model;
     }
 
@@ -422,7 +444,11 @@ public class SystemConfigService {
             .orElse("");
         saveSystemConfigValue("ai.available-models", availableModels, "Comma-separated list of available AI models for user selection");
 
-        AiModelRegistryModelVO defaultModel = resolveEnabledModel(registry.getDefaultModelKey()).orElse(null);
+        AiModelRegistryModelVO defaultModel = registry.getModels().stream()
+            .filter(model -> Boolean.TRUE.equals(model.getEnabled()))
+            .filter(model -> registry.getDefaultModelKey() != null && registry.getDefaultModelKey().equals(model.getModelKey()))
+            .findFirst()
+            .orElse(null);
         if (defaultModel != null) {
             saveSystemConfigValue("ai.openai-compatible.default-model",
                 firstNonBlank(defaultModel.getModelName(), defaultModel.getModelKey()),
@@ -437,19 +463,148 @@ public class SystemConfigService {
     }
 
     private void saveSystemConfigValue(String configKey, String configValue, String description) {
-        SystemConfigEntity entity = new SystemConfigEntity();
+        SystemConfigEntity entity = systemConfigRepository.findByKey(configKey).orElseGet(SystemConfigEntity::new);
         entity.setConfigKey(configKey);
         entity.setConfigType("ai");
         entity.setDescription(description);
-        entity.setConfigValue(configValue);
+        entity.setConfigValue(prepareConfigValueForStorage(configKey, configValue, entity.getConfigValue()));
         systemConfigRepository.saveOrUpdate(entity);
     }
 
     private String getStoredConfigValue(String configKey) {
-        return systemConfigRepository.findByKey(configKey)
+        return findOrCreateDefaultConfig(configKey)
             .map(SystemConfigEntity::getConfigValue)
             .map(this::trimToNull)
             .orElse(null);
+    }
+
+    private AiModelRegistryVO sanitizeModelRegistry(AiModelRegistryVO registry) {
+        AiModelRegistryVO sanitized = new AiModelRegistryVO();
+        sanitized.setDefaultModelKey(registry.getDefaultModelKey());
+        sanitized.setModels(registry.getModels().stream()
+            .map(model -> {
+                AiModelRegistryModelVO copy = new AiModelRegistryModelVO();
+                copy.setModelKey(model.getModelKey());
+                copy.setDisplayName(model.getDisplayName());
+                copy.setProviderType(model.getProviderType());
+                copy.setModelName(model.getModelName());
+                copy.setBaseUrl(model.getBaseUrl());
+                copy.setApiKey(null);
+                copy.setApiKeyConfigured(configSecretService.hasSecret(model.getApiKey()));
+                copy.setApiKeyMasked(configSecretService.maskValue(model.getApiKey()));
+                copy.setEnabled(model.getEnabled());
+                copy.setIsDefault(model.getIsDefault());
+                copy.setDefaultTemperature(model.getDefaultTemperature());
+                copy.setMaxTokens(model.getMaxTokens());
+                copy.setTemperatureSpecJson(model.getTemperatureSpecJson());
+                copy.setPromptBindings(model.getPromptBindings());
+                return copy;
+            })
+            .toList());
+        return sanitized;
+    }
+
+    private List<AiModelRegistryModelRequest> mergeModelRegistryRequests(AiModelRegistryVO existingRegistry,
+                                                                         List<AiModelRegistryModelRequest> requestedModels) {
+        Map<String, AiModelRegistryModelVO> existingByModelKey = new HashMap<>();
+        if (existingRegistry != null && existingRegistry.getModels() != null) {
+            for (AiModelRegistryModelVO existing : existingRegistry.getModels()) {
+                if (existing.getModelKey() != null && !existing.getModelKey().isBlank()) {
+                    existingByModelKey.put(existing.getModelKey(), existing);
+                }
+            }
+        }
+
+        return requestedModels.stream()
+            .map(request -> {
+                AiModelRegistryModelRequest merged = new AiModelRegistryModelRequest();
+                merged.setModelKey(request.getModelKey());
+                merged.setDisplayName(request.getDisplayName());
+                merged.setProviderType(request.getProviderType());
+                merged.setModelName(request.getModelName());
+                merged.setBaseUrl(request.getBaseUrl());
+                merged.setEnabled(request.getEnabled());
+                merged.setIsDefault(request.getIsDefault());
+                merged.setDefaultTemperature(request.getDefaultTemperature());
+                merged.setMaxTokens(request.getMaxTokens());
+                merged.setTemperatureSpecJson(request.getTemperatureSpecJson());
+                merged.setPromptBindings(request.getPromptBindings());
+
+                AiModelRegistryModelVO existing = existingByModelKey.get(trimToNull(request.getModelKey()));
+                String requestApiKey = trimToNull(request.getApiKey());
+                if (configSecretService.isMaskedValue(requestApiKey)) {
+                    merged.setApiKey(existing == null ? "" : existing.getApiKey());
+                } else if (requestApiKey != null) {
+                    merged.setApiKey(configSecretService.encryptIfNecessary(requestApiKey));
+                } else if (existing != null && configSecretService.hasSecret(existing.getApiKey())) {
+                    merged.setApiKey(existing.getApiKey());
+                } else {
+                    merged.setApiKey("");
+                }
+                return merged;
+            })
+            .toList();
+    }
+
+    private SystemConfigEntity normalizeStoredSecretConfig(String configKey, SystemConfigEntity entity) {
+        if (!isSecretConfigKey(configKey) || entity == null) {
+            return entity;
+        }
+        String configValue = entity.getConfigValue();
+        if (!configSecretService.hasSecret(configValue) || configSecretService.isEncrypted(configValue)) {
+            return entity;
+        }
+        entity.setConfigValue(configSecretService.encryptIfNecessary(configValue));
+        return systemConfigRepository.saveOrUpdate(entity);
+    }
+
+    private SystemConfigEntity migratePlaintextModelSecrets(SystemConfigEntity entity) {
+        AiModelRegistryVO registry = parseModelRegistry(entity.getConfigValue());
+        boolean hasPlaintextSecret = registry.getModels().stream()
+            .map(AiModelRegistryModelVO::getApiKey)
+            .anyMatch(apiKey -> configSecretService.hasSecret(apiKey) && !configSecretService.isEncrypted(apiKey));
+        if (!hasPlaintextSecret) {
+            return entity;
+        }
+
+        List<AiModelRegistryModelRequest> migratedModels = registry.getModels().stream()
+            .map(model -> {
+                AiModelRegistryModelRequest request = new AiModelRegistryModelRequest();
+                request.setModelKey(model.getModelKey());
+                request.setDisplayName(model.getDisplayName());
+                request.setProviderType(model.getProviderType());
+                request.setModelName(model.getModelName());
+                request.setBaseUrl(model.getBaseUrl());
+                request.setApiKey(configSecretService.encryptIfNecessary(model.getApiKey()));
+                request.setEnabled(model.getEnabled());
+                request.setIsDefault(model.getIsDefault());
+                request.setDefaultTemperature(model.getDefaultTemperature());
+                request.setMaxTokens(model.getMaxTokens());
+                request.setTemperatureSpecJson(model.getTemperatureSpecJson());
+                request.setPromptBindings(model.getPromptBindings());
+                return request;
+            })
+            .toList();
+        entity.setConfigValue(writeJson(normalizeModelRegistry(registry.getDefaultModelKey(), migratedModels)));
+        return systemConfigRepository.saveOrUpdate(entity);
+    }
+
+    private String prepareConfigValueForStorage(String configKey, String requestedValue, String existingValue) {
+        if (!isSecretConfigKey(configKey)) {
+            return requestedValue;
+        }
+        String normalized = trimToNull(requestedValue);
+        if (normalized == null) {
+            return "";
+        }
+        if (configSecretService.isMaskedValue(normalized)) {
+            return existingValue == null ? "" : existingValue;
+        }
+        return configSecretService.encryptIfNecessary(normalized);
+    }
+
+    private boolean isSecretConfigKey(String configKey) {
+        return configKey != null && SECRET_CONFIG_KEYS.contains(configKey);
     }
 
     private String writeJson(AiModelRegistryVO registry) {

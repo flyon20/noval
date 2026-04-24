@@ -24,7 +24,13 @@ import static org.assertj.core.api.Assertions.assertThat;
     }
 )
 @Sql(
-    scripts = {"classpath:sql/phase2-schema-h2.sql", "classpath:sql/phase2-data-h2.sql"},
+    scripts = {
+        "classpath:sql/phase2-schema-h2.sql",
+        "classpath:sql/phase3-schema-h2.sql",
+        "classpath:sql/phase4-schema-h2.sql",
+        "classpath:sql/phase5-schema-h2.sql",
+        "classpath:sql/phase2-data-h2.sql"
+    },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
 class AuthSessionScaffoldTest {
@@ -64,7 +70,7 @@ class AuthSessionScaffoldTest {
     @Test
     void shouldValidateDeviceLabelLengthConstraint() {
         LoginRequest request = new LoginRequest();
-        request.setUsername("admin");
+        request.setPhone("13800138000");
         request.setPassword("admin123");
         assertThat(request.getDeviceLabel()).isNull();
 

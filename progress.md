@@ -512,3 +512,152 @@
 ### Verification Evidence
 - Ran `npm run test -- --run src/components/rank/__tests__/BookDetailDrawer.spec.ts src/components/rank/__tests__/ChapterPreviewDrawer.spec.ts src/layouts/__tests__/AppShell.spec.ts src/views/trend/__tests__/TrendView.spec.ts` and it passed with `19 passed`.
 - Ran `npm run type-check` and it passed.
+
+## Session Addendum: 2026-03-29 (Admin Bootstrap + Secret Config Hardening)
+### Implementation Work
+- Added server-side config-secret encryption support for sensitive system-config values and model-registry API keys.
+- Changed model-registry reads to return masked key state instead of plaintext, while preserving write-only key updates from the admin page.
+- Added `auth.bootstrap-admin-phones` default config and wired auth login/register/refresh to auto-grant `ADMIN` when the phone matches.
+- Updated targeted backend integration helpers to use the current phone-based login contract.
+- Updated local docs and seed data so the admin-phone bootstrap and secret-key strategy are documented and reproducible.
+
+### Verification Evidence
+- Ran `mvn -DskipTests test-compile` in `backend` and it passed.
+- Ran `npm run test -- --run src/views/config/system/__tests__/SystemConfigView.spec.ts` in `frontend` and it passed.
+- Started local Redis on `127.0.0.1:6379`.
+- Ran `mvn "-Dtest=AuthControllerTest#shouldGrantAdminRoleToBootstrapPhoneOnPasswordLogin,Phase5BackendIntegrationTest#shouldManageAiModelRegistryAndExposeModelOptions+shouldMaskAndEncryptSecretSystemConfigValue,Phase4AnalysisIntegrationTest#shouldUseSelectedModelRegistryRuntimeConfigForOpenAiCompatibleAnalysis" test` and it passed.
+
+## Session Addendum: 2026-03-29 (Turnstile + SMS Anti-Abuse)
+### Implementation Work
+- Added Cloudflare Turnstile config properties, public auth-config endpoint, and backend Turnstile siteverify service with short HTTP timeouts.
+- Updated `/api/auth/sms/send` to require Turnstile verification before SMS send.
+- Upgraded `SmsRiskControlService` from single phone cooldown to phone/IP/bizType layered throttling with local fallback.
+- Added a lightweight frontend Turnstile widget component and wired the login page to require a Turnstile token before SMS send when enabled.
+- Updated login-page tests to load public auth config and preserve existing flows when Turnstile is disabled.
+
+### Verification Evidence
+- Ran `mvn "-Dtest=AuthControllerTest#shouldRejectSmsSendWhenTurnstileTokenMissing+shouldReturnDebugVerifyCodeForLoopbackSmsSend,SystemControllerTest#shouldExposePublicAuthConfig" test` and it passed.
+- Ran `npm run test -- --run src/views/login/__tests__/LoginView.spec.ts` and it passed.
+- Ran `npm run type-check` and it passed.
+- Ran `mvn -DskipTests test-compile` and it passed.
+
+## Session Addendum: 2026-03-29 (Password Login Anti-Bruteforce)
+### Implementation Work
+- Added `PasswordLoginRiskControlService` to track password-login failures by phone, IP, and phone+IP pair.
+- Wired password-login pre-checks into `AuthController.login(...)`.
+- Wired failure/success bookkeeping into `AuthService.login(...)`, including unknown phone and wrong-password paths.
+- Added tunable security properties and environment keys for password-login windows, thresholds, and cooldown.
+- Added integration tests covering:
+  - repeated wrong password attempts on the same phone+IP
+  - distributed attempts against the same phone
+  - one IP sweeping multiple phones
+
+### Verification Evidence
+- Ran `mvn "-Dtest=PasswordLoginRiskControlIntegrationTest" test` and it passed.
+
+## Session Addendum: 2026-04-24 (Project Understanding Review)
+### Read-only Architecture Review Work
+- Re-read the existing planning files to recover current repo context before scanning code.
+- Re-read high-level runtime files:
+  - `README.md`
+  - `frontend/package.json`
+  - `frontend/vite.config.ts`
+  - `backend/pom.xml`
+  - `backend/src/main/resources/application.yml`
+  - `docker-compose.yml`
+- Reconstructed the frontend bootstrap and routing chain:
+  - `frontend/src/main.ts`
+  - `frontend/src/router/index.ts`
+  - `frontend/src/router/guards.ts`
+  - `frontend/src/stores/auth.ts`
+  - `frontend/src/lib/http.ts`
+  - `frontend/src/lib/auth-session.ts`
+  - `frontend/src/lib/auth-bootstrap.ts`
+- Reconstructed the frontend business flow by reading:
+  - login / rank / analysis / trend views
+  - `useAnalysisRun.ts`
+  - `useTrendRun.ts`
+  - API adapters for auth / crawler / analysis / data / config / system
+  - stream/display adapters in `frontend/src/lib`
+- Reconstructed the backend service boundaries and orchestration by reading:
+  - security filter / role interceptor / global exception handler
+  - auth / crawler / analysis / data / config / system controllers
+  - `AuthService`, `AuthSessionService`, `SmsAuthService`
+  - `CrawlerService`, `PythonCrawlerClient`
+  - `AnalysisService`, `AiGatewayService`, `LangGraphWorkerClient`
+  - `DataQueryService`, `SystemConfigService`, `PromptConfigService`, `UserConfigService`
+- Reconstructed the crawler service and internal AI worker boundaries by reading:
+  - crawler FastAPI entrypoint, config, security, API routers, and `FanqieCrawler`
+  - langgraph-worker entrypoint, streaming API, LangGraph service, and provider client
+
+### Outcome
+- Confirmed the current repo should be understood as:
+  - frontend Vue workspace
+  - Java backend orchestration core
+  - internal Python crawler
+  - internal Python LangGraph worker
+- Confirmed the most important end-to-end path is:
+  - frontend interaction
+  - backend auth / role / rate-limit gates
+  - backend business orchestration
+  - backend calls crawler and/or AI runtime
+  - backend persists normalized results
+  - frontend restores or renders backend read models
+- No business files were modified in this round; only planning / findings / progress notes were updated.
+
+## Session Addendum: 2026-04-25 (Prompt Governance Brainstorming)
+### Design Discovery Work
+- Re-read the current prompt-template design notes and key implementation files before proposing changes:
+  - `docs/superpowers/specs/2026-04-19-model-bound-prompt-template-design.md`
+  - `backend/.../PromptConfigController.java`
+  - `backend/.../PromptConfigService.java`
+  - `backend/.../PromptConfigRepository.java`
+  - `backend/.../SystemConfigService.java`
+  - `frontend/src/views/config/prompt/PromptConfigView.vue`
+- Confirmed current runtime behavior:
+  - prompt template selection is still global and model-binding driven
+  - `promptBindings` is the intended primary selector, not `prompt_config.model_name`
+  - `is_default` is currently polluted by repository insert behavior
+- Confirmed current data limitations:
+  - `user_config` has no soft-delete field
+  - `prompt_config` has no user ownership / version / publish grouping
+  - current prompt update DTO does not separate admin-editable and user-editable fields
+
+### Requirements Locked With User
+- History model: use full snapshot/history semantics, not just one backup field.
+- User mode: support both binding existing templates and creating personal copies with restricted editable fields.
+- Admin rollout: use draft edits plus explicit global publish, not immediate auto-publish on every save.
+
+### Current State
+- Still in brainstorming/design phase.
+- No implementation code has been changed yet.
+
+### Spec Output
+- Wrote the prompt-governance redesign spec to:
+  - `D:\Git\agent\noval\docs\superpowers\specs\2026-04-25-prompt-governance-redesign-design.md`
+- The spec locks:
+  - admin draft + publish flow
+  - system template vs user copy scope
+  - user binding and effective-history tables
+  - admin-only JSON contract editing
+  - runtime fallback order anchored on published global templates
+
+## Session Addendum: 2026-04-25 Architecture Flow Review
+- 2026-04-25 03:20:28 完成当前项目只读架构梳理：前端、后端、爬虫、LangGraph worker。
+- 已确认主要入口、路由/API、鉴权链路、爬虫链路、AI runtime 分支和趋势/单书分析数据流。
+- 本轮未修改业务代码，仅更新 planning 记录文件。
+
+## Session Addendum: 2026-04-25 Server Migration Runbook
+- 2026-04-25 03:40:33 新增服务器迁移 Runbook，覆盖 SSL/env/compose/MySQL/Redis/Cloudflare/验证/回滚/排障。
+- 同步 .env.example 的线上 SSL 路径和运行变量占位。
+- 补齐 docker-compose.yml 中 backend 对 AI、Dify、短信和登录风控环境变量的映射。
+
+### Verification Update: 2026-04-25 Server Migration Runbook
+- 2026-04-25 03:44:20 静态校验 .env.example、docker-compose.yml、docs/server-migration-runbook.md 关键变量一致。
+- 本机未安装 Docker，无法执行 docker compose config；已记录为环境限制。
+- 同步 docs/nginx-cloudflare-production.md 中旧的 /etc/noval/ssl 示例为当前 /etc/nginx/ssl。
+
+## Session Addendum: 2026-04-25 AI Latency Investigation
+- 2026-04-25 04:00:20 完成 AI 请求慢链路只读排查：前端 stream/fallback、后端缓存/抓章/chunk、legacy 网关、LangGraph worker、现有日志证据。
+- 已确认一个高优先级问题：默认流式路径未像阻塞路径那样先做缓存/历史复用。
+- 已确认长内容 8 章以上会强制 chunk，且 chunk 进度目前被前端过滤，显著放大用户体感延迟。

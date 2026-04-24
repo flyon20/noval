@@ -29,7 +29,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 @AutoConfigureMockMvc
 @Sql(
-    scripts = {"classpath:sql/phase2-schema-h2.sql", "classpath:sql/phase2-data-h2.sql"},
+    scripts = {
+        "classpath:sql/phase2-schema-h2.sql",
+        "classpath:sql/phase3-schema-h2.sql",
+        "classpath:sql/phase4-schema-h2.sql",
+        "classpath:sql/phase5-schema-h2.sql",
+        "classpath:sql/phase2-data-h2.sql"
+    },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
 class AuthDemoSessionIntegrationTest {
@@ -41,7 +47,7 @@ class AuthDemoSessionIntegrationTest {
     void shouldAllowDemoUserToAccessProtectedEndpointsWithSessionBackedSid() throws Exception {
         MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"demo-admin\",\"password\":\"demo123\"}"))
+                .content("{\"phone\":\"demo-admin\",\"password\":\"demo123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.accessToken").isNotEmpty())

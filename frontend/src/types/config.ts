@@ -8,12 +8,21 @@ export interface PromptConfig {
   modelName: string;
   temperature?: number | null;
   maxTokens?: number | null;
+  isDefault?: boolean | null;
   inputJsonSchema?: string | null;
   inputExampleJson?: string | null;
   outputJsonSchema?: string | null;
   outputExampleJson?: string | null;
   postProcessType?: string | null;
   parseConfigJson?: string | null;
+}
+
+export interface PromptTemplateOption {
+  id: number;
+  promptType: PromptType;
+  promptName: string;
+  modelName: string;
+  isDefault?: boolean | null;
 }
 
 export interface PromptConfigUpdateRequest {
@@ -38,11 +47,14 @@ export interface AiModelRegistryModel {
   modelName: string;
   baseUrl?: string | null;
   apiKey?: string | null;
+  apiKeyConfigured?: boolean | null;
+  apiKeyMasked?: string | null;
   enabled: boolean;
   isDefault: boolean;
   defaultTemperature?: number | null;
   maxTokens?: number | null;
   temperatureSpecJson?: string | null;
+  promptBindings?: Partial<Record<PromptType, string>> | null;
 }
 
 export interface AiModelRegistry {
@@ -74,6 +86,7 @@ export interface AiModelRegistryUpdateRequest {
     defaultTemperature?: number;
     maxTokens?: number;
     temperatureSpecJson?: string;
+    promptBindings?: Partial<Record<PromptType, string>>;
   }>;
 }
 
@@ -84,6 +97,7 @@ export type KnownSystemConfigKey =
   | 'analysis.chunk.max-input-tokens'
   | 'analysis.chunk.target-input-tokens'
   | 'analysis.chunk.parallelism'
+  | 'auth.bootstrap-admin-phones'
   | 'crawler.default.chapter-count'
   | 'crawler.http.timeout-seconds'
   | 'crawler.chapter.fetch-workers'

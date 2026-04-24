@@ -5,6 +5,7 @@ import type {
   AiModelRegistry,
   AiModelRegistryUpdateRequest,
   PromptConfig,
+  PromptTemplateOption,
   PromptConfigUpdateRequest,
   PromptType,
   SystemConfig,
@@ -14,8 +15,16 @@ import type {
 } from '@/types/config';
 
 export const promptConfigApi = {
-  getByType(promptType: PromptType) {
+  getByType(promptType: PromptType, promptName?: string) {
     return httpClient.get<ApiResponse<PromptConfig>>('/api/config/prompt', {
+      params: {
+        promptType,
+        ...(promptName ? { promptName } : {}),
+      },
+    });
+  },
+  listTemplates(promptType: PromptType) {
+    return httpClient.get<ApiResponse<PromptTemplateOption[]>>('/api/config/prompt/templates', {
       params: { promptType },
     });
   },
@@ -44,6 +53,11 @@ export const systemConfigApi = {
   },
   getAvailableModels() {
     return httpClient.get<ApiResponse<string[]>>('/api/config/system/available-models');
+  },
+  listPromptTemplates(promptType: PromptType) {
+    return httpClient.get<ApiResponse<PromptTemplateOption[]>>('/api/config/prompt/templates', {
+      params: { promptType },
+    });
   },
 };
 

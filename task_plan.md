@@ -356,3 +356,94 @@ Phase 6
 | Rebuild the chapter drawer layout rather than patching its old bottom-sheet structure | The old desktop interaction problem was structural, not just spacing |
 | Use a colorful SVG cloud and hide pie labels inside slices | Solves the trend visual complaints without introducing a heavy new chart dependency |
 | Present theme data in a real table | Improves scanability and prevents the old mixed, card-like layout from feeling chaotic |
+
+## Session Addendum 2026-03-29
+
+### Goal
+- Finish the remaining admin/runtime configuration hardening needed for production rollout.
+- Support secure admin-side model key management and automatic admin promotion for the requested phone.
+
+### Current Phase
+- Phase complete: targeted implementation and verification
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Encrypt backend-managed model keys and runtime secret config values at rest | Prevents plaintext secret leakage from DB dumps and admin API reads |
+| Return only masked key state to the frontend | Browser/devtools should never receive reusable provider secrets |
+| Keep env-var fallback but let admin-configured key override immediately | Meets the product need for后台可配置生效 while preserving deploy-time flexibility |
+| Use `auth.bootstrap-admin-phones` to auto-sync `ADMIN` role | Gives a low-risk path to make `15599316908` admin without adding a full user-management subsystem right now |
+
+## Session Addendum 2026-03-29 (Turnstile + SMS Anti-Abuse)
+
+### Goal
+- Add Cloudflare Turnstile to SMS send flow and harden SMS abuse protection for production.
+
+### Current Phase
+- Phase complete: targeted implementation and verification
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Only gate `/api/auth/sms/send` with Turnstile in this round | Minimizes UX impact while directly protecting the expensive SMS action |
+| Expose Turnstile site key through a public backend endpoint | Keeps secret server-side and avoids hard-coding per-environment frontend builds |
+| Keep SMS risk control Redis-first but add local fallback | Avoids total loss of protection when Redis is temporarily unavailable |
+
+## Session Addendum 2026-03-29 (Password Login Anti-Bruteforce)
+
+### Goal
+- Harden password login against repeated requests and brute-force attempts before production rollout.
+
+### Current Phase
+- Phase complete: dedicated auth risk-control shipped with targeted verification
+
+### Key Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Keep generic rate limit and add a dedicated password-login risk layer | Generic request throttling alone is too coarse for real password attack patterns |
+| Count failures by phone, IP, and phone+IP pair | Covers both targeted brute-force and IP-based account sweeping |
+| Clear phone-scoped counters on successful login | Reduces lockout pain for legitimate users after they finally enter the right password |
+
+## Session Addendum 2026-04-24 (Project Understanding Review)
+
+### Goal
+- Build an accurate mental model of the current project without changing business code.
+- Focus primarily on frontend and backend logic, with a lighter pass over the crawler service.
+
+### Current Phase
+- Phase 1: documentation, entrypoint, and dependency scan
+
+### Planned Phases
+- Phase 1: read project docs, package manifests, runtime compose/config files, and entrypoints
+- Phase 2: trace frontend routing, API clients, auth/session state, and core views
+- Phase 3: trace backend controllers, services, repositories, security/config, and external clients
+- Phase 4: skim crawler API/security and Fanqie crawling implementation
+- Phase 5: summarize end-to-end data flow, key modules, and risks for handoff
+
+### Completion Summary
+- Phase 1 complete: runtime topology, dependencies, compose wiring, and backend/frontend entrypoints were confirmed.
+- Phase 2 complete: frontend auth bootstrap, routing, API adapters, core views, and SSE/composable flow were traced.
+- Phase 3 complete: backend controller layout, auth/security pipeline, analysis orchestration, crawler integration, data read models, and config services were traced.
+- Phase 4 complete: crawler internal API security and Fanqie crawling logic were traced, along with the internal LangGraph worker boundary.
+- Phase 5 complete: end-to-end user/data flow and the current migration state were summarized for future implementation work.
+
+## Session Addendum 2026-04-25 (Prompt Governance Redesign)
+
+### Goal
+- Redesign prompt-template governance so admin templates become publishable global defaults, user templates can be bound or copied under permission limits, and runtime selection/history become explainable and auditable.
+
+### Current Phase
+- Phase 1: requirements clarification and design shaping
+
+### Planned Phases
+- Phase 1: lock product semantics for admin publish, user binding/copying, fallback rules, and history behavior
+- Phase 2: write the design spec for schema, permission, publish flow, runtime resolution, and API/UI changes
+- Phase 3: write the implementation plan and migration strategy for server rollout
+
+### Execution Update
+- Phase 1 complete: product semantics were locked with the user, including:
+  - history snapshots instead of single backup field
+  - user bind or copy modes
+  - admin draft + explicit publish flow
+- Phase 2 complete: formal spec written to `docs/superpowers/specs/2026-04-25-prompt-governance-redesign-design.md`
+- Phase 3 pending: implementation plan and migration SQL are waiting for user review of the written spec

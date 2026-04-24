@@ -79,6 +79,14 @@ class SystemControllerTest {
     }
 
     @Test
+    void shouldExposePublicAuthConfig() throws Exception {
+        mockMvc.perform(get("/api/system/auth-public-config"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.turnstileEnabled").exists());
+    }
+
+    @Test
     void shouldBootstrapRankBoardsOnLogin() throws Exception {
         when(pythonCrawlerClient.fetchBoardCatalog(eq("fanqie"), any(Integer.class))).thenReturn(List.of(
             boardItem("fanqie", "male-new", "男频新书榜", "urban-brain", "都市脑洞")
@@ -101,9 +109,14 @@ class SystemControllerTest {
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/auth/login")
+        String phone = switch (username) {
+            case "admin" -> "13800138000";
+            case "writer" -> "13800138001";
+            default -> username;
+        };
+        MvcResult result = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();

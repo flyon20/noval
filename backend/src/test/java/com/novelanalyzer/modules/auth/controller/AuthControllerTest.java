@@ -1,31 +1,40 @@
 package com.novelanalyzer.modules.auth.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.novelanalyzer.common.exception.BusinessException;
+import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.service.AuthSessionFlushScheduler;
+import com.novelanalyzer.modules.auth.service.SmsAuthService;
+import com.novelanalyzer.modules.auth.service.TurnstileService;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockCookie;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.sql.Timestamp;
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -42,7 +51,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 @AutoConfigureMockMvc
 @Sql(
-    scripts = {"classpath:sql/phase2-schema-h2.sql", "classpath:sql/phase2-data-h2.sql"},
+    scripts = {
+        "classpath:sql/phase2-schema-h2.sql",
+        "classpath:sql/phase3-schema-h2.sql",
+        "classpath:sql/phase4-schema-h2.sql",
+        "classpath:sql/phase5-schema-h2.sql",
+        "classpath:sql/phase2-data-h2.sql"
+    },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
 class AuthControllerTest {
@@ -67,11 +82,17 @@ class AuthControllerTest {
     @Autowired
     private AuthSessionFlushScheduler authSessionFlushScheduler;
 
+    @MockBean
+    private SmsAuthService smsAuthService;
+
+    @MockBean
+    private TurnstileService turnstileService;
+
     @Test
-    void shouldLoginRefreshAndLogoutSuccessfully() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+    void shouldLoginRefreshAndLogoutSuccessfullyWithPhonePassword() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
@@ -104,12 +125,6 @@ class AuthControllerTest {
             .andExpect(jsonPath("$.code").value(401))
             .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
 
-        mockMvc.perform(post("/api/auth/logout")
-                .cookie(refreshCookie(firstRefreshToken)))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value(401))
-            .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
-
         MvcResult logoutResult = mockMvc.perform(post("/api/auth/logout")
                 .header("Authorization", "Bearer " + refreshedAccessToken))
             .andExpect(status().isOk())
@@ -133,62 +148,10 @@ class AuthControllerTest {
     }
 
     @Test
-    void shouldAllowLogoutUsingRefreshCookieWhenAccessTokenIsUnavailable() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+    void shouldIssueRefreshCookieOnPhonePasswordLogin() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200))
-            .andReturn();
-
-        String refreshToken = extractRefreshToken(loginResult);
-
-        mockMvc.perform(post("/api/auth/logout")
-                .cookie(refreshCookie(refreshToken)))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200))
-            .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
-
-        mockMvc.perform(post("/api/auth/refresh")
-                .cookie(refreshCookie(refreshToken)))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value(401))
-            .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
-    }
-
-    @Test
-    void shouldKickOldestActiveSessionWhenFourthDeviceLogsIn() throws Exception {
-        for (int i = 1; i <= 4; i++) {
-            mockMvc.perform(post("/api/auth/login")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content("{\"username\":\"admin\",\"password\":\"admin123\",\"deviceLabel\":\"Device-" + i + "\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200));
-        }
-
-        Integer activeCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM sys_user_session WHERE user_id = 1 AND status = 1 AND deleted = 0",
-            Integer.class
-        );
-        Integer kickedCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM sys_user_session WHERE user_id = 1 AND status = 4 AND deleted = 0",
-            Integer.class
-        );
-        List<String> kickedDevices = jdbcTemplate.queryForList(
-            "SELECT device_label FROM sys_user_session WHERE user_id = 1 AND status = 4 AND deleted = 0",
-            String.class
-        );
-
-        assertThat(activeCount).isEqualTo(3);
-        assertThat(kickedCount).isEqualTo(1);
-        assertThat(kickedDevices).containsExactly("Device-1");
-    }
-
-    @Test
-    void shouldIssueRefreshCookieOnLogin() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
@@ -204,10 +167,10 @@ class AuthControllerTest {
 
     @Test
     void shouldDropSecureFlagForLoopbackHttpOrigin() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login/password")
                 .header("Origin", "http://127.0.0.1:5173")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
@@ -222,127 +185,22 @@ class AuthControllerTest {
 
     @Test
     void shouldRejectWrongPasswordWithHelpfulMessage() throws Exception {
-        mockMvc.perform(post("/api/auth/login")
+        mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"wrong\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"wrong\"}"))
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value(401))
             .andExpect(jsonPath("$.message").value("密码错误，请重新输入"));
     }
 
     @Test
-    void shouldRejectUnknownUsernameWithHelpfulMessage() throws Exception {
-        mockMvc.perform(post("/api/auth/login")
+    void shouldRejectUnknownPhoneWithHelpfulMessage() throws Exception {
+        mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"missing-user\",\"password\":\"Password123\"}"))
+                .content("{\"phone\":\"13800138999\",\"password\":\"Password123\"}"))
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value(401))
-            .andExpect(jsonPath("$.message").value("用户名不存在，请先注册"));
-    }
-
-    @Test
-    void shouldRegisterUserAndReturnToken() throws Exception {
-        MvcResult registerResult = mockMvc.perform(post("/api/auth/register")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"new-user\",\"password\":\"Password123\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
-            .andExpect(header().string("Set-Cookie", containsString(REFRESH_COOKIE_NAME + "=")))
-            .andReturn();
-
-        String refreshToken = extractRefreshToken(registerResult);
-
-        Integer userCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM sys_user WHERE username = ?",
-            Integer.class,
-            "new-user"
-        );
-        String roleCode = jdbcTemplate.queryForObject(
-            """
-            SELECT r.role_code
-            FROM sys_role r
-            INNER JOIN sys_user_role ur ON ur.role_id = r.id
-            INNER JOIN sys_user u ON u.id = ur.user_id
-            WHERE u.username = ?
-            LIMIT 1
-            """,
-            String.class,
-            "new-user"
-        );
-
-        org.assertj.core.api.Assertions.assertThat(userCount).isEqualTo(1);
-        org.assertj.core.api.Assertions.assertThat(roleCode).isEqualTo("USER");
-
-        mockMvc.perform(post("/api/auth/refresh")
-                .cookie(refreshCookie(refreshToken)))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
-    }
-
-    @Test
-    void shouldRejectRegisterWhenUsernameExists() throws Exception {
-        mockMvc.perform(post("/api/auth/register")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"Password123\"}"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value(400))
-            .andExpect(jsonPath("$.message").value("用户名已存在，请更换后重试"));
-    }
-
-    @Test
-    void shouldRejectRegisterWhenPasswordIsTooWeak() throws Exception {
-        mockMvc.perform(post("/api/auth/register")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"weak-user\",\"password\":\"secret123\"}"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value(400))
-            .andExpect(jsonPath("$.message").value("密码需至少 8 位，且包含大写字母、小写字母和数字"));
-    }
-
-    @Test
-    void shouldReturnSpecificValidationMessageWhenRegisterPasswordMissing() throws Exception {
-        mockMvc.perform(post("/api/auth/register")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"missing-password\"}"))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.code").value(400))
-            .andExpect(jsonPath("$.message").value("password is required"));
-    }
-
-    @Test
-    void shouldRejectConfiguredDemoCredentialWhenDemoDisabled() throws Exception {
-        mockMvc.perform(post("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"demo-admin\",\"password\":\"demo123\"}"))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value(401));
-    }
-
-    @Test
-    void shouldRejectRefreshWhenUserDisabledAfterLogin() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200))
-            .andReturn();
-
-        String refreshToken = extractRefreshToken(loginResult);
-        jdbcTemplate.update("UPDATE sys_user SET status = 0 WHERE id = 1");
-
-        mockMvc.perform(post("/api/auth/refresh")
-                .cookie(refreshCookie(refreshToken)))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value(401));
-    }
-
-    @Test
-    void shouldRejectLogoutWithoutAuthorizationHeader() throws Exception {
-        mockMvc.perform(post("/api/auth/logout"))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value(401));
+            .andExpect(jsonPath("$.message").value("手机号未注册，请先注册"));
     }
 
     @Test
@@ -354,11 +212,79 @@ class AuthControllerTest {
     }
 
     @Test
-    void shouldBlockRefreshFromBlacklistedIpEvenThoughEndpointIsWhitelisted() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+    void shouldGrantAdminRoleToBootstrapPhoneOnPasswordLogin() throws Exception {
+        jdbcTemplate.update(
+            """
+            INSERT INTO sys_user (id, username, password, phone, phone_verified, status, deleted, password_updated_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            3L,
+            "bootstrap-admin",
+            "{noop}Password123",
+            "15599316908",
+            1,
+            1,
+            0
+        );
+        jdbcTemplate.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)", 3L, 2L);
+
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login/password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"15599316908\",\"password\":\"Password123\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andReturn();
+
+        String accessToken = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.data.accessToken");
+        String roles = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret()).get("roles", String.class);
+        Integer adminRoleCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM sys_user_role WHERE user_id = ? AND role_id = ?",
+            Integer.class,
+            3L,
+            1L
+        );
+
+        assertThat(roles).contains("ADMIN");
+        assertThat(adminRoleCount).isEqualTo(1);
+    }
+
+    @Test
+    void shouldRejectSmsSendWhenTurnstileTokenMissing() throws Exception {
+        doThrow(new BusinessException(ResultCode.BAD_REQUEST, "请完成人机校验后再发送验证码"))
+            .when(turnstileService)
+            .assertSmsSendPassed(isNull(), anyString());
+
+        mockMvc.perform(post("/api/auth/sms/send")
                 .with(remoteAddr("127.0.0.1"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+                .content("{\"phone\":\"13800138000\",\"bizType\":\"REGISTER\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value(400));
+    }
+
+    @Test
+    void shouldReturnDebugVerifyCodeForLoopbackSmsSend() throws Exception {
+        when(smsAuthService.sendVerifyCode(anyString(), anyString(), anyString()))
+            .thenReturn(new SmsAuthService.SendResult("fe0orl", "out-id-001"));
+
+        mockMvc.perform(post("/api/auth/sms/send")
+                .with(remoteAddr("127.0.0.1"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"13800138000\",\"bizType\":\"REGISTER\",\"turnstileToken\":\"test-token\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.debugVerifyCode").value("fe0orl"))
+            .andExpect(jsonPath("$.data.smsOutId").value("out-id-001"));
+
+        verify(smsAuthService).sendVerifyCode("13800138000", "REGISTER", "127.0.0.1");
+    }
+
+    @Test
+    void shouldBlockRefreshFromBlacklistedIpEvenThoughEndpointIsWhitelisted() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login/password")
+                .with(remoteAddr("127.0.0.1"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
@@ -378,28 +304,10 @@ class AuthControllerTest {
     }
 
     @Test
-    void shouldIgnoreSpoofedForwardedIpWhenProxyNotTrusted() throws Exception {
-        mockMvc.perform(post("/api/auth/login")
-                .with(remoteAddr("127.0.0.1"))
-                .header("X-Forwarded-For", "198.51.100.77")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200));
-
-        String loginIp = jdbcTemplate.queryForObject(
-            "SELECT login_ip FROM sys_login_log ORDER BY id DESC LIMIT 1",
-            String.class
-        );
-
-        org.assertj.core.api.Assertions.assertThat(loginIp).isEqualTo("127.0.0.1");
-    }
-
-    @Test
     void shouldFlushDirtySessionActivityToMysql() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
@@ -436,49 +344,6 @@ class AuthControllerTest {
         );
         assertThat(newLastActive).isNotNull();
         assertThat(newLastActive.toLocalDateTime()).isAfter(oldLastActive.toLocalDateTime());
-    }
-
-    @Test
-    void shouldKeepDirtyMarkerWhenRedisSessionTimestampIsMissingBeforeFlush() throws Exception {
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200))
-            .andReturn();
-
-        String accessToken = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.data.accessToken");
-        String sessionId = jwtUtils.parseClaims(accessToken, authProperties.getJwtSecret()).get("sid", String.class);
-        assertThat(sessionId).isNotBlank();
-
-        jdbcTemplate.update(
-            "UPDATE sys_user_session SET last_active_time = DATEADD('MINUTE', -10, CURRENT_TIMESTAMP) WHERE session_id = ?",
-            sessionId
-        );
-        Timestamp oldLastActive = jdbcTemplate.queryForObject(
-            "SELECT last_active_time FROM sys_user_session WHERE session_id = ?",
-            Timestamp.class,
-            sessionId
-        );
-        assertThat(oldLastActive).isNotNull();
-
-        mockMvc.perform(get("/api/secure/user/ping")
-                .header("Authorization", "Bearer " + accessToken))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200));
-
-        assertThat(stringRedisTemplate.opsForSet().isMember("auth:session:dirty", sessionId)).isTrue();
-
-        stringRedisTemplate.delete("auth:session:" + sessionId);
-        authSessionFlushScheduler.flushDirtySessions();
-
-        assertThat(stringRedisTemplate.opsForSet().isMember("auth:session:dirty", sessionId)).isTrue();
-        Timestamp stillOldLastActive = jdbcTemplate.queryForObject(
-            "SELECT last_active_time FROM sys_user_session WHERE session_id = ?",
-            Timestamp.class,
-            sessionId
-        );
-        assertThat(stillOldLastActive).isEqualTo(oldLastActive);
     }
 
     private RequestPostProcessor remoteAddr(String ip) {

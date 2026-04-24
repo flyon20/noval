@@ -141,7 +141,29 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.models.length()").value(2))
             .andExpect(jsonPath("$.data.models[1].modelKey").value("deepseek-reasoner"))
-            .andExpect(jsonPath("$.data.models[1].temperatureSpecJson").value("{\"min\":0.0,\"max\":1.5,\"step\":0.1,\"default\":0.7}"));
+            .andExpect(jsonPath("$.data.models[1].temperatureSpecJson").value("{\"min\":0.0,\"max\":1.5,\"step\":0.1,\"default\":0.7}"))
+            .andExpect(jsonPath("$.data.models[0].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[0].apiKeyMasked").value("已配置"))
+            .andExpect(jsonPath("$.data.models[1].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[1].apiKeyMasked").value("已配置"));
+
+        mockMvc.perform(get("/api/config/system/model-registry")
+                .header("Authorization", "Bearer " + adminToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.models[0].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[0].apiKeyMasked").value("已配置"))
+            .andExpect(jsonPath("$.data.models[0].apiKey").isEmpty())
+            .andExpect(jsonPath("$.data.models[1].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[1].apiKeyMasked").value("已配置"))
+            .andExpect(jsonPath("$.data.models[1].apiKey").isEmpty());
+
+        String storedRegistryJson = jdbcTemplate.queryForObject(
+            "SELECT config_value FROM system_config WHERE config_key = 'ai.model-registry.json' AND deleted = 0",
+            String.class
+        );
+        assertTrue(storedRegistryJson != null && !storedRegistryJson.contains("registry-key-1"));
+        assertTrue(storedRegistryJson != null && !storedRegistryJson.contains("registry-key-2"));
 
         mockMvc.perform(get("/api/config/system/model-options")
                 .header("Authorization", "Bearer " + writerToken))
@@ -159,6 +181,34 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.length()").value(2))
             .andExpect(jsonPath("$.data[0]").value("deepseek-chat"))
             .andExpect(jsonPath("$.data[1]").value("deepseek-reasoner"));
+    }
+
+    @Test
+    void shouldMaskAndEncryptSecretSystemConfigValue() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(put("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"configKey":"ai.langgraph-worker.internal-api-key","configValue":"langgraph-internal-secret-123456","description":"Updated internal key"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configValue").value("已配置"));
+
+        mockMvc.perform(get("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .param("configKey", "ai.langgraph-worker.internal-api-key"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configValue").value("已配置"));
+
+        String storedValue = jdbcTemplate.queryForObject(
+            "SELECT config_value FROM system_config WHERE config_key = 'ai.langgraph-worker.internal-api-key' AND deleted = 0",
+            String.class
+        );
+        assertTrue(storedValue != null && !storedValue.contains("langgraph-internal-secret-123456"));
     }
 
     @Test
@@ -614,9 +664,14 @@ class Phase5BackendIntegrationTest {
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/auth/login")
+        String phone = switch (username) {
+            case "admin" -> "13800138000";
+            case "writer" -> "13800138001";
+            default -> username;
+        };
+        MvcResult result = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();

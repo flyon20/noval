@@ -22,9 +22,12 @@ import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
+import com.novelanalyzer.modules.config.service.ConfigSecretService;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.service.UserConfigService;
 import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -50,6 +53,8 @@ import java.util.function.Consumer;
 
 @Service
 public class AiGatewayService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AiGatewayService.class);
 
     private static final Map<String, String> DEFAULT_PROMPT_TEMPLATES = Map.of(
         "deconstruct", "请基于以下小说正文进行拆文分析，重点输出：核心卖点、开篇钩子、人物关系、冲突设计、节奏爽点与可优化点。\n\n{{content}}",
@@ -79,6 +84,7 @@ public class AiGatewayService {
     private final RestTemplate aiRestTemplate;
     private final AiProperties aiProperties;
     private final SystemConfigService systemConfigService;
+    private final ConfigSecretService configSecretService;
     private final UserConfigService userConfigService;
     private final TokenCountEstimator tokenCountEstimator;
     private final ObjectMapper objectMapper;
@@ -90,12 +96,14 @@ public class AiGatewayService {
     public AiGatewayService(RestTemplate aiRestTemplate,
                             AiProperties aiProperties,
                             SystemConfigService systemConfigService,
+                            ConfigSecretService configSecretService,
                             UserConfigService userConfigService,
                             TokenCountEstimator tokenCountEstimator,
                             ObjectMapper objectMapper) {
         this.aiRestTemplate = aiRestTemplate;
         this.aiProperties = aiProperties;
         this.systemConfigService = systemConfigService;
+        this.configSecretService = configSecretService;
         this.userConfigService = userConfigService;
         this.tokenCountEstimator = tokenCountEstimator;
         this.objectMapper = objectMapper;
@@ -120,7 +128,12 @@ public class AiGatewayService {
         if (providerResult != null) {
             return providerResult;
         }
-        return buildFallbackResult(promptConfig, analysisType, renderedPrompt);
+        return buildFallbackResult(
+            resolveFallbackModelName(promptConfig),
+            analysisType,
+            text,
+            renderedPrompt
+        );
     }
 
     public int estimatePromptTokens(PromptConfigEntity promptConfig, String text, String analysisType) {
@@ -219,6 +232,13 @@ public class AiGatewayService {
                 resultJson
             );
         } catch (Exception ex) {
+            LOGGER.warn(
+                "analysis.openai-compatible failed analysisType={} model={} baseUrl={} reason={}",
+                analysisType,
+                runtime.modelName(),
+                runtime.baseUrl(),
+                ex.getMessage()
+            );
             return null;
         }
     }
@@ -640,25 +660,49 @@ public class AiGatewayService {
                 resultJson
             );
         } catch (Exception ex) {
+            LOGGER.warn(
+                "analysis.dify failed analysisType={} workflowId={} reason={}",
+                analysisType,
+                workflowId,
+                ex.getMessage()
+            );
             return null;
         }
     }
 
-    private AiInvokeResult buildFallbackResult(PromptConfigEntity promptConfig, String analysisType, String renderedPrompt) {
-        String modelName = promptConfig.getModelName() == null || promptConfig.getModelName().isBlank()
-            ? aiProperties.getFallbackModel()
-            : promptConfig.getModelName();
+    private AiInvokeResult buildFallbackResult(String modelName,
+                                               String analysisType,
+                                               String sourceText,
+                                               String renderedPrompt) {
+        String fallbackSummary = shortText(sourceText, 400);
+        if (fallbackSummary == null || fallbackSummary.isBlank()) {
+            fallbackSummary = shortText(renderedPrompt, 400);
+        }
         String content = analysisType + " analysis result\n"
             + "model: " + modelName + "\n"
-            + "summary: " + shortText(renderedPrompt, 400);
+            + "summary: " + fallbackSummary;
         Map<String, Object> resultJson = Map.of(
             "analysisType", analysisType,
             "modelName", modelName,
-            "summary", shortText(renderedPrompt, 200),
+            "summary", shortText(
+                sourceText == null || sourceText.isBlank() ? renderedPrompt : sourceText,
+                200
+            ),
             "content", content
         );
         int tokenUsed = Math.max(120, renderedPrompt.length() / 2);
         return AiInvokeResult.of(modelName, content, tokenUsed, resultJson);
+    }
+
+    private String resolveFallbackModelName(PromptConfigEntity promptConfig) {
+        OpenAiCompatibleRuntime runtime = resolveOpenAiCompatibleRuntime(promptConfig);
+        if (runtime.modelName() != null && !runtime.modelName().isBlank()) {
+            return runtime.modelName();
+        }
+        if (promptConfig != null && promptConfig.getModelName() != null && !promptConfig.getModelName().isBlank()) {
+            return promptConfig.getModelName();
+        }
+        return aiProperties.getFallbackModel();
     }
 
     private String resolveDifyApiKey(String keyRef) {
@@ -748,7 +792,7 @@ public class AiGatewayService {
             return new OpenAiCompatibleRuntime(
                 firstNonBlank(model.getModelName(), model.getModelKey()),
                 firstNonBlank(model.getBaseUrl(), resolveOpenAiCompatibleBaseUrl()),
-                firstNonBlank(model.getApiKey(), resolveOpenAiCompatibleApiKey()),
+                firstNonBlank(configSecretService.decryptIfNecessary(model.getApiKey()), resolveOpenAiCompatibleApiKey()),
                 promptConfig != null && promptConfig.getTemperature() != null
                     ? promptConfig.getTemperature() : model.getDefaultTemperature(),
                 promptConfig != null && promptConfig.getMaxTokens() != null

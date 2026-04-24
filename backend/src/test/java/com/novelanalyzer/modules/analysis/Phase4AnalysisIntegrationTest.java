@@ -70,6 +70,7 @@ class Phase4AnalysisIntegrationTest {
     private static final HttpServer MOCK_OPENAI_SERVER = startMockOpenAiServer();
     private static final HttpServer MOCK_LANGGRAPH_SERVER = startMockLangGraphServer();
     private static final AtomicReference<String> LAST_OPENAI_REQUEST_BODY = new AtomicReference<>("");
+    private static final AtomicReference<String> LAST_OPENAI_AUTHORIZATION = new AtomicReference<>("");
     private static final AtomicReference<String> LAST_LANGGRAPH_REQUEST_BODY = new AtomicReference<>("");
     private static final AtomicInteger OPENAI_REQUEST_COUNT = new AtomicInteger();
     private static final AtomicInteger LANGGRAPH_REQUEST_COUNT = new AtomicInteger();
@@ -110,6 +111,7 @@ class Phase4AnalysisIntegrationTest {
     @BeforeEach
     void resetMockOpenAiCapture() {
         LAST_OPENAI_REQUEST_BODY.set("");
+        LAST_OPENAI_AUTHORIZATION.set("");
         OPENAI_REQUEST_COUNT.set(0);
         LAST_LANGGRAPH_REQUEST_BODY.set("");
         LANGGRAPH_REQUEST_COUNT.set(0);
@@ -461,6 +463,7 @@ class Phase4AnalysisIntegrationTest {
         String normalizedRequestBody = LAST_OPENAI_REQUEST_BODY.get().replaceAll("\\s+", "");
         assertThat(normalizedRequestBody).contains("\"model\":\"deepseek-reasoner\"");
         assertThat(normalizedRequestBody).contains("\"temperature\":0.7");
+        assertThat(LAST_OPENAI_AUTHORIZATION.get()).isEqualTo("Bearer registry-key-2");
     }
 
     @Test
@@ -927,9 +930,14 @@ class Phase4AnalysisIntegrationTest {
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/auth/login")
+        String phone = switch (username) {
+            case "admin" -> "13800138000";
+            case "writer" -> "13800138001";
+            default -> username;
+        };
+        MvcResult result = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
@@ -1014,6 +1022,7 @@ class Phase4AnalysisIntegrationTest {
             server.createContext("/v1/chat/completions", exchange -> {
                 String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 LAST_OPENAI_REQUEST_BODY.set(requestBody);
+                LAST_OPENAI_AUTHORIZATION.set(exchange.getRequestHeaders().getFirst("Authorization"));
                 OPENAI_REQUEST_COUNT.incrementAndGet();
                 if (requestBody.contains("\"stream\":true") || requestBody.contains("\"stream\" : true")) {
                     if (requestBody.contains("SLOW_STREAM")) {

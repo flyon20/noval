@@ -7,6 +7,7 @@ import com.novelanalyzer.modules.analysis.repository.AnalysisRepository;
 import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
+import com.novelanalyzer.modules.config.service.PromptConfigService;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.service.UserConfigService;
 import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
@@ -33,8 +34,11 @@ import static org.mockito.Mockito.when;
 class AnalysisServiceTimeoutTest {
 
     private final SystemConfigService systemConfigService = mock(SystemConfigService.class);
+    private final UserConfigService userConfigService = mock(UserConfigService.class);
+    private final PromptConfigService promptConfigService = mock(PromptConfigService.class);
     private final AnalysisService analysisService = new AnalysisService(
         mock(PromptConfigRepository.class),
+        promptConfigService,
         mock(CrawlerRepository.class),
         mock(AiGatewayService.class),
         mock(AnalysisRepository.class),
@@ -42,7 +46,7 @@ class AnalysisServiceTimeoutTest {
         mock(CrawlerService.class),
         mock(LangGraphWorkerClient.class),
         systemConfigService,
-        mock(UserConfigService.class),
+        userConfigService,
         new ObjectMapper(),
         mock(AsyncTaskExecutor.class)
     );
@@ -274,6 +278,107 @@ class AnalysisServiceTimeoutTest {
         assertThat(resultJson.get("actualChapterCount")).isEqualTo(8);
         assertThat(resultJson.get("inputChapterCount")).isEqualTo(8);
         assertThat(resultJson.get("chapterFetchDegraded")).isEqualTo(true);
+    }
+
+    @Test
+    void shouldIncludeUserPreferredModelInAnalysisCacheKey() {
+        PromptConfigEntity promptConfig = new PromptConfigEntity();
+        promptConfig.setId(1L);
+        promptConfig.setPromptType("deconstruct");
+        promptConfig.setPromptName("default-deconstruct");
+        promptConfig.setPromptContent("请分析：{{content}}");
+        promptConfig.setModelName("deepseek-chat");
+        promptConfig.setUpdateTime(LocalDateTime.of(2026, 4, 19, 18, 0, 0));
+
+        com.novelanalyzer.common.context.AuthUser authUser = new com.novelanalyzer.common.context.AuthUser();
+        authUser.setUserId(3L);
+        com.novelanalyzer.common.context.AuthUserHolder.set(authUser);
+        try {
+            when(userConfigService.getValueForUser(3L, "ai.preferred-model")).thenReturn("kimi-k2.5");
+
+            String cacheKey = ReflectionTestUtils.invokeMethod(
+                analysisService,
+                "buildAnalysisCacheKey",
+                promptConfig,
+                2304L,
+                "deconstruct",
+                3
+            );
+
+            assertThat(cacheKey).contains("kimi-k2.5");
+            assertThat(cacheKey).contains("2304");
+            assertThat(cacheKey).contains("deconstruct");
+        } finally {
+            com.novelanalyzer.common.context.AuthUserHolder.clear();
+        }
+    }
+
+    @Test
+    void shouldIncludeResolvedRuntimeModelNameInAnalysisCacheKey() {
+        PromptConfigEntity promptConfig = new PromptConfigEntity();
+        promptConfig.setId(1L);
+        promptConfig.setPromptType("deconstruct");
+        promptConfig.setPromptName("default-deconstruct");
+        promptConfig.setPromptContent("请分析：{{content}}");
+        promptConfig.setModelName("deepseek-chat");
+        promptConfig.setUpdateTime(LocalDateTime.of(2026, 4, 20, 1, 0, 0));
+
+        AiModelRegistryModelVO runtimeModel = new AiModelRegistryModelVO();
+        runtimeModel.setModelKey("kimi-recommended");
+        runtimeModel.setModelName("kimi-k2.5");
+        runtimeModel.setEnabled(true);
+
+        com.novelanalyzer.common.context.AuthUser authUser = new com.novelanalyzer.common.context.AuthUser();
+        authUser.setUserId(3L);
+        com.novelanalyzer.common.context.AuthUserHolder.set(authUser);
+        try {
+            when(userConfigService.getValueForUser(3L, "ai.preferred-model")).thenReturn("kimi-recommended");
+            when(systemConfigService.resolveEnabledModel("kimi-recommended", "deepseek-chat"))
+                .thenReturn(Optional.of(runtimeModel));
+
+            String cacheKey = ReflectionTestUtils.invokeMethod(
+                analysisService,
+                "buildAnalysisCacheKey",
+                promptConfig,
+                2304L,
+                "deconstruct",
+                3
+            );
+
+            assertThat(cacheKey).contains("kimi-recommended");
+            assertThat(cacheKey).contains("kimi-k2.5");
+        } finally {
+            com.novelanalyzer.common.context.AuthUserHolder.clear();
+        }
+    }
+
+    @Test
+    void shouldResolveRuntimePromptConfigThroughPromptConfigService() {
+        PromptConfigEntity promptConfig = new PromptConfigEntity();
+        promptConfig.setId(10L);
+        promptConfig.setPromptType("deconstruct");
+        promptConfig.setPromptName("kimi-k2.5");
+        promptConfig.setPromptContent("请按 Kimi 模板分析：{{content}}");
+
+        when(userConfigService.getValueForUser(3L, "ai.preferred-model")).thenReturn("kimi-k2.5");
+        when(systemConfigService.getModelRegistry()).thenReturn(new com.novelanalyzer.modules.config.vo.AiModelRegistryVO());
+        when(promptConfigService.resolveRuntimePromptConfig("deconstruct", "kimi-k2.5", List.of())).thenReturn(promptConfig);
+
+        com.novelanalyzer.common.context.AuthUser authUser = new com.novelanalyzer.common.context.AuthUser();
+        authUser.setUserId(3L);
+        com.novelanalyzer.common.context.AuthUserHolder.set(authUser);
+        try {
+            PromptConfigEntity resolved = ReflectionTestUtils.invokeMethod(
+                analysisService,
+                "resolveRuntimePromptConfig",
+                "deconstruct"
+            );
+
+            assertThat(resolved.getId()).isEqualTo(10L);
+            assertThat(resolved.getPromptName()).isEqualTo("kimi-k2.5");
+        } finally {
+            com.novelanalyzer.common.context.AuthUserHolder.clear();
+        }
     }
 
     private RankSnapshotEntity createSnapshot(Long id, int recordCount, LocalDateTime snapshotTime) {
