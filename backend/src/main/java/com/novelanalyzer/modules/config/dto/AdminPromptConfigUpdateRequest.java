@@ -1,39 +1,31 @@
-package com.novelanalyzer.modules.config.vo;
+package com.novelanalyzer.modules.config.dto;
 
-import java.time.LocalDateTime;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 
-public class PromptConfigVO {
+public class AdminPromptConfigUpdateRequest {
 
-    private Long id;
+    @NotBlank(message = "promptType is required")
     private String promptType;
+    @NotBlank(message = "promptName is required")
     private String promptName;
+    @NotBlank(message = "promptContent is required")
     private String promptContent;
+    @NotBlank(message = "modelName is required")
     private String modelName;
+    @DecimalMin(value = "0.0", message = "temperature must be greater than or equal to 0")
+    @DecimalMax(value = "2.0", message = "temperature must be less than or equal to 2")
     private Double temperature;
+    @Min(value = 1, message = "maxTokens must be greater than 0")
     private Integer maxTokens;
-    private Boolean isDefault;
     private String inputJsonSchema;
     private String inputExampleJson;
     private String outputJsonSchema;
     private String outputExampleJson;
     private String postProcessType;
     private String parseConfigJson;
-    private String scopeType;
-    private Long ownerUserId;
-    private Long sourcePromptConfigId;
-    private Boolean isPublished;
-    private Long publishedVersionNo;
-    private String editableScope;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
-
-    public Long getId() {
-        return id;
-    }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
 
     public String getPromptType() {
         return promptType;
@@ -83,14 +75,6 @@ public class PromptConfigVO {
         this.maxTokens = maxTokens;
     }
 
-    public Boolean getIsDefault() {
-        return isDefault;
-    }
-
-    public void setIsDefault(Boolean isDefault) {
-        this.isDefault = isDefault;
-    }
-
     public String getInputJsonSchema() {
         return inputJsonSchema;
     }
@@ -137,69 +121,5 @@ public class PromptConfigVO {
 
     public void setParseConfigJson(String parseConfigJson) {
         this.parseConfigJson = parseConfigJson;
-    }
-
-    public String getEditableScope() {
-        return editableScope;
-    }
-
-    public void setEditableScope(String editableScope) {
-        this.editableScope = editableScope;
-    }
-
-    public String getScopeType() {
-        return scopeType;
-    }
-
-    public void setScopeType(String scopeType) {
-        this.scopeType = scopeType;
-    }
-
-    public Long getOwnerUserId() {
-        return ownerUserId;
-    }
-
-    public void setOwnerUserId(Long ownerUserId) {
-        this.ownerUserId = ownerUserId;
-    }
-
-    public Long getSourcePromptConfigId() {
-        return sourcePromptConfigId;
-    }
-
-    public void setSourcePromptConfigId(Long sourcePromptConfigId) {
-        this.sourcePromptConfigId = sourcePromptConfigId;
-    }
-
-    public Boolean getIsPublished() {
-        return isPublished;
-    }
-
-    public void setIsPublished(Boolean isPublished) {
-        this.isPublished = isPublished;
-    }
-
-    public Long getPublishedVersionNo() {
-        return publishedVersionNo;
-    }
-
-    public void setPublishedVersionNo(Long publishedVersionNo) {
-        this.publishedVersionNo = publishedVersionNo;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
     }
 }

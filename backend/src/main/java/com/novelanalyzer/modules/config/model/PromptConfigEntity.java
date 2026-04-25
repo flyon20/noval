@@ -17,6 +17,12 @@ public class PromptConfigEntity {
     private String promptType;
     @TableField("prompt_name")
     private String promptName;
+    @TableField("scope_type")
+    private String scopeType;
+    @TableField("owner_user_id")
+    private Long ownerUserId;
+    @TableField("source_prompt_config_id")
+    private Long sourcePromptConfigId;
     @TableField("prompt_content")
     private String promptContent;
     @TableField("model_name")
@@ -80,6 +86,30 @@ public class PromptConfigEntity {
 
     public void setPromptContent(String promptContent) {
         this.promptContent = promptContent;
+    }
+
+    public String getScopeType() {
+        return scopeType;
+    }
+
+    public void setScopeType(String scopeType) {
+        this.scopeType = scopeType;
+    }
+
+    public Long getOwnerUserId() {
+        return ownerUserId;
+    }
+
+    public void setOwnerUserId(Long ownerUserId) {
+        this.ownerUserId = ownerUserId;
+    }
+
+    public Long getSourcePromptConfigId() {
+        return sourcePromptConfigId;
+    }
+
+    public void setSourcePromptConfigId(Long sourcePromptConfigId) {
+        this.sourcePromptConfigId = sourcePromptConfigId;
     }
 
     public String getModelName() {

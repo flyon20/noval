@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS prompt_config (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'prompt config id',
     prompt_type VARCHAR(50) NOT NULL COMMENT 'prompt type',
     prompt_name VARCHAR(100) NOT NULL COMMENT 'prompt name',
+    scope_type VARCHAR(20) NOT NULL DEFAULT 'SYSTEM' COMMENT 'SYSTEM / USER_COPY',
+    owner_user_id BIGINT COMMENT 'owner user id for USER_COPY',
+    source_prompt_config_id BIGINT COMMENT 'source prompt config id',
     prompt_content TEXT NOT NULL COMMENT 'prompt content',
     model_name VARCHAR(50) DEFAULT 'dify' COMMENT 'model name',
     temperature DECIMAL(3,2) DEFAULT 0.70 COMMENT 'temperature',
@@ -18,6 +21,9 @@ CREATE TABLE IF NOT EXISTS prompt_config (
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
     deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
     UNIQUE KEY uk_prompt_type_name (prompt_type, prompt_name),
+    INDEX idx_scope_type (scope_type),
+    INDEX idx_owner_user_id (owner_user_id),
+    INDEX idx_source_prompt_config_id (source_prompt_config_id),
     INDEX idx_prompt_type (prompt_type),
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='prompt config';

@@ -2,6 +2,7 @@ package com.novelanalyzer.modules.config.service;
 
 import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.ResultCode;
+import com.novelanalyzer.modules.config.dto.AdminPromptConfigUpdateRequest;
 import com.novelanalyzer.modules.config.dto.PromptConfigUpdateRequest;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
@@ -9,8 +10,9 @@ import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import com.novelanalyzer.modules.config.vo.PromptConfigVO;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 import java.util.Optional;
 
 @Service
@@ -18,7 +20,6 @@ public class PromptConfigService {
 
     private static final String REQUIRED_CONTENT_PLACEHOLDER = "{{content}}";
     private static final String DEFAULT_TEMPLATE_NAME = "default";
-    private static final String DEEPSEEK_MODEL_KEY = "deepseek-chat";
 
     private final PromptConfigRepository promptConfigRepository;
     private final DefaultPromptContractCatalog defaultPromptContractCatalog;
@@ -30,19 +31,13 @@ public class PromptConfigService {
     }
 
     public PromptConfigVO getByType(String promptType, String promptName) {
-        PromptConfigEntity entity = (promptName == null || promptName.isBlank())
-            ? promptConfigRepository.findDefaultByType(promptType).orElse(null)
-            : promptConfigRepository.findActiveByTypeAndName(promptType, promptName).orElse(null);
-        if (entity == null) {
-            throw new BusinessException(ResultCode.NOT_FOUND, "prompt config not found");
-        }
+        PromptConfigEntity entity = resolveTemplateForRead(promptType, promptName)
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
         return toVO(backfillMissingContractFields(entity));
     }
 
     public PromptConfigVO getByType(String promptType) {
-        PromptConfigEntity entity = promptConfigRepository.findDefaultByType(promptType)
-            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
-        return toVO(backfillMissingContractFields(entity));
+        return getByType(promptType, null);
     }
 
     public List<PromptConfigVO> listByType(String promptType) {
@@ -52,77 +47,103 @@ public class PromptConfigService {
             .toList();
     }
 
-    public PromptConfigEntity resolveRuntimePromptConfig(String promptType,
-                                                         String preferredModelKey,
-                                                         List<AiModelRegistryModelVO> models) {
-        PromptConfigEntity selected = findBoundTemplate(promptType, preferredModelKey, models)
-            .or(() -> findBoundTemplate(promptType, DEEPSEEK_MODEL_KEY, models))
-            .or(() -> promptConfigRepository.findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME))
-            .orElseGet(() -> promptConfigRepository.findDefaultByType(promptType)
-                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found")));
-
-        PromptConfigEntity merged = backfillMissingContractFields(selected);
-        if (DEFAULT_TEMPLATE_NAME.equalsIgnoreCase(selected.getPromptName())) {
-            return merged;
-        }
-        PromptConfigEntity defaultTemplate = promptConfigRepository.findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME)
-            .map(this::backfillMissingContractFields)
-            .orElse(null);
-        return mergeInheritedContractFields(merged, defaultTemplate);
-    }
-
     public PromptConfigVO save(PromptConfigUpdateRequest request) {
-        validatePromptContent(request.getPromptContent());
-        if (DEFAULT_TEMPLATE_NAME.equalsIgnoreCase(request.getPromptName())) {
+        if (isDefaultTemplateAlias(request.getPromptType(), request.getPromptName())) {
             return saveDefaultTemplate(request.getPromptType(), request);
         }
-        PromptConfigEntity entity = new PromptConfigEntity();
+
+        AdminPromptConfigUpdateRequest adminRequest = new AdminPromptConfigUpdateRequest();
+        adminRequest.setPromptType(request.getPromptType());
+        adminRequest.setPromptName(request.getPromptName());
+        adminRequest.setPromptContent(request.getPromptContent());
+        adminRequest.setModelName(request.getModelName());
+        adminRequest.setTemperature(request.getTemperature());
+        adminRequest.setMaxTokens(request.getMaxTokens());
+        adminRequest.setInputJsonSchema(request.getInputJsonSchema());
+        adminRequest.setInputExampleJson(request.getInputExampleJson());
+        adminRequest.setOutputJsonSchema(request.getOutputJsonSchema());
+        adminRequest.setOutputExampleJson(request.getOutputExampleJson());
+        adminRequest.setPostProcessType(request.getPostProcessType());
+        adminRequest.setParseConfigJson(request.getParseConfigJson());
+        return saveSystemTemplate(adminRequest);
+    }
+
+    public PromptConfigVO saveSystemTemplate(AdminPromptConfigUpdateRequest request) {
+        validatePromptContent(request.getPromptContent());
+
+        String effectivePromptName = isDefaultTemplateAlias(request.getPromptType(), request.getPromptName())
+            ? resolveDefaultTemplateName(request.getPromptType())
+            : normalizePromptName(request.getPromptName());
+        boolean defaultTemplate = isDefaultTemplateAlias(request.getPromptType(), effectivePromptName);
+
+        PromptConfigEntity entity = defaultTemplate
+            ? resolveDefaultTemplate(request.getPromptType()).orElseGet(PromptConfigEntity::new)
+            : promptConfigRepository.findByTypeAndName(request.getPromptType(), effectivePromptName)
+                .orElseGet(PromptConfigEntity::new);
+
         entity.setPromptType(request.getPromptType());
-        entity.setPromptName(request.getPromptName());
+        entity.setPromptName(effectivePromptName);
+        entity.setScopeType(PromptGovernanceService.SCOPE_SYSTEM);
+        entity.setOwnerUserId(null);
+        entity.setSourcePromptConfigId(null);
         entity.setPromptContent(request.getPromptContent());
         entity.setModelName(request.getModelName());
-        entity.setTemperature(request.getTemperature());
-        entity.setMaxTokens(request.getMaxTokens());
-        entity.setInputJsonSchema(request.getInputJsonSchema());
-        entity.setInputExampleJson(request.getInputExampleJson());
-        entity.setOutputJsonSchema(request.getOutputJsonSchema());
-        entity.setOutputExampleJson(request.getOutputExampleJson());
-        entity.setPostProcessType(request.getPostProcessType());
-        entity.setParseConfigJson(request.getParseConfigJson());
+        if (request.getTemperature() != null) {
+            entity.setTemperature(request.getTemperature());
+        }
+        if (request.getMaxTokens() != null) {
+            entity.setMaxTokens(request.getMaxTokens());
+        }
+        if (request.getInputJsonSchema() != null) {
+            entity.setInputJsonSchema(request.getInputJsonSchema());
+        }
+        if (request.getInputExampleJson() != null) {
+            entity.setInputExampleJson(request.getInputExampleJson());
+        }
+        if (request.getOutputJsonSchema() != null) {
+            entity.setOutputJsonSchema(request.getOutputJsonSchema());
+        }
+        if (request.getOutputExampleJson() != null) {
+            entity.setOutputExampleJson(request.getOutputExampleJson());
+        }
+        if (request.getPostProcessType() != null) {
+            entity.setPostProcessType(request.getPostProcessType());
+        }
+        if (request.getParseConfigJson() != null) {
+            entity.setParseConfigJson(request.getParseConfigJson());
+        }
+        entity.setStatus(1);
+        entity.setIsDefault(defaultTemplate ? 1 : 0);
+
         Long id = promptConfigRepository.saveOrUpdate(entity);
-        PromptConfigEntity updated = promptConfigRepository.findByTypeAndName(request.getPromptType(), request.getPromptName())
+        PromptConfigEntity saved = promptConfigRepository.findByTypeAndName(request.getPromptType(), effectivePromptName)
             .orElseThrow(() -> new BusinessException(ResultCode.INTERNAL_ERROR, "prompt config save failed"));
-        updated.setId(id);
-        return toVO(updated);
+        saved.setId(id);
+        return toVO(backfillMissingContractFields(saved));
     }
 
     public PromptConfigVO saveDefaultTemplate(String promptType, PromptConfigUpdateRequest request) {
-        if (!DEFAULT_TEMPLATE_NAME.equalsIgnoreCase(request.getPromptName())) {
+        if (!isDefaultTemplateAlias(promptType, request.getPromptName())) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "default template name cannot be changed");
         }
-        PromptConfigEntity existingDefault = promptConfigRepository.findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME)
-            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
-
-        PromptConfigEntity entity = copyPromptConfig(existingDefault);
-        entity.setPromptContent(request.getPromptContent());
-        entity.setModelName(request.getModelName());
-        entity.setTemperature(request.getTemperature());
-        entity.setMaxTokens(request.getMaxTokens());
-        entity.setInputJsonSchema(request.getInputJsonSchema());
-        entity.setInputExampleJson(request.getInputExampleJson());
-        entity.setOutputJsonSchema(request.getOutputJsonSchema());
-        entity.setOutputExampleJson(request.getOutputExampleJson());
-        entity.setPostProcessType(request.getPostProcessType());
-        entity.setParseConfigJson(request.getParseConfigJson());
-        promptConfigRepository.saveOrUpdate(entity);
-        return toVO(backfillMissingContractFields(
-            promptConfigRepository.findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME)
-                .orElseThrow(() -> new BusinessException(ResultCode.INTERNAL_ERROR, "prompt config save failed"))
-        ));
+        AdminPromptConfigUpdateRequest adminRequest = new AdminPromptConfigUpdateRequest();
+        adminRequest.setPromptType(promptType);
+        adminRequest.setPromptName(resolveDefaultTemplateName(promptType));
+        adminRequest.setPromptContent(request.getPromptContent());
+        adminRequest.setModelName(request.getModelName());
+        adminRequest.setTemperature(request.getTemperature());
+        adminRequest.setMaxTokens(request.getMaxTokens());
+        adminRequest.setInputJsonSchema(request.getInputJsonSchema());
+        adminRequest.setInputExampleJson(request.getInputExampleJson());
+        adminRequest.setOutputJsonSchema(request.getOutputJsonSchema());
+        adminRequest.setOutputExampleJson(request.getOutputExampleJson());
+        adminRequest.setPostProcessType(request.getPostProcessType());
+        adminRequest.setParseConfigJson(request.getParseConfigJson());
+        return saveSystemTemplate(adminRequest);
     }
 
     public void deleteTemplate(String promptType, String promptName, List<AiModelRegistryModelVO> models) {
-        PromptConfigEntity entity = promptConfigRepository.findActiveByTypeAndName(promptType, promptName)
+        PromptConfigEntity entity = resolveTemplateForRead(promptType, promptName)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
         if (isDefaultTemplate(entity)) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "default template cannot be deleted");
@@ -142,40 +163,32 @@ public class PromptConfigService {
         promptConfigRepository.findAllActive().forEach(this::backfillMissingContractFields);
     }
 
-    private Optional<PromptConfigEntity> findBoundTemplate(String promptType,
-                                                           String modelKey,
-                                                           List<AiModelRegistryModelVO> models) {
-        if (modelKey == null || modelKey.isBlank() || models == null || models.isEmpty()) {
-            return Optional.empty();
-        }
-        return models.stream()
-            .filter(model -> Boolean.TRUE.equals(model.getEnabled()))
-            .filter(model -> modelKey.equals(model.getModelKey()))
-            .findFirst()
-            .map(AiModelRegistryModelVO::getPromptBindings)
-            .map(bindings -> bindings == null ? null : bindings.get(promptType))
-            .filter(templateName -> templateName != null && !templateName.isBlank())
-            .flatMap(templateName -> promptConfigRepository.findActiveByTypeAndName(promptType, templateName));
+    public RuntimePromptResolution wrapRuntimePrompt(PromptConfigEntity promptConfig,
+                                                     Long userId,
+                                                     String promptType,
+                                                     String selectedModelKey,
+                                                     String effectiveSource,
+                                                     Long activePublishVersionId,
+                                                     boolean fallback) {
+        return new RuntimePromptResolution(
+            promptConfig,
+            userId,
+            promptType,
+            selectedModelKey,
+            promptConfig == null ? null : promptConfig.getId(),
+            effectiveSource,
+            activePublishVersionId,
+            fallback
+        );
     }
 
-    private void validatePromptContent(String promptContent) {
-        if (promptContent == null || !promptContent.contains(REQUIRED_CONTENT_PLACEHOLDER)) {
-            throw new BusinessException(ResultCode.BAD_REQUEST,
-                "promptContent must contain {{content}} placeholder");
-        }
+    public PromptConfigEntity findDefaultTemplateForInheritance(String promptType) {
+        return resolveDefaultTemplate(promptType)
+            .map(this::backfillMissingContractFields)
+            .orElse(null);
     }
 
-    private PromptConfigEntity backfillMissingContractFields(PromptConfigEntity entity) {
-        if (entity == null) {
-            return null;
-        }
-        if (defaultPromptContractCatalog.applyMissingDefaults(entity)) {
-            promptConfigRepository.saveOrUpdate(entity);
-        }
-        return entity;
-    }
-
-    private PromptConfigEntity mergeInheritedContractFields(PromptConfigEntity selected, PromptConfigEntity fallbackDefault) {
+    public PromptConfigEntity mergeInheritedContractFields(PromptConfigEntity selected, PromptConfigEntity fallbackDefault) {
         if (selected == null || fallbackDefault == null) {
             return selected;
         }
@@ -201,11 +214,89 @@ public class PromptConfigService {
         return merged;
     }
 
+    public PromptConfigEntity resolveRuntimeCompatiblePrompt(String promptType, PromptConfigEntity governancePrompt) {
+        if (governancePrompt == null) {
+            return null;
+        }
+        if (!PromptGovernanceService.SCOPE_SYSTEM.equals(governancePrompt.getScopeType())) {
+            return governancePrompt;
+        }
+        if (governancePrompt.getPromptName() == null || !"default".equalsIgnoreCase(governancePrompt.getPromptName().trim())) {
+            return governancePrompt;
+        }
+        PromptConfigEntity legacyDefault = promptConfigRepository.findActiveByTypeAndName(promptType, resolveDefaultTemplateName(promptType))
+            .orElse(null);
+        if (legacyDefault == null) {
+            return governancePrompt;
+        }
+        LocalDateTime legacyUpdatedAt = legacyDefault.getUpdateTime();
+        LocalDateTime governanceUpdatedAt = governancePrompt.getUpdateTime();
+        if (legacyUpdatedAt == null || governanceUpdatedAt == null) {
+            return governancePrompt;
+        }
+        return legacyUpdatedAt.isAfter(governanceUpdatedAt) ? legacyDefault : governancePrompt;
+    }
+
+    public PromptConfigEntity backfillMissingContractFields(PromptConfigEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        if (defaultPromptContractCatalog.applyMissingDefaults(entity)) {
+            promptConfigRepository.saveOrUpdate(entity);
+        }
+        return entity;
+    }
+
+    private Optional<PromptConfigEntity> resolveTemplateForRead(String promptType, String promptName) {
+        String normalizedPromptName = normalizePromptName(promptName);
+        if (normalizedPromptName == null || isDefaultTemplateAlias(promptType, normalizedPromptName)) {
+            return resolveDefaultTemplate(promptType);
+        }
+        return promptConfigRepository.findActiveByTypeAndName(promptType, normalizedPromptName);
+    }
+
+    private Optional<PromptConfigEntity> resolveDefaultTemplate(String promptType) {
+        String legacyDefaultName = resolveDefaultTemplateName(promptType);
+        return promptConfigRepository.findActiveByTypeAndName(promptType, legacyDefaultName)
+            .or(() -> promptConfigRepository.findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME))
+            .or(() -> promptConfigRepository.findDefaultByType(promptType));
+    }
+
+    public String resolveDefaultTemplateName(String promptType) {
+        if (promptType == null || promptType.isBlank()) {
+            return DEFAULT_TEMPLATE_NAME;
+        }
+        return "default-" + promptType.trim().toLowerCase(Locale.ROOT);
+    }
+
+    public boolean isDefaultTemplateAlias(String promptType, String promptName) {
+        if (promptName == null || promptName.isBlank()) {
+            return false;
+        }
+        String normalized = promptName.trim();
+        return DEFAULT_TEMPLATE_NAME.equalsIgnoreCase(normalized)
+            || resolveDefaultTemplateName(promptType).equalsIgnoreCase(normalized);
+    }
+
+    private String normalizePromptName(String promptName) {
+        return promptName == null ? null : promptName.trim();
+    }
+
+    private void validatePromptContent(String promptContent) {
+        if (promptContent == null || !promptContent.contains(REQUIRED_CONTENT_PLACEHOLDER)) {
+            throw new BusinessException(ResultCode.BAD_REQUEST,
+                "promptContent must contain {{content}} placeholder");
+        }
+    }
+
     private PromptConfigEntity copyPromptConfig(PromptConfigEntity source) {
         PromptConfigEntity target = new PromptConfigEntity();
         target.setId(source.getId());
         target.setPromptType(source.getPromptType());
         target.setPromptName(source.getPromptName());
+        target.setScopeType(source.getScopeType());
+        target.setOwnerUserId(source.getOwnerUserId());
+        target.setSourcePromptConfigId(source.getSourcePromptConfigId());
         target.setPromptContent(source.getPromptContent());
         target.setModelName(source.getModelName());
         target.setTemperature(source.getTemperature());
@@ -226,10 +317,6 @@ public class PromptConfigService {
         return target;
     }
 
-    private boolean isBlank(String value) {
-        return value == null || value.isBlank();
-    }
-
     private PromptConfigVO toVO(PromptConfigEntity entity) {
         PromptConfigVO vo = new PromptConfigVO();
         vo.setId(entity.getId());
@@ -246,10 +333,84 @@ public class PromptConfigService {
         vo.setOutputExampleJson(entity.getOutputExampleJson());
         vo.setPostProcessType(entity.getPostProcessType());
         vo.setParseConfigJson(entity.getParseConfigJson());
+        vo.setScopeType(entity.getScopeType());
+        vo.setOwnerUserId(entity.getOwnerUserId());
+        vo.setSourcePromptConfigId(entity.getSourcePromptConfigId());
+        vo.setEditableScope(PromptGovernanceService.SCOPE_SYSTEM.equals(entity.getScopeType()) ? "ADMIN" : "USER");
+        vo.setCreatedAt(entity.getCreateTime());
+        vo.setUpdatedAt(entity.getUpdateTime());
         return vo;
     }
 
     private boolean isDefaultTemplate(PromptConfigEntity entity) {
-        return entity != null && entity.getIsDefault() != null && entity.getIsDefault() == 1;
+        return entity != null && (
+            (entity.getIsDefault() != null && entity.getIsDefault() == 1)
+                || isDefaultTemplateAlias(entity.getPromptType(), entity.getPromptName())
+        );
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    public static final class RuntimePromptResolution {
+        private final PromptConfigEntity promptConfig;
+        private final Long userId;
+        private final String promptType;
+        private final String selectedModelKey;
+        private final Long effectivePromptConfigId;
+        private final String effectiveSource;
+        private final Long activePublishVersionId;
+        private final boolean fallback;
+
+        public RuntimePromptResolution(PromptConfigEntity promptConfig,
+                                       Long userId,
+                                       String promptType,
+                                       String selectedModelKey,
+                                       Long effectivePromptConfigId,
+                                       String effectiveSource,
+                                       Long activePublishVersionId,
+                                       boolean fallback) {
+            this.promptConfig = promptConfig;
+            this.userId = userId;
+            this.promptType = promptType;
+            this.selectedModelKey = selectedModelKey;
+            this.effectivePromptConfigId = effectivePromptConfigId;
+            this.effectiveSource = effectiveSource;
+            this.activePublishVersionId = activePublishVersionId;
+            this.fallback = fallback;
+        }
+
+        public PromptConfigEntity getPromptConfig() {
+            return promptConfig;
+        }
+
+        public Long getUserId() {
+            return userId;
+        }
+
+        public String getPromptType() {
+            return promptType;
+        }
+
+        public String getSelectedModelKey() {
+            return selectedModelKey;
+        }
+
+        public Long getEffectivePromptConfigId() {
+            return effectivePromptConfigId;
+        }
+
+        public String getEffectiveSource() {
+            return effectiveSource;
+        }
+
+        public Long getActivePublishVersionId() {
+            return activePublishVersionId;
+        }
+
+        public boolean isFallback() {
+            return fallback;
+        }
     }
 }

@@ -133,6 +133,21 @@ CALL add_column_if_missing(
 
 CALL add_column_if_missing(
     'prompt_config',
+    'scope_type',
+    'VARCHAR(20) NOT NULL DEFAULT ''SYSTEM'' COMMENT ''SYSTEM / USER_COPY'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
+    'owner_user_id',
+    'BIGINT COMMENT ''owner user id for USER_COPY'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
+    'source_prompt_config_id',
+    'BIGINT COMMENT ''source prompt config id'''
+);
+CALL add_column_if_missing(
+    'prompt_config',
     'input_json_schema',
     'JSON COMMENT ''input json schema'''
 );
@@ -161,5 +176,71 @@ CALL add_column_if_missing(
     'parse_config_json',
     'JSON COMMENT ''parse config json'''
 );
+
+CREATE TABLE IF NOT EXISTS prompt_publish_version (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'publish version id',
+    version_no BIGINT NOT NULL COMMENT 'version number',
+    published_by BIGINT COMMENT 'published by user id',
+    publish_note VARCHAR(255) COMMENT 'publish note',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    UNIQUE KEY uk_publish_version_no (version_no),
+    INDEX idx_publish_create_time (create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='prompt publish version';
+
+CREATE TABLE IF NOT EXISTS prompt_publish_item (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'publish item id',
+    publish_version_id BIGINT NOT NULL COMMENT 'publish version id',
+    prompt_type VARCHAR(50) NOT NULL COMMENT 'prompt type',
+    prompt_config_id BIGINT NOT NULL COMMENT 'prompt config id',
+    prompt_name VARCHAR(100) NOT NULL COMMENT 'prompt name',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    UNIQUE KEY uk_publish_item_version_type (publish_version_id, prompt_type),
+    INDEX idx_publish_item_prompt_type (prompt_type),
+    INDEX idx_prompt_config_id (prompt_config_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='prompt publish item';
+
+CREATE TABLE IF NOT EXISTS user_prompt_binding (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'user prompt binding id',
+    user_id BIGINT NOT NULL COMMENT 'user id',
+    prompt_type VARCHAR(50) NOT NULL COMMENT 'prompt type',
+    binding_mode VARCHAR(20) NOT NULL COMMENT 'GLOBAL / USER_COPY',
+    bound_prompt_config_id BIGINT COMMENT 'bound user prompt config id when USER_COPY',
+    last_selected_prompt_config_id BIGINT COMMENT 'last explicit selected prompt config id',
+    effective_prompt_config_id BIGINT COMMENT 'current effective prompt config id',
+    publish_version_id BIGINT COMMENT 'active publish version id',
+    fallback_warning VARCHAR(255) COMMENT 'fallback warning for current binding',
+    status TINYINT DEFAULT 1 COMMENT '0 inactive 1 active',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    UNIQUE KEY uk_user_prompt_type (user_id, prompt_type),
+    INDEX idx_user_prompt_type_status (user_id, prompt_type, status),
+    INDEX idx_bound_prompt_config_id (bound_prompt_config_id),
+    INDEX idx_effective_prompt_config_id (effective_prompt_config_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='user prompt binding';
+
+CREATE TABLE IF NOT EXISTS user_prompt_effective_history (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'effective history id',
+    user_id BIGINT NOT NULL COMMENT 'user id',
+    prompt_type VARCHAR(50) NOT NULL COMMENT 'prompt type',
+    publish_version_id BIGINT COMMENT 'publish version id',
+    binding_mode VARCHAR(20) COMMENT 'GLOBAL / USER_COPY',
+    bound_prompt_config_id BIGINT COMMENT 'bound prompt config id',
+    effective_prompt_config_id BIGINT NOT NULL COMMENT 'effective prompt config id',
+    effective_source VARCHAR(50) NOT NULL COMMENT 'effective source',
+    previous_effective_prompt_config_id BIGINT COMMENT 'previous effective prompt config id',
+    selected_model_key VARCHAR(100) COMMENT 'selected model key',
+    fallback TINYINT DEFAULT 0 COMMENT 'whether fallback happened',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    INDEX idx_user_prompt_create_time (user_id, prompt_type, create_time),
+    INDEX idx_publish_version_id (publish_version_id),
+    INDEX idx_effective_prompt_config_id (effective_prompt_config_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='user prompt effective history';
 
 DROP PROCEDURE IF EXISTS add_column_if_missing;

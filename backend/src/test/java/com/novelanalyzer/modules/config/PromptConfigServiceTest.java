@@ -1,6 +1,7 @@
 package com.novelanalyzer.modules.config;
 
 import com.novelanalyzer.common.exception.BusinessException;
+import com.novelanalyzer.modules.config.dto.AdminPromptConfigUpdateRequest;
 import com.novelanalyzer.modules.config.dto.PromptConfigUpdateRequest;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
@@ -145,6 +146,61 @@ class PromptConfigServiceTest {
             .hasMessageContaining("default template cannot be deleted");
 
         verify(repository, never()).softDeleteById(any());
+    }
+
+    @Test
+    void shouldResolveLegacyDefaultAliasWhenReadingByType() {
+        PromptConfigRepository repository = mock(PromptConfigRepository.class);
+        PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
+
+        PromptConfigEntity legacyDefault = buildEntity(
+            1L,
+            "deconstruct",
+            "default-deconstruct",
+            "Legacy default {{content}}"
+        );
+        legacyDefault.setIsDefault(1);
+        when(repository.findActiveByTypeAndName("deconstruct", "default-deconstruct"))
+            .thenReturn(Optional.of(legacyDefault));
+
+        PromptConfigVO config = service.getByType("deconstruct");
+
+        assertThat(config.getPromptName()).isEqualTo("default-deconstruct");
+        assertThat(config.getPromptContent()).isEqualTo("Legacy default {{content}}");
+    }
+
+    @Test
+    void shouldSaveLegacyDefaultAliasIntoTypeScopedDefaultTemplate() {
+        PromptConfigRepository repository = mock(PromptConfigRepository.class);
+        PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
+
+        PromptConfigEntity legacyDefault = buildEntity(
+            1L,
+            "deconstruct",
+            "default-deconstruct",
+            "Old {{content}}"
+        );
+        legacyDefault.setIsDefault(1);
+        when(repository.findActiveByTypeAndName("deconstruct", "default-deconstruct"))
+            .thenReturn(Optional.of(legacyDefault));
+        when(repository.findByTypeAndName("deconstruct", "default-deconstruct"))
+            .thenReturn(Optional.of(legacyDefault));
+        when(repository.saveOrUpdate(any(PromptConfigEntity.class))).thenReturn(1L);
+
+        PromptConfigUpdateRequest request = new PromptConfigUpdateRequest();
+        request.setPromptType("deconstruct");
+        request.setPromptName("default");
+        request.setPromptContent("Updated {{content}}");
+        request.setModelName("deepseek-chat");
+        request.setTemperature(0.55);
+        request.setMaxTokens(1200);
+
+        PromptConfigVO saved = service.save(request);
+
+        assertThat(saved.getPromptName()).isEqualTo("default-deconstruct");
+        assertThat(saved.getPromptContent()).isEqualTo("Updated {{content}}");
+        assertThat(saved.getTemperature()).isEqualTo(0.55);
+        assertThat(saved.getMaxTokens()).isEqualTo(1200);
     }
 
     @Test
