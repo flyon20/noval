@@ -1224,7 +1224,7 @@ describe('TrendView', () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
     const { crawlerApi } = await import('@/api/crawler');
-    const trendPreview = 'compat trend preview';
+    const trendPreview = 'preview only contract marker';
     const themeDistribution = [{ theme: 'urban-brain-live-fortune-good-evil', count: 3, ratio: 60 }];
     const themeTable = [
       {
@@ -1263,7 +1263,7 @@ describe('TrendView', () => {
         message: 'success',
         data: createVisualPayload({
           boardSummary: '',
-          trendPreview: '',
+          trendPreview,
           detailContent: '',
           historicalWordCloud: [],
           themeDistribution: [],
@@ -1278,7 +1278,7 @@ describe('TrendView', () => {
     });
     vi.mocked(analysisApi.streamTrend).mockImplementation(createStreamTask(createTrendResult({
       resultJson: {
-        summary: 'compat summary',
+        summary: 'summary should not satisfy preview',
         boardSummary: 'compat board summary',
         trendPreview,
         historicalWordCloud,
@@ -1292,10 +1292,11 @@ describe('TrendView', () => {
 
     const wrapper = await mountTrendView();
 
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain(trendPreview);
+
     await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain('compat summary');
     expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('still rising');
     expect(wrapper.get('[data-test="trend-result-theme-table"]').text()).toContain(themeTable[0].theme);
     expect(wrapper.get('[data-test="trend-result-hot-books"]').text()).toContain(hotBooks[0].bookName);
