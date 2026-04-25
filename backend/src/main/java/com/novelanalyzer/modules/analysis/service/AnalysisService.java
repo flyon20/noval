@@ -35,6 +35,8 @@ import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.http.MediaType;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -213,6 +215,7 @@ public class AnalysisService {
     }
 
     public SseEmitter streamAnalyze(String analysisType, AnalysisRequest request) {
+        forceCurrentResponseContentType();
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AuthUser authUser = copyAuthUser(AuthUserHolder.get());
         String traceId = TraceIdHolder.get();
@@ -560,6 +563,7 @@ public class AnalysisService {
     }
 
     public SseEmitter streamTrend(TrendAnalysisRequest request) {
+        forceCurrentResponseContentType();
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AuthUser authUser = copyAuthUser(AuthUserHolder.get());
         String traceId = TraceIdHolder.get();
@@ -1225,6 +1229,16 @@ public class AnalysisService {
         emitter.send(SseEmitter.event()
             .name(eventName)
             .data(payload, MediaType.APPLICATION_JSON));
+    }
+
+    private void forceCurrentResponseContentType() {
+        try {
+            if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
+                attributes.getResponse().setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
+            }
+        } catch (Exception ignored) {
+            // Best effort only for MockMvc/servlet environments.
+        }
     }
 
     private List<String> splitContent(String content) {
