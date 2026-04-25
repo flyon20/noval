@@ -1224,6 +1224,7 @@ describe('TrendView', () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
     const { crawlerApi } = await import('@/api/crawler');
+    const trendPreview = 'compat trend preview';
     const themeDistribution = [{ theme: 'urban-brain-live-fortune-good-evil', count: 3, ratio: 60 }];
     const themeTable = [
       {
@@ -1279,7 +1280,7 @@ describe('TrendView', () => {
       resultJson: {
         summary: 'compat summary',
         boardSummary: 'compat board summary',
-        trendPreview: 'compat trend preview',
+        trendPreview,
         historicalWordCloud,
         themeDistribution,
         themeTable,
@@ -1328,6 +1329,17 @@ describe('TrendView', () => {
     const summaryCards = wrapper.findComponent({ name: 'TrendSummaryCards' });
     expect(summaryCards.exists()).toBe(true);
     expect(summaryCards.props('summary')).toContain('compat board summary');
+
+    const trendState = wrapper.vm as {
+      trend: {
+        state: {
+          result?: {
+            resultJson?: Record<string, unknown>;
+          };
+        };
+      };
+    };
+    expect(trendState.trend.state.result?.resultJson?.trendPreview).toBe(trendPreview);
   });
 });
 
