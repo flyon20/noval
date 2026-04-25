@@ -1224,6 +1224,19 @@ describe('TrendView', () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
     const { crawlerApi } = await import('@/api/crawler');
+    const themeDistribution = [{ theme: 'urban-brain-live-fortune-good-evil', count: 3, ratio: 60 }];
+    const themeTable = [
+      {
+        theme: 'urban-brain-live-fortune-good-evil',
+        count: 3,
+        ratio: 60,
+        trend: 'still rising',
+      },
+    ];
+    const hotBooks = [{ bookName: 'Brain King', author: 'Author A', rankLabel: 'Top 1', reason: 'lane rep' }];
+    const insightCards = [{ label: 'Core Lane', value: 'urban-brain', note: 'compat field' }];
+    const snapshotComparisons = [{ snapshotTime: '2026-03-20 11:30:00', topTheme: 'urban-brain', change: 'still rising' }];
+    const historicalWordCloud = [{ name: 'urban-brain', value: 24 }];
 
     vi.mocked(crawlerApi.getBoards).mockResolvedValue({
       data: {
@@ -1267,11 +1280,12 @@ describe('TrendView', () => {
         summary: 'compat summary',
         boardSummary: 'compat board summary',
         trendPreview: 'compat trend preview',
-        historicalWordCloud: [{ name: 'urban-brain', value: 24 }],
-        themeDistribution: [{ theme: 'urban-brain-live-fortune-good-evil', count: 3, ratio: 60 }],
-        hotBooks: [{ bookName: 'Brain King', author: 'Author A', rankLabel: 'Top 1', reason: 'lane rep' }],
-        insightCards: [{ label: 'Core Lane', value: 'urban-brain', note: 'compat field' }],
-        snapshotComparisons: [{ snapshotTime: '2026-03-20 11:30:00', topTheme: 'urban-brain', change: 'still rising' }],
+        historicalWordCloud,
+        themeDistribution,
+        themeTable,
+        hotBooks,
+        insightCards,
+        snapshotComparisons,
       },
     })) as never);
 
@@ -1281,9 +1295,39 @@ describe('TrendView', () => {
     await flushPromises();
 
     expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain('compat summary');
-    expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('Brain King');
-    expect(wrapper.get('[data-test="trend-result-key-points"]').text()).toContain('Core Lane');
-    expect(wrapper.text()).toContain('still rising');
+    expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('still rising');
+    expect(wrapper.get('[data-test="trend-result-theme-table"]').text()).toContain(themeTable[0].theme);
+    expect(wrapper.get('[data-test="trend-result-hot-books"]').text()).toContain(hotBooks[0].bookName);
+    expect(wrapper.get('[data-test="trend-result-key-points"]').text()).toContain(insightCards[0].label);
+    expect(wrapper.text()).toContain(snapshotComparisons[0].change);
+
+    const trendComparisonList = wrapper.findComponent({ name: 'TrendComparisonList' });
+    expect(trendComparisonList.exists()).toBe(true);
+    expect(trendComparisonList.props('insightCards')).toEqual([
+      expect.objectContaining(insightCards[0]),
+    ]);
+    expect(trendComparisonList.props('comparisons')).toEqual([
+      expect.objectContaining(snapshotComparisons[0]),
+    ]);
+
+    const trendTagCloud = wrapper.findComponent({ name: 'TrendTagCloud' });
+    expect(trendTagCloud.exists()).toBe(true);
+    expect(trendTagCloud.props('items')).toEqual([
+      expect.objectContaining(historicalWordCloud[0]),
+    ]);
+
+    const chartCards = wrapper.findAllComponents({ name: 'TrendChartCard' });
+    expect(chartCards).toHaveLength(2);
+    expect(chartCards[0].props('option').series[0].data).toEqual([
+      expect.objectContaining({
+        name: themeDistribution[0].theme,
+        value: themeDistribution[0].count,
+      }),
+    ]);
+
+    const summaryCards = wrapper.findComponent({ name: 'TrendSummaryCards' });
+    expect(summaryCards.exists()).toBe(true);
+    expect(summaryCards.props('summary')).toContain('compat board summary');
   });
 });
 

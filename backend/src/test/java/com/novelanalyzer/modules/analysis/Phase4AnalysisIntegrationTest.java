@@ -551,16 +551,27 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"));
 
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"trend_theme\"");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"inputJsonSchema\":");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"inputExampleJson\":");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"outputJsonSchema\":");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"outputExampleJson\":");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"parseConfigJson\":");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"postProcessType\":\"json_extract\"");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\\\"snapshotCount\\\"");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\\\"boardSummary\\\"");
-        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\\\"parser\\\": \\\"json\\\"");
+        Map<String, Object> requestPayload = JsonPath.parse(LAST_LANGGRAPH_REQUEST_BODY.get()).read("$");
+        Map<String, Object> promptConfig = JsonPath.read(LAST_LANGGRAPH_REQUEST_BODY.get(), "$.promptConfig");
+        Map<String, Object> expectedPromptConfig = jdbcTemplate.queryForMap("""
+            SELECT input_json_schema,
+                   input_example_json,
+                   output_json_schema,
+                   output_example_json,
+                   parse_config_json,
+                   post_process_type
+            FROM prompt_config
+            WHERE prompt_type = 'theme' AND deleted = 0
+            LIMIT 1
+            """);
+
+        assertThat(requestPayload.get("agentType")).isEqualTo("trend_theme");
+        assertThat(promptConfig.get("inputJsonSchema")).isEqualTo(expectedPromptConfig.get("input_json_schema"));
+        assertThat(promptConfig.get("inputExampleJson")).isEqualTo(expectedPromptConfig.get("input_example_json"));
+        assertThat(promptConfig.get("outputJsonSchema")).isEqualTo(expectedPromptConfig.get("output_json_schema"));
+        assertThat(promptConfig.get("outputExampleJson")).isEqualTo(expectedPromptConfig.get("output_example_json"));
+        assertThat(promptConfig.get("parseConfigJson")).isEqualTo(expectedPromptConfig.get("parse_config_json"));
+        assertThat(promptConfig.get("postProcessType")).isEqualTo(expectedPromptConfig.get("post_process_type"));
     }
 
     @Test
