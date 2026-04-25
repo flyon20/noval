@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.novelanalyzer.modules.analysis.client.LangGraphWorkerClient;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
 import com.novelanalyzer.modules.analysis.repository.AnalysisRepository;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobService;
 import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
@@ -38,6 +39,7 @@ class AnalysisServiceTimeoutTest {
     private final UserConfigService userConfigService = mock(UserConfigService.class);
     private final PromptConfigService promptConfigService = mock(PromptConfigService.class);
     private final PromptGovernanceService promptGovernanceService = mock(PromptGovernanceService.class);
+    private final AsyncJobService asyncJobService = mock(AsyncJobService.class);
     private final AnalysisService analysisService = new AnalysisService(
         mock(PromptConfigRepository.class),
         promptConfigService,
@@ -49,6 +51,7 @@ class AnalysisServiceTimeoutTest {
         mock(LangGraphWorkerClient.class),
         systemConfigService,
         userConfigService,
+        asyncJobService,
         promptGovernanceService,
         new ObjectMapper(),
         mock(AsyncTaskExecutor.class)
@@ -395,6 +398,7 @@ class AnalysisServiceTimeoutTest {
             1L,
             false
         ));
+        when(promptConfigService.resolveRuntimeCompatiblePrompt("deconstruct", promptConfig)).thenReturn(promptConfig);
 
         com.novelanalyzer.common.context.AuthUser authUser = new com.novelanalyzer.common.context.AuthUser();
         authUser.setUserId(3L);

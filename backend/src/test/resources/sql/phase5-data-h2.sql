@@ -100,6 +100,30 @@ INSERT INTO user_prompt_effective_history (
 VALUES
     (1, 1, 'theme', 1, 'GLOBAL', NULL, 4, 'GLOBAL_PUBLISHED', NULL, 'deepseek-chat', 0, 0);
 
+INSERT INTO async_job (
+    id, job_type, job_key, resource_key, request_json, status, trigger_user_id,
+    result_ref_type, result_ref_id, result_summary, error_message, retry_count,
+    started_at, finished_at, deleted
+)
+VALUES
+    (
+        1,
+        'trend_analysis',
+        'trend:fanqie:male-new:urban-brain:6001:4:deepseek-chat',
+        'trend:fanqie:male-new:urban-brain',
+        '{"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain"}',
+        'SUCCESS',
+        1,
+        'analysis_result',
+        3004,
+        'cached trend result',
+        NULL,
+        0,
+        TIMESTAMP '2026-03-20 12:30:00',
+        TIMESTAMP '2026-03-20 12:31:00',
+        0
+    );
+
 INSERT INTO system_config
     (id, config_key, config_value, config_type, description, is_editable, deleted)
 VALUES

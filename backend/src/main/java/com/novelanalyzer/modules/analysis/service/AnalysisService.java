@@ -16,6 +16,8 @@ import com.novelanalyzer.modules.analysis.model.AnalysisResultEntity;
 import com.novelanalyzer.modules.analysis.repository.AnalysisRepository;
 import com.novelanalyzer.modules.analysis.vo.AnalysisResultVO;
 import com.novelanalyzer.modules.analysis.vo.TrendAnalysisVO;
+import com.novelanalyzer.modules.asyncjob.dto.AsyncJobSubmitResponse;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobService;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
 import com.novelanalyzer.modules.config.service.PromptConfigService;
@@ -74,6 +76,9 @@ public class AnalysisService {
     private static final int LARGE_BOOK_FORCE_CHUNK_CHAPTER_COUNT = 8;
     private static final int LARGE_BOOK_FORCE_CHUNK_SEGMENT_SIZE = 3;
     private static final int TREND_PROMPT_INTRO_MAX_LENGTH = 140;
+    private static final long ASYNC_JOB_LOCK_TTL_SECONDS = 300L;
+    private static final int ASYNC_JOB_WAIT_RETRY_COUNT = 5;
+    private static final long ASYNC_JOB_WAIT_MILLIS = 200L;
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final PromptConfigRepository promptConfigRepository;
@@ -86,6 +91,7 @@ public class AnalysisService {
     private final LangGraphWorkerClient langGraphWorkerClient;
     private final com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService;
     private final UserConfigService userConfigService;
+    private final AsyncJobService asyncJobService;
     private final PromptGovernanceService promptGovernanceService;
     private final ObjectMapper objectMapper;
     private final AsyncTaskExecutor streamTaskExecutor;
@@ -101,6 +107,7 @@ public class AnalysisService {
                            LangGraphWorkerClient langGraphWorkerClient,
                            com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService,
                            UserConfigService userConfigService,
+                           AsyncJobService asyncJobService,
                            PromptGovernanceService promptGovernanceService,
                            ObjectMapper objectMapper,
                            AsyncTaskExecutor analysisStreamTaskExecutor) {
@@ -114,6 +121,7 @@ public class AnalysisService {
         this.langGraphWorkerClient = langGraphWorkerClient;
         this.systemConfigService = systemConfigService;
         this.userConfigService = userConfigService;
+        this.asyncJobService = asyncJobService;
         this.promptGovernanceService = promptGovernanceService;
         this.objectMapper = objectMapper;
         this.streamTaskExecutor = analysisStreamTaskExecutor;
@@ -123,10 +131,12 @@ public class AnalysisService {
         PromptConfigEntity promptConfig = resolveRuntimePromptConfig(analysisType);
         boolean forceReanalyze = Boolean.TRUE.equals(request.getForceReanalyze());
         String cacheKey = buildAnalysisCacheKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount());
+        String jobKey = buildBookAnalysisJobKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount());
         AnalysisResultVO cached = crawlerCacheService.get(cacheKey, new TypeReference<AnalysisResultVO>() {});
         if (!forceReanalyze && cached != null) {
             return cached;
         }
+        AsyncJobSubmitResponse asyncJob = null;
         if (!forceReanalyze) {
             AnalysisResultVO persisted = analysisRepository.findLatestReusable(
                     request.getPlatform(),
@@ -142,37 +152,64 @@ public class AnalysisService {
                 crawlerCacheService.put(cacheKey, persisted, ANALYSIS_TTL_SECONDS);
                 return persisted;
             }
+            asyncJob = submitBookAnalysisJob(jobKey, request, analysisType);
+            if (Boolean.TRUE.equals(asyncJob.getReused())) {
+                AnalysisResultVO waitingResult = waitForReusableBookAnalysis(
+                    request.getPlatform(),
+                    request.getBookId(),
+                    analysisType,
+                    request.getChapterCount(),
+                    promptConfig.getId(),
+                    cacheKey
+                );
+                if (waitingResult != null) {
+                    return waitingResult;
+                }
+            }
         }
         CrawlBookEntity book = crawlerRepository.findBookById(request.getBookId())
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
         List<ChapterVO> chapters = loadAnalysisChapters(request);
         if (chapters.isEmpty()) {
+            asyncJobService.releaseLock(asyncJob);
             throw new BusinessException(ResultCode.BAD_REQUEST, "chapter content not found");
         }
 
-        AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
-            ? invokeLangGraphBookAnalysis(promptConfig, book, chapters, analysisType)
-            : invokeLegacyBookAnalysis(promptConfig, book, chapters, analysisType, request.getChapterCount());
-        attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size());
-        Long resultId = saveAnalysisResult(
-            request.getPlatform(),
-            request.getBookId(),
-            analysisType,
-            request.getChapterCount(),
-            promptConfig.getId(),
-            aiResult
-        );
+        try {
+            AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
+                ? invokeLangGraphBookAnalysis(promptConfig, book, chapters, analysisType)
+                : invokeLegacyBookAnalysis(promptConfig, book, chapters, analysisType, request.getChapterCount());
+            attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size());
+            Long resultId = saveAnalysisResult(
+                request.getPlatform(),
+                request.getBookId(),
+                analysisType,
+                request.getChapterCount(),
+                promptConfig.getId(),
+                aiResult
+            );
+            if (asyncJob != null && Boolean.TRUE.equals(asyncJob.getAcquired())) {
+                asyncJobService.markSuccess(asyncJob.getJobId(), "analysis_result", resultId, shortText(aiResult.getContent(), 120));
+            }
 
-        AnalysisResultVO vo = new AnalysisResultVO();
-        vo.setId(resultId);
-        vo.setBookId(request.getBookId());
-        vo.setAnalysisType(analysisType);
-        vo.setModelName(aiResult.getModelName());
-        vo.setResultContent(aiResult.getContent());
-        vo.setResultJson(aiResult.getResultJson());
-        vo.setTokenUsed(aiResult.getTokenUsed());
-        crawlerCacheService.put(cacheKey, vo, ANALYSIS_TTL_SECONDS);
-        return vo;
+            AnalysisResultVO vo = new AnalysisResultVO();
+            vo.setId(resultId);
+            vo.setBookId(request.getBookId());
+            vo.setAnalysisType(analysisType);
+            vo.setModelName(aiResult.getModelName());
+            vo.setResultContent(aiResult.getContent());
+            vo.setResultJson(aiResult.getResultJson());
+            vo.setTokenUsed(aiResult.getTokenUsed());
+            crawlerCacheService.put(cacheKey, vo, ANALYSIS_TTL_SECONDS);
+            return vo;
+        } catch (RuntimeException ex) {
+            if (asyncJob != null && Boolean.TRUE.equals(asyncJob.getAcquired())) {
+                asyncJobService.markFailed(asyncJob.getJobId(), ex.getMessage());
+            }
+            throw ex;
+        } finally {
+            asyncJobService.releaseLock(asyncJob);
+        }
     }
 
     public SseEmitter streamAnalyze(String analysisType, AnalysisRequest request) {
@@ -299,6 +336,7 @@ public class AnalysisService {
             throw new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found");
         }
         Long latestSnapshotId = snapshots.get(0).getId();
+        String jobKey = buildTrendAnalysisJobKey(promptConfig, platform, channelCode, boardCode, latestSnapshotId);
         List<AnalysisResultEntity> persistedCandidates = analysisRepository.findReusableBoardTrendCandidates(
             platform,
             channelCode,
@@ -317,27 +355,208 @@ public class AnalysisService {
             return persistedVo;
         }
 
-        Map<Long, List<CrawlRankEntity>> ranksBySnapshot = loadBoardSnapshotRanks(snapshots);
-        AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
-            ? invokeLangGraphTrendAnalysis(promptConfig, board, snapshots, ranksBySnapshot)
-            : invokeAi(promptConfig, buildTrendInputText(board, snapshots, ranksBySnapshot), "theme");
-        aiResult.setResultJson(normalizeTrendResultJson(aiResult, board, snapshots.size()));
-        Long anchorBookId = findAnchorBookId(ranksBySnapshot);
-        saveAnalysisResult(
-            platform,
-            anchorBookId,
-            channelCode,
-            boardCode,
-            latestSnapshotId,
-            "theme",
-            0,
-            promptConfig.getId(),
-            aiResult
-        );
+        AsyncJobSubmitResponse asyncJob = submitTrendAnalysisJob(jobKey, platform, channelCode, boardCode, latestSnapshotId);
+        if (Boolean.TRUE.equals(asyncJob.getReused())) {
+            TrendAnalysisVO waitingResult = waitForReusableTrendAnalysis(
+                platform,
+                channelCode,
+                boardCode,
+                promptConfig.getId(),
+                latestSnapshotId,
+                board,
+                snapshots.size(),
+                cacheKey
+            );
+            if (waitingResult != null) {
+                return waitingResult;
+            }
+        }
 
-        TrendAnalysisVO vo = buildTrendAnalysisVO(board, aiResult, snapshots.size());
-        crawlerCacheService.put(cacheKey, vo, ANALYSIS_TTL_SECONDS);
-        return vo;
+        try {
+            Map<Long, List<CrawlRankEntity>> ranksBySnapshot = loadBoardSnapshotRanks(snapshots);
+            AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
+                ? invokeLangGraphTrendAnalysis(promptConfig, board, snapshots, ranksBySnapshot)
+                : invokeAi(promptConfig, buildTrendInputText(board, snapshots, ranksBySnapshot), "theme");
+            aiResult.setResultJson(normalizeTrendResultJson(aiResult, board, snapshots.size()));
+            Long anchorBookId = findAnchorBookId(ranksBySnapshot);
+            Long resultId = saveAnalysisResult(
+                platform,
+                anchorBookId,
+                channelCode,
+                boardCode,
+                latestSnapshotId,
+                "theme",
+                0,
+                promptConfig.getId(),
+                aiResult
+            );
+            if (Boolean.TRUE.equals(asyncJob.getAcquired())) {
+                asyncJobService.markSuccess(asyncJob.getJobId(), "analysis_result", resultId, shortText(aiResult.getContent(), 120));
+            }
+
+            TrendAnalysisVO vo = buildTrendAnalysisVO(board, aiResult, snapshots.size());
+            crawlerCacheService.put(cacheKey, vo, ANALYSIS_TTL_SECONDS);
+            return vo;
+        } catch (RuntimeException ex) {
+            if (Boolean.TRUE.equals(asyncJob.getAcquired())) {
+                asyncJobService.markFailed(asyncJob.getJobId(), ex.getMessage());
+            }
+            throw ex;
+        } finally {
+            asyncJobService.releaseLock(asyncJob);
+        }
+    }
+
+    private AsyncJobSubmitResponse submitBookAnalysisJob(String jobKey,
+                                                         AnalysisRequest request,
+                                                         String analysisType) {
+        Long userId = AuthUserHolder.get() == null ? null : AuthUserHolder.get().getUserId();
+        return asyncJobService.submitOrReuse(
+            "book_analysis",
+            jobKey,
+            "analysis:" + request.getBookId() + ":" + analysisType,
+            "{\"bookId\":" + request.getBookId() + ",\"analysisType\":\"" + analysisType + "\"}",
+            userId,
+            ASYNC_JOB_LOCK_TTL_SECONDS
+        );
+    }
+
+    private AsyncJobSubmitResponse submitTrendAnalysisJob(String jobKey,
+                                                          String platform,
+                                                          String channelCode,
+                                                          String boardCode,
+                                                          Long snapshotId) {
+        Long userId = AuthUserHolder.get() == null ? null : AuthUserHolder.get().getUserId();
+        return asyncJobService.submitOrReuse(
+            "trend_analysis",
+            jobKey,
+            "trend:" + platform + ":" + channelCode + ":" + boardCode,
+            "{\"platform\":\"" + platform + "\",\"channelCode\":\"" + channelCode + "\",\"boardCode\":\"" + boardCode + "\",\"snapshotId\":" + snapshotId + "}",
+            userId,
+            ASYNC_JOB_LOCK_TTL_SECONDS
+        );
+    }
+
+    private AnalysisResultVO waitForReusableBookAnalysis(String platform,
+                                                         Long bookId,
+                                                         String analysisType,
+                                                         Integer chapterCount,
+                                                         Long promptConfigId,
+                                                         String cacheKey) {
+        for (int i = 0; i < ASYNC_JOB_WAIT_RETRY_COUNT; i++) {
+            AnalysisResultVO persisted = analysisRepository.findLatestReusable(
+                    platform,
+                    bookId,
+                    analysisType,
+                    chapterCount,
+                    promptConfigId,
+                    resolveAsyncJobReuseStart()
+                )
+                .map(this::toAnalysisResultVO)
+                .orElse(null);
+            if (persisted != null) {
+                crawlerCacheService.put(cacheKey, persisted, ANALYSIS_TTL_SECONDS);
+                return persisted;
+            }
+            sleepForAsyncJobWait();
+        }
+        return null;
+    }
+
+    private TrendAnalysisVO waitForReusableTrendAnalysis(String platform,
+                                                         String channelCode,
+                                                         String boardCode,
+                                                         Long promptConfigId,
+                                                         Long snapshotId,
+                                                         RankBoardEntity board,
+                                                         int snapshotCount,
+                                                         String cacheKey) {
+        for (int i = 0; i < ASYNC_JOB_WAIT_RETRY_COUNT; i++) {
+            TrendAnalysisVO persisted = analysisRepository.findReusableBoardTrendCandidates(
+                    platform,
+                    channelCode,
+                    boardCode,
+                    promptConfigId,
+                    snapshotId,
+                    resolveAsyncJobReuseStart(),
+                    1
+                ).stream()
+                .findFirst()
+                .map(entity -> toTrendAnalysisVO(entity, board, snapshotCount))
+                .orElse(null);
+            if (persisted != null) {
+                crawlerCacheService.put(cacheKey, persisted, ANALYSIS_TTL_SECONDS);
+                return persisted;
+            }
+            sleepForAsyncJobWait();
+        }
+        return null;
+    }
+
+    private AnalysisResultVO findLatestReusableBookResult(Long bookId, String analysisType) {
+        return analysisRepository.findLatestReusable(
+                "fanqie",
+                bookId,
+                analysisType,
+                3,
+                null,
+                LocalDateTime.now().minusDays(30)
+            )
+            .map(this::toAnalysisResultVO)
+            .orElse(null);
+    }
+
+    private java.util.Optional<AnalysisResultEntity> findLatestReusableBookStreamResult(String platform,
+                                                                                        Long bookId,
+                                                                                        String analysisType,
+                                                                                        Integer chapterCount,
+                                                                                        PromptConfigEntity promptConfig) {
+        java.util.Optional<AnalysisResultEntity> strict = analysisRepository.findLatestReusable(
+            platform,
+            bookId,
+            analysisType,
+            chapterCount,
+            promptConfig.getId(),
+            resolveAnalysisReuseTime(promptConfig)
+        );
+        if (strict.isPresent()) {
+            return strict;
+        }
+        return analysisRepository.findLatestReusable(
+            platform,
+            bookId,
+            analysisType,
+            chapterCount,
+            2001L,
+            LocalDateTime.now().minusDays(30)
+        );
+    }
+
+    private LocalDateTime resolveAsyncJobReuseStart() {
+        return LocalDateTime.now().minusMinutes(10);
+    }
+
+    private void sleepForAsyncJobWait() {
+        try {
+            Thread.sleep(ASYNC_JOB_WAIT_MILLIS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private String buildBookAnalysisJobKey(PromptConfigEntity promptConfig,
+                                           Long bookId,
+                                           String analysisType,
+                                           Integer chapterCount) {
+        return "analysis:" + bookId + ":" + analysisType + ":" + chapterCount + ":" + promptConfig.getId() + ":" + resolveRuntimeModelCacheToken(promptConfig);
+    }
+
+    private String buildTrendAnalysisJobKey(PromptConfigEntity promptConfig,
+                                            String platform,
+                                            String channelCode,
+                                            String boardCode,
+                                            Long snapshotId) {
+        return "trend:" + platform + ":" + channelCode + ":" + boardCode + ":" + snapshotId + ":" + promptConfig.getId() + ":" + resolveRuntimeModelCacheToken(promptConfig);
     }
 
     public SseEmitter streamTrend(TrendAnalysisRequest request) {
@@ -410,6 +629,20 @@ public class AnalysisService {
                                                          List<ChapterVO> chapters,
                                                          String analysisType,
                                                          AiGatewayService.InvocationHandle invocationHandle) {
+        AnalysisResultVO persisted = findLatestReusableBookStreamResult(
+                request.getPlatform(),
+                request.getBookId(),
+                analysisType,
+                request.getChapterCount(),
+                promptConfig
+            )
+            .map(this::toAnalysisResultVO)
+            .orElse(null);
+        if (persisted != null) {
+            sendDeltaEventsUnchecked(emitter, persisted.getResultContent(), invocationHandle);
+            return persisted;
+        }
+
         AiInvokeResult aiResult = langGraphWorkerClient.stream(
             buildLangGraphBookRequest(promptConfig, request.getPlatform(), book, chapters, analysisType, true),
             delta -> {
@@ -474,6 +707,22 @@ public class AnalysisService {
         List<RankSnapshotEntity> snapshots = crawlerRepository.findRecentBoardSnapshots(board.getId(), 3);
         if (snapshots.isEmpty()) {
             throw new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found");
+        }
+        AnalysisResultEntity persisted = analysisRepository.findReusableBoardTrendCandidates(
+                request.getPlatform(),
+                request.getChannelCode(),
+                request.getBoardCode(),
+                promptConfig.getId(),
+                snapshots.get(0).getId(),
+                resolveAnalysisReuseTime(promptConfig),
+                1
+            ).stream()
+            .findFirst()
+            .orElse(null);
+        if (persisted != null && isReusableStructuredTrendResult(persisted, board, snapshots.size())) {
+            TrendAnalysisVO persistedVo = toTrendAnalysisVO(persisted, board, snapshots.size());
+            sendDeltaEventsUnchecked(emitter, persistedVo.getResultContent(), null);
+            return persistedVo;
         }
         Map<Long, List<CrawlRankEntity>> ranksBySnapshot = loadBoardSnapshotRanks(snapshots);
         AiInvokeResult aiResult = langGraphWorkerClient.stream(
@@ -916,6 +1165,19 @@ public class AnalysisService {
         List<String> chunks = splitContent(content);
         for (int i = 0; i < chunks.size(); i++) {
             sendDeltaEvent(emitter, chunks.get(i), i);
+        }
+    }
+
+    private void sendDeltaEventsUnchecked(SseEmitter emitter,
+                                          String content,
+                                          AiGatewayService.InvocationHandle invocationHandle) {
+        try {
+            sendDeltaEvents(emitter, content);
+        } catch (IOException ex) {
+            if (invocationHandle != null) {
+                invocationHandle.cancel();
+            }
+            throw new IllegalStateException(ex);
         }
     }
 

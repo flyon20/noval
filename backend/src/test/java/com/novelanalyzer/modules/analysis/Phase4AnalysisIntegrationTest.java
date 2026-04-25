@@ -291,15 +291,14 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
-    void shouldAllowUserRoleToUpdatePromptConfig() throws Exception {
+    void shouldForbidUserRoleUpdatingPromptConfig() throws Exception {
         String token = loginAndGetToken("writer", "writer123");
         mockMvc.perform(put("/api/config/prompt")
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"promptType\":\"deconstruct\",\"promptName\":\"default-deconstruct\",\"promptContent\":\"USER-EDIT {{content}}\",\"modelName\":\"dify\"}"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.promptContent").value("USER-EDIT {{content}}"));
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value(403));
     }
 
     @Test
@@ -495,6 +494,47 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldReplayCachedDeconstructStreamWithoutCallingLangGraphWorker() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "langgraph");
+        clearCrawlerLocalCache();
+        LANGGRAPH_REQUEST_COUNT.set(0);
+        LAST_LANGGRAPH_REQUEST_BODY.set("");
+        jdbcTemplate.update("""
+            INSERT INTO analysis_result (
+                user_id, platform, book_id, analysis_type, chapter_count, prompt_config_id,
+                model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted
+            ) VALUES (
+                1, 'fanqie', 1001, 'deconstruct', 3, 2001,
+                'langgraph-worker:deepseek-chat',
+                'cached deconstruct content',
+                '{"analysisType":"deconstruct","summary":"cached summary","detailContent":"cached deconstruct content","source":"cached-history"}',
+                101, 12, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), 0
+            )
+            """);
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+
+        assertThat(body).contains("\"event\":\"start\"");
+        assertThat(body).contains("cached deconstruct content");
+        assertThat(body).contains("\"event\":\"done\"");
+        assertThat(body).contains("\"source\":\"cached-history\"");
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isZero();
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).isBlank();
+    }
+
+    @Test
     void shouldAnalyzeTrendViaLangGraphRuntimeWhenSystemModeIsEnabled() throws Exception {
         insertThemePromptConfig();
         updateSystemConfig("analysis.runtime.mode", "langgraph");
@@ -644,6 +684,44 @@ class Phase4AnalysisIntegrationTest {
         assertThat(requestBody).contains("\"type\" : \"json_object\"");
         assertThat(requestBody).contains("output schema");
         assertThat(requestBody).contains("output example");
+    }
+
+    @Test
+    void shouldAttachJsonOutputHintsForStructureAnalysis() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(post("/api/analysis/structure")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
+        assertThat(requestBody).contains("response_format");
+        assertThat(requestBody).contains("\"type\" : \"json_object\"");
+        assertThat(requestBody).contains("output schema");
+    }
+
+    @Test
+    void shouldAttachJsonOutputHintsForPlotAnalysis() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(post("/api/analysis/plot")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
+        assertThat(requestBody).contains("response_format");
+        assertThat(requestBody).contains("\"type\" : \"json_object\"");
+        assertThat(requestBody).contains("output schema");
     }
 
     @Test
