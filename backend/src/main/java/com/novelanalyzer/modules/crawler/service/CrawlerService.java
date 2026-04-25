@@ -5,6 +5,7 @@ import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.ResultCode;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobLockService;
 import com.novelanalyzer.modules.crawler.client.PythonCrawlerClient;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookDetail;
 import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
@@ -56,23 +57,30 @@ public class CrawlerService {
     private static final int DEFAULT_RANK_FETCH_COUNT = 30;
     private static final int MIN_RANK_FETCH_COUNT = 10;
     private static final int MAX_RANK_FETCH_COUNT = 100;
+    private static final long RANK_REFRESH_LOCK_TTL_SECONDS = 120L;
+    private static final long CHAPTER_FETCH_LOCK_TTL_SECONDS = 120L;
+    private static final int LOCK_RETRY_COUNT = 5;
+    private static final long LOCK_WAIT_MILLIS = 200L;
 
     private final PythonCrawlerClient pythonCrawlerClient;
     private final CrawlerRepository crawlerRepository;
     private final CrawlerCacheService crawlerCacheService;
     private final CrawlerRefreshPolicyService crawlerRefreshPolicyService;
     private final SystemConfigService systemConfigService;
+    private final AsyncJobLockService asyncJobLockService;
 
     public CrawlerService(PythonCrawlerClient pythonCrawlerClient,
                           CrawlerRepository crawlerRepository,
                           CrawlerCacheService crawlerCacheService,
                           CrawlerRefreshPolicyService crawlerRefreshPolicyService,
-                          SystemConfigService systemConfigService) {
+                          SystemConfigService systemConfigService,
+                          AsyncJobLockService asyncJobLockService) {
         this.pythonCrawlerClient = pythonCrawlerClient;
         this.crawlerRepository = crawlerRepository;
         this.crawlerCacheService = crawlerCacheService;
         this.crawlerRefreshPolicyService = crawlerRefreshPolicyService;
         this.systemConfigService = systemConfigService;
+        this.asyncJobLockService = asyncJobLockService;
     }
 
     public List<RankBookItemVO> getRank(CrawlerRankRequest request) {
@@ -157,7 +165,19 @@ public class CrawlerService {
                 return toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, true);
             }
         }
-        return fetchAndPersistBoardRank(request, board, refreshMode, latestSnapshot);
+        String lockKey = buildRankRefreshLockKey(request.getPlatform(), request.getChannelCode(), request.getBoardCode());
+        String lockValue = java.util.UUID.randomUUID().toString();
+        boolean acquired = asyncJobLockService.tryAcquire(lockKey, lockValue, RANK_REFRESH_LOCK_TTL_SECONDS);
+        if (!acquired && latestSnapshot != null) {
+            return waitForReusedRankSnapshot(request.getChannelCode(), request.getBoardCode(), board.getId(), latestSnapshot);
+        }
+        try {
+            return fetchAndPersistBoardRank(request, board, refreshMode, latestSnapshot);
+        } finally {
+            if (acquired) {
+                asyncJobLockService.release(lockKey, lockValue);
+            }
+        }
     }
 
     public RankPageVO getRankPage(String platform,
@@ -236,27 +256,43 @@ public class CrawlerService {
             return persistedChapters;
         }
 
+        String lockKey = buildChapterFetchLockKey(request.getPlatform(), request.getBookId(), request.getChapterCount());
+        String lockValue = java.util.UUID.randomUUID().toString();
+        boolean acquired = asyncJobLockService.tryAcquire(lockKey, lockValue, CHAPTER_FETCH_LOCK_TTL_SECONDS);
+        if (!acquired) {
+            List<ChapterVO> waited = waitForChapterReuse(request.getBookId(), request.getChapterCount(), cacheKey);
+            if (waited != null) {
+                return waited;
+            }
+        }
+
         int fetchStartChapterNo = reusablePrefixCount + 1;
         int missingChapterCount = request.getChapterCount() - reusablePrefixCount;
-        List<ExternalChapterItem> chapters = fetchChaptersWithRepair(
-            request.getPlatform(),
-            book,
-            fetchStartChapterNo,
-            missingChapterCount
-        );
-        for (ExternalChapterItem chapter : chapters) {
-            crawlerRepository.saveOrUpdateChapter(
+        try {
+            List<ExternalChapterItem> chapters = fetchChaptersWithRepair(
                 request.getPlatform(),
-                request.getBookId(),
-                chapter.getChapterNo(),
-                chapter.getChapterTitle(),
-                chapter.getContent(),
-                chapter.getSourceWordCount()
+                book,
+                fetchStartChapterNo,
+                missingChapterCount
             );
+            for (ExternalChapterItem chapter : chapters) {
+                crawlerRepository.saveOrUpdateChapter(
+                    request.getPlatform(),
+                    request.getBookId(),
+                    chapter.getChapterNo(),
+                    chapter.getChapterTitle(),
+                    chapter.getContent(),
+                    chapter.getSourceWordCount()
+                );
+            }
+            List<ChapterVO> result = crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
+            crawlerCacheService.put(cacheKey, result, CHAPTER_TTL_SECONDS);
+            return result;
+        } finally {
+            if (acquired) {
+                asyncJobLockService.release(lockKey, lockValue);
+            }
         }
-        List<ChapterVO> result = crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
-        crawlerCacheService.put(cacheKey, result, CHAPTER_TTL_SECONDS);
-        return result;
     }
 
     public ChapterRefreshResultVO refreshChapters(CrawlerChapterRequest request) {
@@ -273,6 +309,20 @@ public class CrawlerService {
         );
         if (usedRefreshTimes >= maxAllowedRefreshTimes) {
             throw new BusinessException(ResultCode.TOO_MANY_REQUESTS, "chapter refresh limit exceeded");
+        }
+
+        String lockKey = buildChapterFetchLockKey(request.getPlatform(), request.getBookId(), request.getChapterCount());
+        String lockValue = java.util.UUID.randomUUID().toString();
+        boolean acquired = asyncJobLockService.tryAcquire(lockKey, lockValue, CHAPTER_FETCH_LOCK_TTL_SECONDS);
+        if (!acquired) {
+            List<ChapterVO> waited = waitForChapterReuse(
+                request.getBookId(),
+                request.getChapterCount(),
+                buildChapterCacheKey(request.getBookId(), request.getChapterCount())
+            );
+            if (waited != null) {
+                return buildChapterRefreshResult(waited, maxAllowedRefreshTimes, usedRefreshTimes);
+            }
         }
 
         try {
@@ -323,6 +373,57 @@ public class CrawlerService {
                 LocalDateTime.now()
             );
             throw ex;
+        } finally {
+            if (acquired) {
+                asyncJobLockService.release(lockKey, lockValue);
+            }
+        }
+    }
+
+    private RankRefreshResultVO waitForReusedRankSnapshot(String channelCode,
+                                                          String boardCode,
+                                                          Long boardId,
+                                                          RankSnapshotEntity fallbackSnapshot) {
+        for (int i = 0; i < LOCK_RETRY_COUNT; i++) {
+            RankSnapshotEntity latest = crawlerRepository.findLatestBoardSnapshot(boardId).orElse(null);
+            if (latest != null && !Objects.equals(latest.getId(), fallbackSnapshot.getId())) {
+                return toRefreshResult(channelCode, boardCode, latest, true, false);
+            }
+            sleepForLockWait();
+        }
+        return toRefreshResult(channelCode, boardCode, fallbackSnapshot, true, false);
+    }
+
+    private List<ChapterVO> waitForChapterReuse(Long bookId, Integer chapterCount, String cacheKey) {
+        for (int i = 0; i < LOCK_RETRY_COUNT; i++) {
+            List<ChapterVO> cached = crawlerCacheService.get(cacheKey, new TypeReference<List<ChapterVO>>() {
+            });
+            if (resolveReusablePrefixCount(cached) >= chapterCount) {
+                return cached;
+            }
+            List<ChapterVO> persisted = crawlerRepository.findChapters(bookId, chapterCount);
+            if (resolveReusablePrefixCount(persisted) >= chapterCount) {
+                crawlerCacheService.put(cacheKey, persisted, CHAPTER_TTL_SECONDS);
+                return persisted;
+            }
+            sleepForLockWait();
+        }
+        return null;
+    }
+
+    private String buildRankRefreshLockKey(String platform, String channelCode, String boardCode) {
+        return "lock:rank-refresh:" + platform + ":" + channelCode + ":" + boardCode;
+    }
+
+    private String buildChapterFetchLockKey(String platform, Long bookId, Integer chapterCount) {
+        return "lock:chapter-fetch:" + platform + ":" + bookId + ":" + chapterCount;
+    }
+
+    private void sleepForLockWait() {
+        try {
+            Thread.sleep(LOCK_WAIT_MILLIS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
         }
     }
 

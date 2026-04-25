@@ -729,9 +729,15 @@ class CrawlerPhase3IntegrationTest {
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
+        String phone = switch (username) {
+            case "admin" -> "13800138000";
+            case "writer" -> "13800138001";
+            case "15599316908" -> "15599316908";
+            default -> username;
+        };
         MvcResult result = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
