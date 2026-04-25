@@ -268,7 +268,15 @@ class AnalysisServiceTimeoutTest {
             "deepseek-chat",
             "analysis result",
             128,
-            new LinkedHashMap<>(Map.of("summary", "summary"))
+            new LinkedHashMap<>(Map.of(
+                "summary", "summary",
+                "analysisMode", "chunk_merge",
+                "segmentCount", 3,
+                "promptRuntime", new LinkedHashMap<>(Map.of(
+                    "fallback", false,
+                    "runtimeMode", "langgraph"
+                ))
+            ))
         );
 
         ReflectionTestUtils.invokeMethod(
@@ -280,10 +288,16 @@ class AnalysisServiceTimeoutTest {
         );
 
         Map<String, Object> resultJson = aiInvokeResult.getResultJson();
+        assertThat(resultJson.get("analysisMode")).isEqualTo("chunk_merge");
+        assertThat(resultJson.get("segmentCount")).isEqualTo(3);
         assertThat(resultJson.get("requestedChapterCount")).isEqualTo(10);
         assertThat(resultJson.get("actualChapterCount")).isEqualTo(8);
         assertThat(resultJson.get("inputChapterCount")).isEqualTo(8);
         assertThat(resultJson.get("chapterFetchDegraded")).isEqualTo(true);
+        assertThat(resultJson.get("promptRuntime")).isInstanceOf(Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> promptRuntime = (Map<String, Object>) resultJson.get("promptRuntime");
+        assertThat(promptRuntime).containsKey("fallback");
     }
 
     @Test

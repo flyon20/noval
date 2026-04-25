@@ -1220,6 +1220,71 @@ describe('TrendView', () => {
     expect(wrapper.find('[data-test="trend-result-theme-table"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('脑洞之王');
   });
+  test('keeps rendering trend compatibility fields from existing resultJson names', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { crawlerApi } = await import('@/api/crawler');
+
+    vi.mocked(crawlerApi.getBoards).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createBoardCatalog(),
+        timestamp: 1,
+        traceId: 'trace-boards',
+      },
+    });
+    vi.mocked(crawlerApi.getPreference).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createPreference(),
+        timestamp: 1,
+        traceId: 'trace-preference',
+      },
+    });
+    vi.mocked(dataApi.getVisual).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createVisualPayload({
+          boardSummary: '',
+          trendPreview: '',
+          detailContent: '',
+          historicalWordCloud: [],
+          themeDistribution: [],
+          themeTable: [],
+          hotBooks: [],
+          insightCards: [],
+          snapshotComparisons: [],
+        }),
+        timestamp: 1,
+        traceId: 'trace-visual',
+      },
+    });
+    vi.mocked(analysisApi.streamTrend).mockImplementation(createStreamTask(createTrendResult({
+      resultJson: {
+        summary: 'compat summary',
+        boardSummary: 'compat board summary',
+        trendPreview: 'compat trend preview',
+        historicalWordCloud: [{ name: 'urban-brain', value: 24 }],
+        themeDistribution: [{ theme: 'urban-brain-live-fortune-good-evil', count: 3, ratio: 60 }],
+        hotBooks: [{ bookName: 'Brain King', author: 'Author A', rankLabel: 'Top 1', reason: 'lane rep' }],
+        insightCards: [{ label: 'Core Lane', value: 'urban-brain', note: 'compat field' }],
+        snapshotComparisons: [{ snapshotTime: '2026-03-20 11:30:00', topTheme: 'urban-brain', change: 'still rising' }],
+      },
+    })) as never);
+
+    const wrapper = await mountTrendView();
+
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain('compat summary');
+    expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('Brain King');
+    expect(wrapper.get('[data-test="trend-result-key-points"]').text()).toContain('Core Lane');
+    expect(wrapper.text()).toContain('still rising');
+  });
 });
 
 test('polls the current board visual data again so the page hot-updates without manual refresh', async () => {

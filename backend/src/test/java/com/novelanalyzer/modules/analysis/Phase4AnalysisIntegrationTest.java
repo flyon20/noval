@@ -552,6 +552,15 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"));
 
         assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"trend_theme\"");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"inputJsonSchema\":");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"inputExampleJson\":");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"outputJsonSchema\":");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"outputExampleJson\":");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"parseConfigJson\":");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"postProcessType\":\"json_extract\"");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\\\"snapshotCount\\\"");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\\\"boardSummary\\\"");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\\\"parser\\\": \\\"json\\\"");
     }
 
     @Test

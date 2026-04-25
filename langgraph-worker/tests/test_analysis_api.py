@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api import analysis
 from app.config import settings
 from app.main import app
+from app.models.analysis import RunResponse
 
 
 class AnalysisApiErrorHandlingTest(unittest.TestCase):
@@ -44,6 +45,53 @@ class AnalysisApiErrorHandlingTest(unittest.TestCase):
 
         self.assertEqual(502, response.status_code)
         self.assertEqual("AI provider connection failed, please retry.", response.json()["detail"])
+
+    def test_run_should_accept_existing_structured_prompt_contract_fields(self) -> None:
+        payload = {
+            "taskId": "theme-contract",
+            "agentType": "trend_theme",
+            "promptConfig": {
+                "promptType": "theme",
+                "promptContent": "JSON ONLY {{content}}",
+                "modelName": "deepseek-chat",
+                "inputJsonSchema": '{"type":"object"}',
+                "inputExampleJson": '{"snapshotCount":3}',
+                "outputJsonSchema": '{"type":"object"}',
+                "outputExampleJson": '{"boardSummary":"example"}',
+                "parseConfigJson": '{"parser":"json"}',
+                "postProcessType": "json_extract",
+            },
+            "sourcePayload": {"inputText": "hello"},
+            "limits": {},
+            "contextMeta": {},
+        }
+
+        with patch.object(
+            analysis.analysis_service,
+            "run",
+            AsyncMock(return_value=RunResponse(
+                taskId="theme-contract",
+                modelName="deepseek-chat",
+                content="{}",
+                tokenUsed=1,
+                resultJson={"analysisType": "theme"},
+            )),
+        ) as run_mock:
+            with TestClient(app) as client:
+                response = client.post(
+                    "/internal/analysis/run",
+                    headers={"X-Internal-Service-Token": settings.internal_api_key},
+                    json=payload,
+                )
+
+        self.assertEqual(200, response.status_code)
+        request_model = run_mock.await_args.args[0]
+        self.assertEqual('{"type":"object"}', request_model.promptConfig.inputJsonSchema)
+        self.assertEqual('{"snapshotCount":3}', request_model.promptConfig.inputExampleJson)
+        self.assertEqual('{"type":"object"}', request_model.promptConfig.outputJsonSchema)
+        self.assertEqual('{"boardSummary":"example"}', request_model.promptConfig.outputExampleJson)
+        self.assertEqual('{"parser":"json"}', request_model.promptConfig.parseConfigJson)
+        self.assertEqual("json_extract", request_model.promptConfig.postProcessType)
 
 
 if __name__ == "__main__":

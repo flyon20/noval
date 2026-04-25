@@ -309,6 +309,13 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, response.resultJson["meta"]["runtime"]["providerCallCount"])
         self.assertTrue(provider.invoke_calls[1]["require_json"])
         self.assertIn("JSON repair task", provider.invoke_calls[1]["messages"][0]["content"])
+        self.assertIn("boardSummary", response.resultJson)
+        self.assertIn("trendPreview", response.resultJson)
+        self.assertIn("historicalWordCloud", response.resultJson)
+        self.assertIn("themeDistribution", response.resultJson)
+        self.assertIn("hotBooks", response.resultJson)
+        self.assertIn("insightCards", response.resultJson)
+        self.assertIn("snapshotComparisons", response.resultJson)
 
     async def test_stream_should_repair_theme_json_when_stream_payload_is_not_valid_json(self) -> None:
         provider = StreamRepairProviderClient(
@@ -366,6 +373,10 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         await service.run(request)
 
         prompt = provider.invoke_calls[0]["messages"][0]["content"]
+        self.assertIn("output schema:", prompt)
+        self.assertIn('{"type":"object"}', prompt)
+        self.assertIn("output example:", prompt)
+        self.assertIn('{"summary":"example"}', prompt)
         self.assertIn("Keep summary, boardSummary, trendPreview, and comparisonSummary concise", prompt)
         self.assertIn("Keep hotBooks, themeTable, themeDistribution, systemArchetypes, microInnovationSignals", prompt)
 
@@ -480,6 +491,41 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("systemPresence", system_prompt)
         self.assertIn("antiRoutineDesign", system_prompt)
         self.assertIn("avoidedPoisonPoints", system_prompt)
+
+    async def test_theme_default_result_should_keep_structured_contract_keys(self) -> None:
+        service = LangGraphAnalysisService(
+            provider_client=StaticProviderClient('{"summary":"theme summary","detailContent":"theme detail"}')
+        )
+        request = RunRequest(
+            taskId="task-theme-defaults",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+            ),
+            sourcePayload={
+                "inputText": "trend content",
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("theme", response.resultJson["analysisType"])
+        self.assertIn("trendPreview", response.resultJson)
+        self.assertIn("historicalWordCloud", response.resultJson)
+        self.assertIn("themeTable", response.resultJson)
+        self.assertIn("hotBooks", response.resultJson)
+        self.assertIn("insightCards", response.resultJson)
+        self.assertIn("snapshotComparisons", response.resultJson)
+        self.assertEqual([], response.resultJson["historicalWordCloud"])
+        self.assertEqual([], response.resultJson["themeTable"])
+        self.assertEqual([], response.resultJson["hotBooks"])
+        self.assertEqual([], response.resultJson["insightCards"])
+        self.assertEqual([], response.resultJson["snapshotComparisons"])
 
 
 if __name__ == "__main__":
