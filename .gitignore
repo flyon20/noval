@@ -21,12 +21,21 @@ __pycache__/
 *.out.log
 *.err.log
 logs/
+*.pid
 
 # Local env
 .env
 .env.*
 !.env.example
 !frontend/.env.example
+*.local.env
+*.secret
+*.secrets
+*.key
+*.pem
+*.p12
+*.jks
+*.kdbx
 
 # Local debug artifacts
 login-body.json
@@ -41,3 +50,31 @@ backend/Dump*.java
 backend/ReadSmsLog.java
 .tmp-v4-restore/
 noval-deploy-*.tgz
+dump.rdb
+
+# Local runtime outputs
+backend_*.log
+crawler_*.log
+frontend_*.log
+langgraph_worker_*.log
+redis_*.log
+
+# Docker local/private overrides
+docker-compose.override.yml
+docker-compose.*.override.yml
+docker/*.local.yml
+docker/*.private.yml
+docker/**/*.local.yml
+docker/**/*.private.yml
+
+# Root notes and local docs
+findings.md
+progress.md
+task_plan.md
+
+# Private planning docs not meant for GitHub
+docs/superpowers/plans/*.md
+docs/superpowers/specs/*.md
+
+# Keep public docs explicitly
+!docs/README.md
