@@ -19,6 +19,7 @@ import com.novelanalyzer.modules.analysis.vo.TrendAnalysisVO;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
 import com.novelanalyzer.modules.config.service.PromptConfigService;
+import com.novelanalyzer.modules.config.service.PromptGovernanceService;
 import com.novelanalyzer.modules.config.service.UserConfigService;
 import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
@@ -85,8 +86,10 @@ public class AnalysisService {
     private final LangGraphWorkerClient langGraphWorkerClient;
     private final com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService;
     private final UserConfigService userConfigService;
+    private final PromptGovernanceService promptGovernanceService;
     private final ObjectMapper objectMapper;
     private final AsyncTaskExecutor streamTaskExecutor;
+    private final ThreadLocal<PromptConfigService.RuntimePromptResolution> runtimePromptResolutionHolder = new ThreadLocal<>();
 
     public AnalysisService(PromptConfigRepository promptConfigRepository,
                            PromptConfigService promptConfigService,
@@ -98,6 +101,7 @@ public class AnalysisService {
                            LangGraphWorkerClient langGraphWorkerClient,
                            com.novelanalyzer.modules.config.service.SystemConfigService systemConfigService,
                            UserConfigService userConfigService,
+                           PromptGovernanceService promptGovernanceService,
                            ObjectMapper objectMapper,
                            AsyncTaskExecutor analysisStreamTaskExecutor) {
         this.promptConfigRepository = promptConfigRepository;
@@ -110,6 +114,7 @@ public class AnalysisService {
         this.langGraphWorkerClient = langGraphWorkerClient;
         this.systemConfigService = systemConfigService;
         this.userConfigService = userConfigService;
+        this.promptGovernanceService = promptGovernanceService;
         this.objectMapper = objectMapper;
         this.streamTaskExecutor = analysisStreamTaskExecutor;
     }
@@ -665,20 +670,42 @@ public class AnalysisService {
         try {
             AuthUser authUser = AuthUserHolder.get();
             if (authUser == null) {
-                return null;
+                return resolveDefaultSelectedModelKey(null);
             }
-            return userConfigService.getValueForUser(authUser.getUserId(), "ai.preferred-model");
+            String preferredModelKey = userConfigService.getValueForUser(authUser.getUserId(), "ai.preferred-model");
+            return resolveDefaultSelectedModelKey(preferredModelKey);
         } catch (Exception ignored) {
-            return null;
+            return resolveDefaultSelectedModelKey(null);
         }
     }
 
     private PromptConfigEntity resolveRuntimePromptConfig(String analysisType) {
-        return promptConfigService.resolveRuntimePromptConfig(
+        Long userId = AuthUserHolder.get() == null ? null : AuthUserHolder.get().getUserId();
+        String selectedModelKey = resolveSelectedModelKeyForRuntime(null);
+        PromptGovernanceService.Resolution governanceResolution = promptGovernanceService.resolveEffectivePrompt(
+            userId,
             analysisType,
-            resolveUserPreferredModelKey(),
-            systemConfigService.getModelRegistry().getModels()
+            selectedModelKey
         );
+        PromptConfigEntity promptConfig = promptConfigService.backfillMissingContractFields(
+            promptConfigService.resolveRuntimeCompatiblePrompt(analysisType, governanceResolution.promptConfig())
+        );
+        selectedModelKey = resolveSelectedModelKeyForRuntime(promptConfig);
+        PromptConfigEntity mergedPrompt = promptConfigService.mergeInheritedContractFields(
+            promptConfig,
+            promptConfigService.findDefaultTemplateForInheritance(analysisType)
+        );
+        PromptConfigService.RuntimePromptResolution resolution = promptConfigService.wrapRuntimePrompt(
+            mergedPrompt,
+            userId,
+            analysisType,
+            selectedModelKey,
+            governanceResolution.effectiveSource(),
+            governanceResolution.publishVersionId(),
+            governanceResolution.fallback()
+        );
+        runtimePromptResolutionHolder.set(resolution);
+        return resolution.getPromptConfig();
     }
 
     private String resolveRuntimeModelCacheToken(PromptConfigEntity promptConfig) {
@@ -695,8 +722,46 @@ public class AnalysisService {
             })
             .orElseGet(() -> {
                 String modelName = resolvePromptConfiguredModel(promptConfig);
-                return modelName == null || modelName.isBlank() ? "default-model" : modelName;
+                if (modelName != null && !modelName.isBlank()) {
+                    return modelName;
+                }
+                return resolveDefaultSelectedModelKey(null);
             });
+    }
+
+    private String resolveSelectedModelKeyForRuntime(PromptConfigEntity promptConfig) {
+        String preferredModelKey = resolveUserPreferredModelKey();
+        if (preferredModelKey != null && !preferredModelKey.isBlank()) {
+            return preferredModelKey;
+        }
+        return systemConfigService.resolveEnabledModel(resolvePromptConfiguredModel(promptConfig))
+            .map(model -> firstNonBlank(model.getModelKey(), model.getModelName()))
+            .orElseGet(() -> {
+                String modelName = resolvePromptConfiguredModel(promptConfig);
+                if (modelName != null && !modelName.isBlank()) {
+                    return modelName;
+                }
+                return resolveDefaultSelectedModelKey(null);
+            });
+    }
+
+    private String resolveDefaultSelectedModelKey(String preferredModelKey) {
+        if (preferredModelKey != null && !preferredModelKey.isBlank()) {
+            return preferredModelKey;
+        }
+        return systemConfigService.resolveEnabledModel()
+            .map(model -> {
+                String modelKey = model.getModelKey();
+                if (modelKey != null && !modelKey.isBlank()) {
+                    return modelKey;
+                }
+                return model.getModelName();
+            })
+            .filter(model -> model != null && !model.isBlank())
+            .orElseGet(() -> systemConfigService.getValueOrDefault(
+                "ai.openai-compatible.default-model",
+                "deepseek-chat"
+            ));
     }
 
     private String resolvePromptConfiguredModel(PromptConfigEntity promptConfig) {
@@ -830,6 +895,7 @@ public class AnalysisService {
     private void clearContext() {
         AuthUserHolder.clear();
         TraceIdHolder.clear();
+        runtimePromptResolutionHolder.remove();
     }
 
     private void registerEmitterLifecycle(SseEmitter emitter, AiGatewayService.InvocationHandle invocationHandle) {
@@ -947,6 +1013,7 @@ public class AnalysisService {
         Map<String, Object> resultJson = new LinkedHashMap<>(
             aiResult.getResultJson() == null ? Map.of() : aiResult.getResultJson()
         );
+        attachPromptRuntimeMeta(resultJson, null);
         if (requestedChapterCount != null && requestedChapterCount > 0) {
             resultJson.put("requestedChapterCount", requestedChapterCount);
         }
@@ -955,6 +1022,43 @@ public class AnalysisService {
         resultJson.put("chapterFetchDegraded",
             requestedChapterCount != null && requestedChapterCount > actualChapterCount);
         aiResult.setResultJson(resultJson);
+    }
+
+    private void attachPromptRuntimeMeta(Map<String, Object> resultJson, PromptConfigEntity promptConfig) {
+        if (resultJson == null) {
+            return;
+        }
+        PromptConfigService.RuntimePromptResolution resolution = runtimePromptResolutionHolder.get();
+        if (resolution == null) {
+            AuthUser authUser = AuthUserHolder.get();
+            Map<String, Object> fallbackMeta = new LinkedHashMap<>();
+            fallbackMeta.put("userId", authUser == null ? null : authUser.getUserId());
+            fallbackMeta.put("promptType", promptConfig == null ? null : promptConfig.getPromptType());
+            fallbackMeta.put("selectedModelKey", resolveRuntimeModelCacheToken(promptConfig));
+            fallbackMeta.put("effectivePromptConfigId", promptConfig == null ? null : promptConfig.getId());
+            fallbackMeta.put("effectiveSource", "SYSTEM_DEFAULT");
+            fallbackMeta.put("activePublishVersionId", null);
+            fallbackMeta.put("fallback", true);
+            resultJson.put("promptRuntime", fallbackMeta);
+            return;
+        }
+        Map<String, Object> promptRuntime = new LinkedHashMap<>();
+        promptRuntime.put("userId", resolution.getUserId());
+        promptRuntime.put("promptType", resolution.getPromptType());
+        promptRuntime.put("selectedModelKey", resolveDefaultSelectedModelKey(resolution.getSelectedModelKey()));
+        promptRuntime.put("effectivePromptConfigId", resolution.getEffectivePromptConfigId());
+        promptRuntime.put(
+            "effectiveSource",
+            PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED.equals(resolution.getEffectiveSource())
+                ? "SYSTEM_DEFAULT"
+                : resolution.getEffectiveSource()
+        );
+        promptRuntime.put("activePublishVersionId", resolution.getActivePublishVersionId());
+        promptRuntime.put(
+            "fallback",
+            resolution.isFallback() || PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED.equals(resolution.getEffectiveSource())
+        );
+        resultJson.put("promptRuntime", promptRuntime);
     }
 
     private int resolveBookAnalysisTimeoutMillis(Integer requestedChapterCount,
@@ -1905,6 +2009,11 @@ public class AnalysisService {
 
     private String writeResultJson(AiInvokeResult aiResult) {
         try {
+            if (aiResult.getResultJson() != null && !aiResult.getResultJson().containsKey("promptRuntime")) {
+                Map<String, Object> resultJson = new LinkedHashMap<>(aiResult.getResultJson());
+                attachPromptRuntimeMeta(resultJson, null);
+                aiResult.setResultJson(resultJson);
+            }
             return objectMapper.writeValueAsString(aiResult.getResultJson());
         } catch (Exception ex) {
             return "{\"analysisType\":\"" + aiResult.getResultJson().getOrDefault("analysisType", "unknown") + "\"}";

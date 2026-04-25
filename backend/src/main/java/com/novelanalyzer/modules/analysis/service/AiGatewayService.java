@@ -423,7 +423,7 @@ public class AiGatewayService {
     }
 
     private String augmentSystemPromptWithStructuredOutput(PromptConfigEntity promptConfig, String systemPrompt) {
-        if (!usesThemeStructuredContract(promptConfig)) {
+        if (!supportsStructuredOutput(promptConfig)) {
             return systemPrompt;
         }
         StringBuilder builder = new StringBuilder(systemPrompt);
@@ -439,7 +439,9 @@ public class AiGatewayService {
                 builder.append("\noutput example:\n").append(promptConfig.getOutputExampleJson());
             }
         }
-        builder.append("\n\n").append(THEME_STRUCTURED_GUIDANCE);
+        if (usesThemeStructuredContract(promptConfig)) {
+            builder.append("\n\n").append(THEME_STRUCTURED_GUIDANCE);
+        }
         builder.append("\n\nPlease output valid JSON only.");
         return builder.toString();
     }
@@ -455,9 +457,6 @@ public class AiGatewayService {
         if (promptConfig == null) {
             return false;
         }
-        if (!usesThemeStructuredContract(promptConfig)) {
-            return false;
-        }
         if ("json_extract".equalsIgnoreCase(promptConfig.getPostProcessType())) {
             return true;
         }
@@ -465,21 +464,29 @@ public class AiGatewayService {
             && promptConfig.getParseConfigJson().toLowerCase(java.util.Locale.ROOT).contains("\"parser\":\"json\"")) {
             return true;
         }
-        return true;
+        return hasInputJsonContract(promptConfig) || hasOutputJsonContract(promptConfig);
     }
 
     private boolean hasInputJsonContract(PromptConfigEntity promptConfig) {
-        if (promptConfig == null || !usesThemeStructuredContract(promptConfig)) {
+        if (promptConfig == null) {
             return false;
         }
         return promptConfig.getInputJsonSchema() != null && !promptConfig.getInputJsonSchema().isBlank();
     }
 
     private boolean hasOutputJsonContract(PromptConfigEntity promptConfig) {
-        if (promptConfig == null || !usesThemeStructuredContract(promptConfig)) {
+        if (promptConfig == null) {
             return false;
         }
         return promptConfig.getOutputJsonSchema() != null && !promptConfig.getOutputJsonSchema().isBlank();
+    }
+
+    private boolean supportsStructuredOutput(PromptConfigEntity promptConfig) {
+        return promptConfig != null && (
+            hasInputJsonContract(promptConfig)
+                || hasOutputJsonContract(promptConfig)
+                || requiresJsonResponse(promptConfig)
+        );
     }
 
     private boolean usesThemeStructuredContract(PromptConfigEntity promptConfig) {

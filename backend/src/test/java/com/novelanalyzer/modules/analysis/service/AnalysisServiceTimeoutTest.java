@@ -8,6 +8,7 @@ import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
 import com.novelanalyzer.modules.config.service.PromptConfigService;
+import com.novelanalyzer.modules.config.service.PromptGovernanceService;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.service.UserConfigService;
 import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
@@ -36,6 +37,7 @@ class AnalysisServiceTimeoutTest {
     private final SystemConfigService systemConfigService = mock(SystemConfigService.class);
     private final UserConfigService userConfigService = mock(UserConfigService.class);
     private final PromptConfigService promptConfigService = mock(PromptConfigService.class);
+    private final PromptGovernanceService promptGovernanceService = mock(PromptGovernanceService.class);
     private final AnalysisService analysisService = new AnalysisService(
         mock(PromptConfigRepository.class),
         promptConfigService,
@@ -47,6 +49,7 @@ class AnalysisServiceTimeoutTest {
         mock(LangGraphWorkerClient.class),
         systemConfigService,
         userConfigService,
+        promptGovernanceService,
         new ObjectMapper(),
         mock(AsyncTaskExecutor.class)
     );
@@ -361,8 +364,37 @@ class AnalysisServiceTimeoutTest {
         promptConfig.setPromptContent("请按 Kimi 模板分析：{{content}}");
 
         when(userConfigService.getValueForUser(3L, "ai.preferred-model")).thenReturn("kimi-k2.5");
-        when(systemConfigService.getModelRegistry()).thenReturn(new com.novelanalyzer.modules.config.vo.AiModelRegistryVO());
-        when(promptConfigService.resolveRuntimePromptConfig("deconstruct", "kimi-k2.5", List.of())).thenReturn(promptConfig);
+        when(systemConfigService.resolveEnabledModel()).thenReturn(Optional.empty());
+        when(promptGovernanceService.resolveEffectivePrompt(3L, "deconstruct", "kimi-k2.5"))
+            .thenReturn(new PromptGovernanceService.Resolution(
+                promptConfig,
+                null,
+                PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED,
+                1L,
+                false,
+                null
+            ));
+        when(promptConfigService.backfillMissingContractFields(promptConfig)).thenReturn(promptConfig);
+        when(promptConfigService.findDefaultTemplateForInheritance("deconstruct")).thenReturn(null);
+        when(promptConfigService.mergeInheritedContractFields(promptConfig, null)).thenReturn(promptConfig);
+        when(promptConfigService.wrapRuntimePrompt(
+            promptConfig,
+            3L,
+            "deconstruct",
+            "kimi-k2.5",
+            PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED,
+            1L,
+            false
+        )).thenReturn(new PromptConfigService.RuntimePromptResolution(
+            promptConfig,
+            3L,
+            "deconstruct",
+            "kimi-k2.5",
+            10L,
+            PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED,
+            1L,
+            false
+        ));
 
         com.novelanalyzer.common.context.AuthUser authUser = new com.novelanalyzer.common.context.AuthUser();
         authUser.setUserId(3L);

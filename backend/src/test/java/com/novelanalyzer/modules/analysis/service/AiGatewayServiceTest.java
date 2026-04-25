@@ -141,6 +141,47 @@ class AiGatewayServiceTest {
         }
     }
 
+    @Test
+    void shouldRequireJsonResponseForDeconstructWhenStructuredContractConfigured() {
+        SystemConfigService systemConfigService = mock(SystemConfigService.class);
+        ConfigSecretService configSecretService = mock(ConfigSecretService.class);
+        UserConfigService userConfigService = mock(UserConfigService.class);
+        TokenCountEstimator tokenCountEstimator = mock(TokenCountEstimator.class);
+        AiProperties aiProperties = new AiProperties();
+
+        AiGatewayService service = new AiGatewayService(
+            new RestTemplate(),
+            aiProperties,
+            systemConfigService,
+            configSecretService,
+            userConfigService,
+            tokenCountEstimator,
+            new ObjectMapper()
+        );
+
+        PromptConfigEntity promptConfig = new PromptConfigEntity();
+        promptConfig.setPromptType("deconstruct");
+        promptConfig.setOutputJsonSchema("{\"type\":\"object\"}");
+        promptConfig.setPostProcessType("json_extract");
+        promptConfig.setParseConfigJson("{\"parser\":\"json\",\"trimMarkdownFence\":true}");
+
+        Boolean requiresJson = ReflectionTestUtils.invokeMethod(
+            service,
+            "requiresJsonResponse",
+            promptConfig
+        );
+        String prompt = ReflectionTestUtils.invokeMethod(
+            service,
+            "augmentSystemPromptWithStructuredOutput",
+            promptConfig,
+            "SYSTEM PREFIX"
+        );
+
+        assertThat(requiresJson).isTrue();
+        assertThat(prompt).contains("output schema");
+        assertThat(prompt).contains("Please output valid JSON only.");
+    }
+
     private AiModelRegistryModelVO buildModel(String modelKey, String baseUrl, String apiKey) {
         AiModelRegistryModelVO model = new AiModelRegistryModelVO();
         model.setModelKey(modelKey);

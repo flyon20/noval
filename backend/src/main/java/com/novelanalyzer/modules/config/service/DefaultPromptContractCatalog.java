@@ -55,6 +55,75 @@ public class DefaultPromptContractCatalog {
         }
         """;
 
+    private static final String DECONSTRUCT_OUTPUT_SCHEMA = """
+        {
+          "type": "object",
+          "properties": {
+            "analysisType": { "type": "string" },
+            "summary": { "type": "string" },
+            "sellingPoints": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["analysisType", "summary", "sellingPoints"]
+        }
+        """;
+
+    private static final String DECONSTRUCT_OUTPUT_EXAMPLE = """
+        {
+          "analysisType": "deconstruct",
+          "summary": "summary",
+          "sellingPoints": ["hook"]
+        }
+        """;
+
+    private static final String STRUCTURE_OUTPUT_SCHEMA = """
+        {
+          "type": "object",
+          "properties": {
+            "analysisType": { "type": "string" },
+            "summary": { "type": "string" },
+            "structureStages": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["analysisType", "summary", "structureStages"]
+        }
+        """;
+
+    private static final String STRUCTURE_OUTPUT_EXAMPLE = """
+        {
+          "analysisType": "structure",
+          "summary": "summary",
+          "structureStages": ["stage"]
+        }
+        """;
+
+    private static final String PLOT_OUTPUT_SCHEMA = """
+        {
+          "type": "object",
+          "properties": {
+            "analysisType": { "type": "string" },
+            "summary": { "type": "string" },
+            "plotBeats": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["analysisType", "summary", "plotBeats"]
+        }
+        """;
+
+    private static final String PLOT_OUTPUT_EXAMPLE = """
+        {
+          "analysisType": "plot",
+          "summary": "summary",
+          "plotBeats": ["beat"]
+        }
+        """;
+
     private static final Map<String, PromptContractDefaults> DEFAULTS_BY_TYPE = buildDefaults();
 
     public Optional<PromptContractDefaults> findByType(String promptType) {
@@ -159,26 +228,41 @@ public class DefaultPromptContractCatalog {
         defaults.put("deconstruct", new PromptContractDefaults(
             normalizeJson(GENERIC_ANALYSIS_INPUT_SCHEMA),
             normalizeJson(GENERIC_ANALYSIS_INPUT_EXAMPLE),
-            null,
-            null,
-            null,
-            null
+            normalizeJson(DECONSTRUCT_OUTPUT_SCHEMA),
+            normalizeJson(DECONSTRUCT_OUTPUT_EXAMPLE),
+            "json_extract",
+            normalizeJson("""
+                {
+                  "parser": "json",
+                  "trimMarkdownFence": true
+                }
+                """)
         ));
         defaults.put("structure", new PromptContractDefaults(
             normalizeJson(GENERIC_ANALYSIS_INPUT_SCHEMA),
             normalizeJson(GENERIC_ANALYSIS_INPUT_EXAMPLE),
-            null,
-            null,
-            null,
-            null
+            normalizeJson(STRUCTURE_OUTPUT_SCHEMA),
+            normalizeJson(STRUCTURE_OUTPUT_EXAMPLE),
+            "json_extract",
+            normalizeJson("""
+                {
+                  "parser": "json",
+                  "trimMarkdownFence": true
+                }
+                """)
         ));
         defaults.put("plot", new PromptContractDefaults(
             normalizeJson(GENERIC_ANALYSIS_INPUT_SCHEMA),
             normalizeJson(GENERIC_ANALYSIS_INPUT_EXAMPLE),
-            null,
-            null,
-            null,
-            null
+            normalizeJson(PLOT_OUTPUT_SCHEMA),
+            normalizeJson(PLOT_OUTPUT_EXAMPLE),
+            "json_extract",
+            normalizeJson("""
+                {
+                  "parser": "json",
+                  "trimMarkdownFence": true
+                }
+                """)
         ));
         defaults.put("theme", new PromptContractDefaults(
             normalizeJson("""

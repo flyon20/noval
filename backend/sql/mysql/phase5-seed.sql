@@ -3,11 +3,17 @@
 --   mysql -h127.0.0.1 -uroot -p novel_analyzer < backend/sql/mysql/phase5-seed.sql
 
 INSERT INTO prompt_config
-    (prompt_type, prompt_name, prompt_content, model_name, status, is_default, dify_workflow_id, dify_api_key_ref, input_json_schema, input_example_json, output_json_schema, output_example_json, post_process_type, parse_config_json, deleted)
+    (prompt_type, prompt_name, scope_type, scope_key, owner_type, owner_key, source_type, source_ref, prompt_content, model_name, status, is_default, dify_workflow_id, dify_api_key_ref, input_json_schema, input_example_json, output_json_schema, output_example_json, post_process_type, parse_config_json, deleted)
 VALUES
     (
         'theme',
         'default-theme',
+        'global',
+        'default',
+        'system',
+        'system',
+        'seed',
+        'phase5-seed',
         'Analyze the exact selected rank board for the last three snapshots and return valid JSON only. The JSON must include boardSummary, themeDistribution, themeTable.representativeBooks, hotBooks, insightCards, and snapshotComparisons: {{content}}',
         'dify',
         1,
@@ -33,6 +39,60 @@ ON DUPLICATE KEY UPDATE
     output_example_json = VALUES(output_example_json),
     post_process_type = VALUES(post_process_type),
     parse_config_json = VALUES(parse_config_json),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO prompt_publish_version
+    (id, publish_type, scope_type, scope_key, operator_user_id, publish_note, deleted)
+VALUES
+    (1, 'manual', 'global', 'default', 1, 'seed publish for prompt governance', 0)
+ON DUPLICATE KEY UPDATE
+    publish_note = VALUES(publish_note),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO prompt_publish_item
+    (id, publish_version_id, prompt_type, prompt_config_id, prompt_name, scope_type, scope_key, version_no, source_type, source_ref, deleted)
+VALUES
+    (1, 1, 'theme', 4, 'default-theme', 'global', 'default', 1, 'prompt_config', 'prompt_config:4', 0)
+ON DUPLICATE KEY UPDATE
+    publish_version_id = VALUES(publish_version_id),
+    prompt_config_id = VALUES(prompt_config_id),
+    prompt_name = VALUES(prompt_name),
+    version_no = VALUES(version_no),
+    source_type = VALUES(source_type),
+    source_ref = VALUES(source_ref),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO user_prompt_binding
+    (id, user_id, prompt_type, scope_type, scope_key, publish_version_id, prompt_config_id, version_no, source_type, source_ref, start_time, end_time, status, deleted)
+VALUES
+    (1, 1, 'theme', 'global', 'default', 1, 4, 1, 'publish_item', 'prompt_publish_item:1', '2026-03-20 00:00:00', '2026-12-31 23:59:59', 1, 0)
+ON DUPLICATE KEY UPDATE
+    publish_version_id = VALUES(publish_version_id),
+    prompt_config_id = VALUES(prompt_config_id),
+    version_no = VALUES(version_no),
+    source_type = VALUES(source_type),
+    source_ref = VALUES(source_ref),
+    start_time = VALUES(start_time),
+    end_time = VALUES(end_time),
+    status = VALUES(status),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO user_prompt_effective_history
+    (id, user_id, prompt_type, scope_type, scope_key, publish_version_id, prompt_config_id, version_no, source_type, source_ref, effective_reason, effective_at, deleted)
+VALUES
+    (1, 1, 'theme', 'global', 'default', 1, 4, 1, 'binding', 'user_prompt_binding:1', 'seed_binding_applied', '2026-03-20 12:30:00', 0)
+ON DUPLICATE KEY UPDATE
+    publish_version_id = VALUES(publish_version_id),
+    prompt_config_id = VALUES(prompt_config_id),
+    version_no = VALUES(version_no),
+    source_type = VALUES(source_type),
+    source_ref = VALUES(source_ref),
+    effective_reason = VALUES(effective_reason),
+    effective_at = VALUES(effective_at),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
 
