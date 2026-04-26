@@ -174,7 +174,7 @@ public class SystemConfigService {
                 .filter(model -> candidate.equals(model.getModelKey()) || candidate.equals(model.getModelName()))
                 .findFirst();
             if (matched.isPresent()) {
-                return matched;
+                return matched.map(this::toRuntimeModel);
             }
         }
         String defaultModelKey = registry.getDefaultModelKey();
@@ -183,11 +183,31 @@ public class SystemConfigService {
             .filter(model -> defaultModelKey != null && defaultModelKey.equals(model.getModelKey()))
             .findFirst();
         if (defaultModel.isPresent()) {
-            return defaultModel;
+            return defaultModel.map(this::toRuntimeModel);
         }
         return registry.getModels().stream()
             .filter(model -> Boolean.TRUE.equals(model.getEnabled()))
-            .findFirst();
+            .findFirst()
+            .map(this::toRuntimeModel);
+    }
+
+    private AiModelRegistryModelVO toRuntimeModel(AiModelRegistryModelVO model) {
+        AiModelRegistryModelVO runtime = new AiModelRegistryModelVO();
+        runtime.setModelKey(model.getModelKey());
+        runtime.setDisplayName(model.getDisplayName());
+        runtime.setProviderType(model.getProviderType());
+        runtime.setModelName(model.getModelName());
+        runtime.setBaseUrl(model.getBaseUrl());
+        runtime.setApiKey(configSecretService.decryptIfNecessary(model.getApiKey()));
+        runtime.setApiKeyConfigured(model.getApiKeyConfigured());
+        runtime.setApiKeyMasked(model.getApiKeyMasked());
+        runtime.setEnabled(model.getEnabled());
+        runtime.setIsDefault(model.getIsDefault());
+        runtime.setDefaultTemperature(model.getDefaultTemperature());
+        runtime.setMaxTokens(model.getMaxTokens());
+        runtime.setTemperatureSpecJson(model.getTemperatureSpecJson());
+        runtime.setPromptBindings(model.getPromptBindings());
+        return runtime;
     }
 
     private SystemConfigVO toVO(SystemConfigEntity entity) {

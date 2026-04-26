@@ -1,5 +1,12 @@
 # Progress Log
 
+## Session Addendum: 2026-04-26 AI Execution Consolidation Task 4
+- Continued the interrupted `codex/ai-execution-consolidation` worktree session.
+- Routed blocking legacy single-book analysis through `langgraph-worker` while keeping Java responsible for prompt/model resolution, metadata attachment, persistence, cache reuse, and response shaping.
+- Preserved worker request compatibility by sending the normalized prompt template instead of invalid persisted prompt text, and by decrypting model-registry API keys only for runtime model resolution.
+- Updated backend integration coverage so legacy single-book execution asserts worker usage, preserved chapter metadata, prompt/model payload passthrough, history reuse, and no Java OpenAI provider call on the blocking legacy path.
+- Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest,LangGraphWorkerClientTest" test` passed with 37 tests, 0 failures, 0 errors.
+
 ## Session: 2026-03-20
 
 ### Phase 1: 文档与现状梳理

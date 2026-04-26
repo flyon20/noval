@@ -336,7 +336,7 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
-    void shouldAnalyzeViaLangChain4jAndPersistStructuredResult() throws Exception {
+    void shouldAnalyzeLegacySingleBookThroughWorkerAndPersistStructuredResult() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
         mockMvc.perform(put("/api/config/prompt")
                 .header("Authorization", "Bearer " + token)
@@ -355,20 +355,23 @@ class Phase4AnalysisIntegrationTest {
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.modelName").value("deepseek-chat"))
-            .andExpect(jsonPath("$.data.resultJson.source").value("mock-openai"))
-            .andExpect(jsonPath("$.data.tokenUsed").value(200))
+            .andExpect(jsonPath("$.data.modelName").value("langgraph-worker:deepseek-chat"))
+            .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
+            .andExpect(jsonPath("$.data.tokenUsed").value(156))
             .andReturn();
 
         String response = result.getResponse().getContentAsString();
         String content = JsonPath.read(response, "$.data.resultContent");
-        assertThat(content).contains("mock summary");
+        assertThat(content).contains("langgraph deconstruct content");
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("JSON ONLY {{content}}");
 
         String resultJson = jdbcTemplate.queryForObject(
             "SELECT result_json FROM analysis_result WHERE analysis_type='deconstruct' ORDER BY id DESC LIMIT 1",
             String.class
         );
-        assertThat(resultJson).contains("\"source\":\"mock-openai\"");
+        assertThat(resultJson).contains("\"source\":\"mock-langgraph\"");
     }
 
     @Test
@@ -401,7 +404,7 @@ class Phase4AnalysisIntegrationTest {
 
         String response = result.getResponse().getContentAsString();
         String resultContent = JsonPath.read(response, "$.data.resultContent");
-        assertThat(resultContent).isEqualTo("langgraph deconstruct content");
+        assertThat(resultContent).contains("langgraph deconstruct content");
 
         String resultJson = jdbcTemplate.queryForObject(
             "SELECT result_json FROM analysis_result WHERE analysis_type='deconstruct' ORDER BY id DESC LIMIT 1",
@@ -409,7 +412,59 @@ class Phase4AnalysisIntegrationTest {
         );
         assertThat(resultJson).contains("\"source\":\"mock-langgraph\"");
         assertThat(resultJson).contains("\"analysisType\":\"deconstruct\"");
-        assertThat(resultJson).contains("\"chapterCount\"");
+        assertThat(resultJson).contains("\"requestedChapterCount\":2");
+        assertThat(resultJson).contains("\"actualChapterCount\":2");
+        assertThat(resultJson).contains("\"inputChapterCount\":2");
+        assertThat(resultJson).contains("\"promptRuntime\"");
+    }
+
+    @Test
+    void shouldAnalyzeChunkedLegacySingleBookViaWorkerAndPreserveMetadata() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "legacy");
+        updateSystemConfig("analysis.chunk.max-input-tokens", "1000");
+        updateSystemConfig("analysis.chunk.target-input-tokens", "1000");
+        long bookId = insertBook("fanqie", "legacy-chunk-worker-1", "Legacy Chunk Worker Book", "Author Chunk",
+            "Chunk intro", "https://fanqienovel.com/page/legacy-chunk-worker-1");
+        insertChapter(bookId, 1, "Chapter 1", "A".repeat(5000));
+        insertChapter(bookId, 2, "Chapter 2", "B".repeat(5000));
+        insertChapter(bookId, 3, "Chapter 3", "C".repeat(5000));
+
+        MvcResult result = mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + loginAndGetToken("admin", "admin123"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":%d,"chapterCount":3,"forceReanalyze":true}
+                    """.formatted(bookId)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.analysisType").value("deconstruct"))
+            .andExpect(jsonPath("$.data.modelName").value("langgraph-worker:deepseek-chat"))
+            .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
+            .andExpect(jsonPath("$.data.resultJson.analysisType").value("deconstruct"))
+            .andExpect(jsonPath("$.data.resultJson.requestedChapterCount").value(3))
+            .andExpect(jsonPath("$.data.resultJson.actualChapterCount").value(3))
+            .andExpect(jsonPath("$.data.resultJson.inputChapterCount").value(3))
+            .andExpect(jsonPath("$.data.resultJson.promptRuntime.promptType").value("deconstruct"))
+            .andReturn();
+
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"deconstruct\"");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"kind\":\"book_analysis\"");
+
+        String response = result.getResponse().getContentAsString();
+        String resultContent = JsonPath.read(response, "$.data.resultContent");
+        assertThat(resultContent).contains("langgraph deconstruct content");
+
+        String resultJson = jdbcTemplate.queryForObject(
+            "SELECT result_json FROM analysis_result WHERE analysis_type='deconstruct' ORDER BY id DESC LIMIT 1",
+            String.class
+        );
+        assertThat(resultJson).contains("\"source\":\"mock-langgraph\"");
+        assertThat(resultJson).contains("\"analysisType\":\"deconstruct\"");
+        assertThat(resultJson).contains("\"requestedChapterCount\":3");
+        assertThat(resultJson).contains("\"actualChapterCount\":3");
+        assertThat(resultJson).contains("\"inputChapterCount\":3");
         assertThat(resultJson).contains("\"promptRuntime\"");
     }
 
@@ -499,12 +554,14 @@ class Phase4AnalysisIntegrationTest {
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.modelName").value("deepseek-reasoner"));
+            .andExpect(jsonPath("$.data.modelName").value("langgraph-worker:deepseek-reasoner"));
 
-        String normalizedRequestBody = LAST_OPENAI_REQUEST_BODY.get().replaceAll("\\s+", "");
-        assertThat(normalizedRequestBody).contains("\"model\":\"deepseek-reasoner\"");
+        String normalizedRequestBody = LAST_LANGGRAPH_REQUEST_BODY.get().replaceAll("\\s+", "");
+        assertThat(normalizedRequestBody).contains("\"modelName\":\"deepseek-reasoner\"");
+        assertThat(normalizedRequestBody).contains("\"modelKey\":\"deepseek-reasoner\"");
         assertThat(normalizedRequestBody).contains("\"temperature\":0.7");
-        assertThat(LAST_OPENAI_AUTHORIZATION.get()).isEqualTo("Bearer registry-key-2");
+        assertThat(normalizedRequestBody).contains("\"apiKey\":\"registry-key-2\"");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
     }
 
     @Test
@@ -658,7 +715,7 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
-            .andExpect(jsonPath("$.data.resultJson.summary").value("langgraph theme summary"));
+            .andExpect(jsonPath("$.data.resultJson.summary").value(org.hamcrest.Matchers.containsString("langgraph theme summary")));
 
         assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
         assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"trend_theme\"");
@@ -710,14 +767,14 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
 
-        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
-        assertThat(requestBody).contains("\"role\" : \"system\"");
-        assertThat(requestBody).contains("\"role\" : \"user\"");
+        String requestBody = LAST_LANGGRAPH_REQUEST_BODY.get();
+        assertThat(requestBody).contains("\"promptContent\":\"SYSTEM PREFIX");
         assertThat(requestBody).contains("SYSTEM PREFIX");
         assertThat(requestBody).contains("JSON ONLY");
         assertThat(requestBody).contains("Book:");
         assertThat(requestBody).contains("Author:");
         assertThat(requestBody).contains("[");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
     }
 
     @Test
@@ -741,11 +798,13 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
 
-        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
-        assertThat(requestBody).contains("response_format");
-        assertThat(requestBody).contains("\"type\" : \"json_object\"");
-        assertThat(requestBody).contains("output schema");
-        assertThat(requestBody).contains("output example");
+        String requestBody = LAST_LANGGRAPH_REQUEST_BODY.get();
+        assertThat(requestBody).contains("\"outputJsonSchema\":");
+        assertThat(requestBody).contains("\\\"summary\\\"");
+        assertThat(requestBody).contains("\"outputExampleJson\":");
+        assertThat(requestBody).contains("\"postProcessType\":\"json_extract\"");
+        assertThat(requestBody).contains("\"parseConfigJson\":");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
     }
 
     @Test
@@ -761,10 +820,11 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
 
-        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
-        assertThat(requestBody).contains("response_format");
-        assertThat(requestBody).contains("\"type\" : \"json_object\"");
-        assertThat(requestBody).contains("output schema");
+        String requestBody = LAST_LANGGRAPH_REQUEST_BODY.get();
+        assertThat(requestBody).contains("\"agentType\":\"structure\"");
+        assertThat(requestBody).contains("\"outputJsonSchema\":");
+        assertThat(requestBody).contains("\"postProcessType\":\"json_extract\"");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
     }
 
     @Test
@@ -780,10 +840,11 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200));
 
-        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
-        assertThat(requestBody).contains("response_format");
-        assertThat(requestBody).contains("\"type\" : \"json_object\"");
-        assertThat(requestBody).contains("output schema");
+        String requestBody = LAST_LANGGRAPH_REQUEST_BODY.get();
+        assertThat(requestBody).contains("\"agentType\":\"plot\"");
+        assertThat(requestBody).contains("\"outputJsonSchema\":");
+        assertThat(requestBody).contains("\"postProcessType\":\"json_extract\"");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
     }
 
     @Test
@@ -831,7 +892,8 @@ class Phase4AnalysisIntegrationTest {
             .andReturn();
 
         Number firstId = JsonPath.read(firstResult.getResponse().getContentAsString(), "$.data.id");
-        assertThat(OPENAI_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
 
         clearCrawlerLocalCache();
 
@@ -853,7 +915,8 @@ class Phase4AnalysisIntegrationTest {
 
         assertThat(secondId.longValue()).isEqualTo(firstId.longValue());
         assertThat(resultCount).isEqualTo(1);
-        assertThat(OPENAI_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
     }
 
     @Test
@@ -874,12 +937,13 @@ class Phase4AnalysisIntegrationTest {
                     """.formatted(bookId)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.modelName").value("deepseek-chat"));
+            .andExpect(jsonPath("$.data.modelName").value("langgraph-worker:deepseek-chat"));
 
-        String requestBody = LAST_OPENAI_REQUEST_BODY.get();
+        String requestBody = LAST_LANGGRAPH_REQUEST_BODY.get();
         assertThat(requestBody).contains("ALPHA chapter one");
         assertThat(requestBody).contains("BETA chapter two");
         assertThat(requestBody).doesNotContain("GAMMA chapter three");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
         assertThat(requestBody).doesNotContain("联调更新提示词");
     }
 
@@ -982,9 +1046,10 @@ class Phase4AnalysisIntegrationTest {
             String body = streamStart.getResponse().getContentAsString();
 
             assertThat(body).contains("\"event\":\"done\"");
-            assertThat(body).contains("mock summary DEFAULT");
+            assertThat(body).contains("langgraph deconstruct content");
             assertThat(body).doesNotContain("mock summary STREAM");
             assertThat(LAST_OPENAI_REQUEST_BODY.get()).doesNotContain("\"stream\":true");
+            assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
         } finally {
             aiProperties.getOpenAiCompatible().setStreamingEnabled(original);
         }
@@ -1231,17 +1296,19 @@ class Phase4AnalysisIntegrationTest {
                 String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 LAST_LANGGRAPH_REQUEST_BODY.set(requestBody);
                 LANGGRAPH_REQUEST_COUNT.incrementAndGet();
-                String analysisType = requestBody.contains("\"agentType\":\"trend_theme\"") ? "theme" : "deconstruct";
+                String analysisType = extractLangGraphAnalysisType(requestBody);
+                String modelName = "langgraph-worker:" + extractJsonString(requestBody, "modelName", "deepseek-chat");
+                String marker = extractPromptMarker(requestBody);
                 byte[] response = """
                     {
                       "taskId": "langgraph-task-1",
-                      "modelName": "langgraph-worker:deepseek-chat",
-                      "content": "langgraph %s content",
+                      "modelName": "%s",
+                      "content": "langgraph %s content %s",
                       "tokenUsed": 156,
                       "resultJson": {
                         "analysisType": "%s",
-                        "summary": "langgraph %s summary",
-                        "detailContent": "langgraph %s content",
+                        "summary": "langgraph %s summary %s",
+                        "detailContent": "langgraph %s content %s",
                         "source": "mock-langgraph",
                         "historicalWordCloud": [],
                         "themeTable": [],
@@ -1250,7 +1317,16 @@ class Phase4AnalysisIntegrationTest {
                         "snapshotComparisons": []
                       }
                     }
-                    """.formatted(analysisType, analysisType, analysisType, analysisType).getBytes(StandardCharsets.UTF_8);
+                    """.formatted(
+                    modelName,
+                    analysisType,
+                    marker,
+                    analysisType,
+                    analysisType,
+                    marker,
+                    analysisType,
+                    marker
+                ).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, response.length);
                 try (OutputStream outputStream = exchange.getResponseBody()) {
@@ -1306,6 +1382,36 @@ class Phase4AnalysisIntegrationTest {
             return "JSON ONLY";
         }
         return "DEFAULT";
+    }
+
+    private static String extractLangGraphAnalysisType(String requestBody) {
+        if (requestBody.contains("\"agentType\":\"trend_theme\"")) {
+            return "theme";
+        }
+        if (requestBody.contains("\"agentType\":\"structure\"")) {
+            return "structure";
+        }
+        if (requestBody.contains("\"agentType\":\"plot\"")) {
+            return "plot";
+        }
+        return "deconstruct";
+    }
+
+    private static String extractJsonString(String requestBody, String fieldName, String fallback) {
+        if (requestBody == null || requestBody.isBlank()) {
+            return fallback;
+        }
+        String marker = "\"" + fieldName + "\":\"";
+        int start = requestBody.indexOf(marker);
+        if (start < 0) {
+            return fallback;
+        }
+        int valueStart = start + marker.length();
+        int valueEnd = requestBody.indexOf('"', valueStart);
+        if (valueEnd <= valueStart) {
+            return fallback;
+        }
+        return requestBody.substring(valueStart, valueEnd);
     }
 
     @SuppressWarnings("unchecked")

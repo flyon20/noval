@@ -604,12 +604,13 @@ public class AnalysisService {
                                                     List<ChapterVO> chapters,
                                                     String analysisType,
                                                     Integer requestedChapterCount) {
-        String inputText = buildBookInputText(book, chapters);
-        boolean useChunk = shouldUseChunkedAnalysis(promptConfig, analysisType, inputText, chapters);
-        int analysisTimeoutMillis = resolveBookAnalysisTimeoutMillis(requestedChapterCount, chapters.size(), useChunk);
-        return useChunk
-            ? invokeChunkedAnalysis(promptConfig, book, chapters, analysisType, analysisTimeoutMillis)
-            : invokeLegacyCompatiblePythonBookAnalysis(promptConfig, book, chapters, analysisType, requestedChapterCount);
+        return invokeLegacyCompatiblePythonBookAnalysis(
+            promptConfig,
+            book,
+            chapters,
+            analysisType,
+            requestedChapterCount
+        );
     }
 
     private AiInvokeResult invokeLegacyCompatiblePythonBookAnalysis(PromptConfigEntity promptConfig,
@@ -883,7 +884,7 @@ public class AnalysisService {
         Map<String, Object> promptPayload = new LinkedHashMap<>();
         promptPayload.put("promptType", promptConfig.getPromptType());
         promptPayload.put("promptName", promptConfig.getPromptName());
-        promptPayload.put("promptContent", promptConfig.getPromptContent());
+        promptPayload.put("promptContent", aiGatewayService.resolvePromptTemplate(promptConfig, analysisType));
         promptPayload.put("inputJsonSchema", promptConfig.getInputJsonSchema());
         promptPayload.put("inputExampleJson", promptConfig.getInputExampleJson());
         promptPayload.put("modelKey", runtimeModel == null ? null : runtimeModel.getModelKey());
