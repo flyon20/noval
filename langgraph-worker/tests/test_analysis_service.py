@@ -99,6 +99,32 @@ class StreamRepairProviderClient:
         yield {"event": "done", "tokenUsed": 11}
 
 
+class RepairFallbackProviderClient:
+    def __init__(self) -> None:
+        self.invoke_calls: list[dict] = []
+
+    async def invoke(self, **kwargs):
+        self.invoke_calls.append(kwargs)
+        if len(self.invoke_calls) == 1:
+            return {
+                "model_name": kwargs["model"],
+                "content": "non-json initial response",
+                "token_used": 10,
+            }
+        return {
+            "model_name": kwargs["model"],
+            "content": "theme analysis result\nmodel: deepseek-chat\nsummary: repaired fallback",
+            "token_used": 14,
+            "result_json": {
+                "analysisType": "theme",
+                "summary": "repaired fallback",
+            },
+        }
+
+    async def stream(self, **kwargs):
+        raise AssertionError("stream should not be used in this test")
+
+
 class AlwaysFailingProviderClient:
     async def invoke(self, **kwargs):
         raise RuntimeError("all providers failed")
@@ -575,6 +601,33 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("microInnovationSignals", response.resultJson)
         self.assertNotIn("boardSummary", response.resultJson)
         self.assertNotIn("comparisonSummary", response.resultJson)
+
+    async def test_should_preserve_final_fallback_result_json_through_repair_flow(self) -> None:
+        provider = RepairFallbackProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-repair-fallback",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+            ),
+            sourcePayload={
+                "inputText": "trend content",
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("repaired fallback", response.resultJson["summary"])
+        self.assertEqual("theme", response.resultJson["analysisType"])
+        self.assertEqual(24, response.tokenUsed)
+        self.assertEqual(2, len(provider.invoke_calls))
+        self.assertIn("JSON repair task", provider.invoke_calls[1]["messages"][0]["content"])
 
 
 if __name__ == "__main__":

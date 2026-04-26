@@ -425,8 +425,9 @@ class LangGraphAnalysisService:
                 timeout_millis=self._resolve_repair_timeout_millis(request),
             )
             provider_latency_ms = self._elapsed_millis(provider_started_at)
+        repaired_result_json = repaired.get("result_json")
         return self._json_resolution(
-            result_json=self._parse_result_json(repaired["content"]),
+            result_json=repaired_result_json or self._parse_result_json(repaired["content"]),
             token_used=int(repaired["token_used"]),
             provider_call_count=1,
             queue_wait_ms=queue_wait_ms,
