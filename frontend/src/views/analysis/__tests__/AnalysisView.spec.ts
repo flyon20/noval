@@ -486,4 +486,47 @@ describe('AnalysisView', () => {
     expect(analysisApi.streamStructure).not.toHaveBeenCalled();
     expect(analysisApi.streamPlot).not.toHaveBeenCalled();
   });
+
+  test('keeps rendering single-book metadata from existing resultJson names', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
+      createStreamTask(
+        createResult('deconstruct', '# deconstruct result', {
+          analysisMode: 'chunk_merge',
+          segmentCount: 4,
+          requestedChapterCount: 10,
+          actualChapterCount: 8,
+          inputChapterCount: 8,
+          chapterFetchDegraded: true,
+          promptRuntime: 'langgraph',
+        }),
+      ),
+    );
+    vi.mocked(analysisApi.streamStructure).mockImplementation(
+      createStreamTask(createResult('structure', '# structure result')),
+    );
+    vi.mocked(analysisApi.streamPlot).mockImplementation(
+      createStreamTask(createResult('plot', '# plot result')),
+    );
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/analysis', component: AnalysisView }],
+    });
+    await router.push('/analysis?bookId=1001&platform=fanqie&chapterCount=10');
+
+    const wrapper = mount(AnalysisView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('分析方式：分段汇总');
+    expect(wrapper.text()).toContain('4 段');
+    expect(wrapper.text()).toContain('抓取章节：8/10');
+  });
 });

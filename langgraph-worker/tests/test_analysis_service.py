@@ -78,6 +78,23 @@ class SequencedProviderClient:
         raise AssertionError("stream should not be used in this test")
 
 
+class InspectingChunkProviderClient:
+    def __init__(self) -> None:
+        self.invoke_calls: list[dict] = []
+
+    async def invoke(self, **kwargs):
+        self.invoke_calls.append(kwargs)
+        call_index = len(self.invoke_calls)
+        return {
+            "model_name": kwargs["model"],
+            "content": '{"summary":"call %s","detailContent":"detail %s"}' % (call_index, call_index),
+            "token_used": call_index * 10,
+        }
+
+    async def stream(self, **kwargs):
+        raise AssertionError("stream should not be used in this test")
+
+
 class StreamRepairProviderClient:
     def __init__(self, stream_content: str, repaired_content: str) -> None:
         self.stream_content = stream_content
@@ -97,6 +114,63 @@ class StreamRepairProviderClient:
         self.stream_calls.append(kwargs)
         yield {"event": "delta", "delta": self.stream_content}
         yield {"event": "done", "tokenUsed": 11}
+
+
+class ChunkMergeRepairProviderClient:
+    def __init__(self) -> None:
+        self.invoke_calls: list[dict] = []
+
+    async def invoke(self, **kwargs):
+        self.invoke_calls.append(kwargs)
+        is_repair = "JSON repair task" in kwargs["messages"][0]["content"]
+        if is_repair:
+            return {
+                "model_name": kwargs["model"],
+                "content": '{"summary":"repaired merge","detailContent":"repaired merge detail","historicalWordCloud":[],"themeDistribution":[],"themeTable":[],"hotBooks":[],"systemArchetypes":[],"microInnovationSignals":[],"insightCards":[],"snapshotComparisons":[]}',
+                "token_used": 7,
+            }
+        return {
+            "model_name": kwargs["model"],
+            "content": "non-json chunk merge output",
+            "token_used": 11,
+        }
+
+    async def stream(self, **kwargs):
+        raise AssertionError("stream should not be used in this test")
+
+
+class RepairFallbackProviderClient:
+    def __init__(self) -> None:
+        self.invoke_calls: list[dict] = []
+
+    async def invoke(self, **kwargs):
+        self.invoke_calls.append(kwargs)
+        if len(self.invoke_calls) == 1:
+            return {
+                "model_name": kwargs["model"],
+                "content": "non-json initial response",
+                "token_used": 10,
+            }
+        return {
+            "model_name": kwargs["model"],
+            "content": "theme analysis result\nmodel: deepseek-chat\nsummary: repaired fallback",
+            "token_used": 14,
+            "result_json": {
+                "analysisType": "theme",
+                "summary": "repaired fallback",
+            },
+        }
+
+    async def stream(self, **kwargs):
+        raise AssertionError("stream should not be used in this test")
+
+
+class AlwaysFailingProviderClient:
+    async def invoke(self, **kwargs):
+        raise RuntimeError("all providers failed")
+
+    async def stream(self, **kwargs):
+        raise RuntimeError("stream should not be used in this test")
 
 
 class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -166,6 +240,133 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(fake_client.invoke_calls), 3)
         self.assertTrue(response.resultJson["meta"]["runtime"]["useChunking"])
         self.assertGreaterEqual(response.resultJson["meta"]["runtime"]["chunkCount"], 2)
+
+    async def test_should_force_chunk_mode_for_single_book_when_chapter_count_hits_java_legacy_threshold(self) -> None:
+        provider = InspectingChunkProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-force-chunk-threshold",
+            agentType="deconstruct",
+            promptConfig=PromptConfigPayload(
+                promptContent="Analyze carefully {{content}}",
+                modelName="deepseek-chat",
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": f"c{i}", "content": f"chapter-{i}"}
+                    for i in range(1, 9)
+                ],
+                "inputText": "short but multi-chapter book",
+            },
+            limits={"chunkMaxInputTokens": 999999, "chunkTargetInputTokens": 999999},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual(4, len(provider.invoke_calls))
+        self.assertEqual("chunk_merge", response.resultJson["analysisMode"])
+        self.assertEqual(3, response.resultJson["segmentCount"])
+        self.assertEqual(8, response.resultJson["inputChapterCount"])
+        self.assertTrue(response.resultJson["meta"]["runtime"]["useChunking"])
+        self.assertEqual(3, response.resultJson["meta"]["runtime"]["chunkCount"])
+
+    async def test_should_accumulate_chunk_and_merge_tokens_and_merge_metadata(self) -> None:
+        provider = InspectingChunkProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-chunk-merge-meta",
+            agentType="deconstruct",
+            promptConfig=PromptConfigPayload(
+                promptContent="Analyze carefully {{content}}",
+                modelName="deepseek-chat",
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": "c1", "content": "A" * 4000},
+                    {"chapterTitle": "c2", "content": "B" * 4000},
+                ],
+                "inputText": "A" * 9000,
+            },
+            limits={"chunkMaxInputTokens": 1000, "chunkTargetInputTokens": 1000, "chunkParallelism": 2},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("chunk_merge", response.resultJson["analysisMode"])
+        self.assertEqual(2, response.resultJson["segmentCount"])
+        self.assertEqual(2, response.resultJson["inputChapterCount"])
+        self.assertEqual(60, response.tokenUsed)
+        self.assertEqual(3, response.resultJson["meta"]["runtime"]["providerCallCount"])
+
+    async def test_should_preserve_structured_output_constraints_in_chunk_merge_prompt(self) -> None:
+        provider = InspectingChunkProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-chunk-merge-structured",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="# Output Format\nUse Markdown report with tables.\n\n{{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+                outputExampleJson='{"summary":"example"}',
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": "c1", "content": "A" * 4000},
+                    {"chapterTitle": "c2", "content": "B" * 4000},
+                ],
+                "inputText": "A" * 9000,
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={"chunkMaxInputTokens": 1000, "chunkTargetInputTokens": 1000},
+        )
+
+        await service.run(request)
+
+        merge_messages = provider.invoke_calls[-1]["messages"]
+        merged_prompt_payload = "\n".join(message["content"] for message in merge_messages)
+        self.assertIn("Return exactly one JSON object", merged_prompt_payload)
+        self.assertIn("Do not output markdown", merged_prompt_payload)
+        self.assertIn("output schema:", merged_prompt_payload)
+        self.assertIn("output example:", merged_prompt_payload)
+        self.assertIn("Book: Book", merged_prompt_payload)
+        self.assertIn("Author: Author", merged_prompt_payload)
+        self.assertIn("Intro: Intro", merged_prompt_payload)
+        self.assertIn("##", merged_prompt_payload)
+
+    async def test_should_accumulate_nested_provider_call_count_across_chunk_and_merge_stages(self) -> None:
+        provider = ChunkMergeRepairProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-chunk-merge-runtime-count",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+                outputExampleJson='{"summary":"example"}',
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": "c1", "content": "A" * 4000},
+                    {"chapterTitle": "c2", "content": "B" * 4000},
+                ],
+                "inputText": "A" * 9000,
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={"chunkMaxInputTokens": 1000, "chunkTargetInputTokens": 1000},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual(6, response.resultJson["meta"]["runtime"]["providerCallCount"])
+        self.assertEqual(6, len(provider.invoke_calls))
 
     async def test_should_emit_runtime_metrics_before_done_in_stream_mode(self) -> None:
         service = LangGraphAnalysisService(provider_client=FakeProviderClient())
@@ -309,6 +510,13 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, response.resultJson["meta"]["runtime"]["providerCallCount"])
         self.assertTrue(provider.invoke_calls[1]["require_json"])
         self.assertIn("JSON repair task", provider.invoke_calls[1]["messages"][0]["content"])
+        self.assertIn("boardSummary", response.resultJson)
+        self.assertIn("trendPreview", response.resultJson)
+        self.assertIn("historicalWordCloud", response.resultJson)
+        self.assertIn("themeDistribution", response.resultJson)
+        self.assertIn("hotBooks", response.resultJson)
+        self.assertIn("insightCards", response.resultJson)
+        self.assertIn("snapshotComparisons", response.resultJson)
 
     async def test_stream_should_repair_theme_json_when_stream_payload_is_not_valid_json(self) -> None:
         provider = StreamRepairProviderClient(
@@ -366,8 +574,15 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         await service.run(request)
 
         prompt = provider.invoke_calls[0]["messages"][0]["content"]
-        self.assertIn("Keep summary, boardSummary, trendPreview, and comparisonSummary concise", prompt)
-        self.assertIn("Keep hotBooks, themeTable, themeDistribution, systemArchetypes, microInnovationSignals", prompt)
+        self.assertIn("output schema:", prompt)
+        self.assertIn('{"type":"object"}', prompt)
+        self.assertIn("output example:", prompt)
+        self.assertIn('{"summary":"example"}', prompt)
+        self.assertIn("Return exactly one JSON object", prompt)
+        self.assertIn("Do not output markdown", prompt)
+        self.assertIn("boardSummary", prompt)
+        self.assertIn("trendPreview", prompt)
+        self.assertIn("themeDistribution", prompt)
 
     async def test_should_not_salvage_nested_json_object_from_truncated_outer_json(self) -> None:
         service = LangGraphAnalysisService(
@@ -480,6 +695,106 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("systemPresence", system_prompt)
         self.assertIn("antiRoutineDesign", system_prompt)
         self.assertIn("avoidedPoisonPoints", system_prompt)
+
+    async def test_theme_default_result_should_keep_structured_contract_keys(self) -> None:
+        service = LangGraphAnalysisService(
+            provider_client=StaticProviderClient('{"summary":"theme summary","detailContent":"theme detail"}')
+        )
+        request = RunRequest(
+            taskId="task-theme-defaults",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+            ),
+            sourcePayload={
+                "inputText": "trend content",
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("theme", response.resultJson["analysisType"])
+        self.assertIn("trendPreview", response.resultJson)
+        self.assertIn("historicalWordCloud", response.resultJson)
+        self.assertIn("themeTable", response.resultJson)
+        self.assertIn("hotBooks", response.resultJson)
+        self.assertIn("insightCards", response.resultJson)
+        self.assertIn("snapshotComparisons", response.resultJson)
+        self.assertEqual([], response.resultJson["historicalWordCloud"])
+        self.assertEqual([], response.resultJson["themeTable"])
+        self.assertEqual([], response.resultJson["hotBooks"])
+        self.assertEqual([], response.resultJson["insightCards"])
+        self.assertEqual([], response.resultJson["snapshotComparisons"])
+
+    async def test_theme_final_fallback_should_keep_structured_contract_keys(self) -> None:
+        service = LangGraphAnalysisService(provider_client=AlwaysFailingProviderClient())
+        request = RunRequest(
+            taskId="task-theme-fallback",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                providerType="openai-compatible",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+            ),
+            sourcePayload={
+                "inputText": "trend content",
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("theme", response.resultJson["analysisType"])
+        self.assertIn("theme analysis result", response.content)
+        self.assertIn("trendPreview", response.resultJson)
+        self.assertIn("historicalWordCloud", response.resultJson)
+        self.assertIn("themeTable", response.resultJson)
+        self.assertIn("hotBooks", response.resultJson)
+        self.assertIn("insightCards", response.resultJson)
+        self.assertIn("snapshotComparisons", response.resultJson)
+        self.assertNotIn("modelName", response.resultJson)
+        self.assertNotIn("content", response.resultJson)
+        self.assertNotIn("providerFailures", response.resultJson["meta"])
+        self.assertNotIn("themeDistribution", response.resultJson)
+        self.assertNotIn("systemArchetypes", response.resultJson)
+        self.assertNotIn("microInnovationSignals", response.resultJson)
+        self.assertNotIn("boardSummary", response.resultJson)
+        self.assertNotIn("comparisonSummary", response.resultJson)
+
+    async def test_should_preserve_final_fallback_result_json_through_repair_flow(self) -> None:
+        provider = RepairFallbackProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-repair-fallback",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+            ),
+            sourcePayload={
+                "inputText": "trend content",
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("repaired fallback", response.resultJson["summary"])
+        self.assertEqual("theme", response.resultJson["analysisType"])
+        self.assertEqual(24, response.tokenUsed)
+        self.assertEqual(2, len(provider.invoke_calls))
+        self.assertIn("JSON repair task", provider.invoke_calls[1]["messages"][0]["content"])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 package com.novelanalyzer.modules.data;
 
 import com.jayway.jsonpath.JsonPath;
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,9 +12,15 @@ import org.springframework.http.MediaType;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,6 +56,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 class Phase5BackendIntegrationTest {
 
+    private static final HttpServer MOCK_LANGGRAPH_SERVER = startMockLangGraphServer();
+
+    @DynamicPropertySource
+    static void registerAiProperties(DynamicPropertyRegistry registry) {
+        registry.add("app.ai.langgraph-worker.base-url", () -> "http://127.0.0.1:" + MOCK_LANGGRAPH_SERVER.getAddress().getPort());
+        registry.add("app.ai.langgraph-worker.internal-api-key", () -> "phase5-langgraph-key");
+    }
+
+    @AfterAll
+    static void shutdownMockServer() {
+        MOCK_LANGGRAPH_SERVER.stop(0);
+    }
+
     @Autowired
     private MockMvc mockMvc;
     @Autowired
@@ -68,6 +89,14 @@ class Phase5BackendIntegrationTest {
     @Test
     void shouldManageSystemConfig() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .param("configKey", "analysis.runtime.mode"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configKey").value("analysis.runtime.mode"))
+            .andExpect(jsonPath("$.data.configValue").value("langgraph"));
 
         mockMvc.perform(get("/api/config/system")
                 .header("Authorization", "Bearer " + token)
@@ -587,6 +616,7 @@ class Phase5BackendIntegrationTest {
 
     @Test
     void shouldReturnBoardScopedTrendAnalysis() throws Exception {
+        setSystemConfig("analysis.runtime.mode", "legacy");
         String token = loginAndGetToken("admin", "admin123");
 
         mockMvc.perform(get("/api/analysis/trend")
@@ -663,6 +693,45 @@ class Phase5BackendIntegrationTest {
         assertEquals(1, promptConfigContractCount);
     }
 
+    private static HttpServer startMockLangGraphServer() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+            server.createContext("/internal/analysis/run", exchange -> {
+                exchange.getRequestBody().readAllBytes();
+                byte[] response = """
+                    {
+                      "taskId": "phase5-langgraph-task",
+                      "modelName": "langgraph-worker:deepseek-chat",
+                      "content": "phase5 langgraph trend content",
+                      "tokenUsed": 156,
+                      "resultJson": {
+                        "analysisType": "theme",
+                        "summary": "phase5 langgraph trend summary",
+                        "boardSummary": "phase5 board summary",
+                        "trendPreview": "phase5 trend preview",
+                        "detailContent": "phase5 langgraph trend content",
+                        "historicalWordCloud": [{"name":"urban-brain","value":24}],
+                        "themeDistribution": [{"theme":"urban-brain","count":3,"ratio":50.0}],
+                        "themeTable": [{"theme":"urban-brain","count":3,"ratio":50.0,"representativeBooks":[{"bookName":"Brain City King","rankNo":1}]}],
+                        "hotBooks": [{"bookName":"Brain City King","rankNo":1,"reason":"stable lead"}],
+                        "insightCards": [{"label":"Lead lane","value":"urban-brain","note":"dominates"}],
+                        "snapshotComparisons": [{"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","topThemeRatio":50.0,"leadBookName":"Brain City King","change":"holding"}],
+                        "comparisonSummary": "phase5 comparison summary"
+                      }
+                    }
+                    """.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
+            server.start();
+            return server;
+        } catch (IOException ex) {
+            throw new IllegalStateException("failed to start mock LangGraph server", ex);
+        }
+    }
+
     private String loginAndGetToken(String username, String password) throws Exception {
         String phone = switch (username) {
             case "admin" -> "13800138000";
@@ -676,6 +745,20 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
+    }
+
+    private void setSystemConfig(String configKey, String configValue) {
+        jdbcTemplate.update(
+            "DELETE FROM system_config WHERE config_key = ?",
+            configKey
+        );
+        jdbcTemplate.update(
+            "INSERT INTO system_config (config_key, config_value, config_type, description, is_editable, deleted) VALUES (?, ?, ?, ?, 1, 0)",
+            configKey,
+            configValue,
+            "test",
+            "test override"
+        );
     }
 
     private String jsonStringLiteral(String value) {

@@ -31,6 +31,10 @@ class JsonResolution(TypedDict):
     provider_latency_ms: int
 
 
+LARGE_BOOK_FORCE_CHUNK_CHAPTER_COUNT = 8
+LARGE_BOOK_FORCE_CHUNK_SEGMENT_SIZE = 3
+
+
 class LangGraphAnalysisService:
     def __init__(self, provider_client: OpenAICompatibleProviderClient | None = None) -> None:
         self.provider_client = provider_client or OpenAICompatibleProviderClient()
@@ -198,7 +202,7 @@ class LangGraphAnalysisService:
             int(request.limits.get("chunkTargetInputTokens") or 3500),
         )
         estimated_tokens = self._estimate_tokens(input_text)
-        if chapters and estimated_tokens > max_input_tokens:
+        if self._should_force_chunking(chapters) or (chapters and estimated_tokens > max_input_tokens):
             return {
                 "input_text": input_text,
                 "use_chunking": True,
@@ -216,29 +220,42 @@ class LangGraphAnalysisService:
         async with self._llm_semaphore:
             queue_wait_ms = self._elapsed_millis(semaphore_started_at)
             provider_started_at = perf_counter()
-            result = await self.provider_client.invoke(
-                messages=messages,
-                model=prompt_config.modelName or settings.default_model,
-                temperature=prompt_config.temperature,
-                max_tokens=prompt_config.maxTokens,
-                require_json=self._requires_json(prompt_config, analysis_type),
-                base_url=prompt_config.baseUrl,
-                api_key=prompt_config.apiKey,
-                timeout_millis=self._resolve_timeout_millis(request),
-            )
+            try:
+                result = await self.provider_client.invoke(
+                    request=request,
+                    messages=messages,
+                    model=prompt_config.modelName or settings.default_model,
+                    temperature=prompt_config.temperature,
+                    max_tokens=prompt_config.maxTokens,
+                    require_json=self._requires_json(prompt_config, analysis_type),
+                    base_url=prompt_config.baseUrl,
+                    api_key=prompt_config.apiKey,
+                    timeout_millis=self._resolve_timeout_millis(request),
+                )
+            except Exception as exc:
+                result = self._build_final_fallback_result(
+                    request=request,
+                    analysis_type=analysis_type,
+                    input_text=input_text,
+                    prompt_config=prompt_config,
+                    failure_reason=str(exc) or exc.__class__.__name__,
+                )
             provider_latency_ms = self._elapsed_millis(provider_started_at)
-        json_resolution = await self._resolve_result_json(
+        result_json = result.get("result_json")
+        json_resolution = self._json_resolution(result_json=result_json) if result_json else await self._resolve_result_json(
             request=request,
             prompt_config=prompt_config,
             analysis_type=analysis_type,
             content=result["content"],
         )
+        if not result_json:
+            result_json = json_resolution["result_json"]
         return self._build_response(
             request,
             result["content"],
             int(result["token_used"]) + json_resolution["token_used"],
             result["model_name"],
-            result_json=json_resolution["result_json"],
+            result_json=result_json,
             runtime_meta=self._build_runtime_meta(
                 request,
                 stream_mode=False,
@@ -261,6 +278,11 @@ class LangGraphAnalysisService:
             f"## 分段 {index}\n{result.content}"
             for index, result in enumerate(chunk_results, start=1)
         )
+        source_payload = request.sourcePayload or {}
+        merged_input = self._build_chunk_merge_input(
+            source_payload,
+            merged_input.split("\n\n"),
+        )
         merged_prompt = self._build_merge_prompt(request.promptConfig)
         merged = await self._invoke_once(
             request=request,
@@ -270,6 +292,7 @@ class LangGraphAnalysisService:
         merged.tokenUsed += sum(result.tokenUsed for result in chunk_results)
         merged.resultJson.setdefault("analysisMode", "chunk_merge")
         merged.resultJson.setdefault("segmentCount", len(chunk_results))
+        merged.resultJson.setdefault("inputChapterCount", len(source_payload.get("chapters") or []))
         return self._apply_runtime_meta(
             merged,
             self._build_chunk_runtime_meta(request, chunk_results, merged),
@@ -401,6 +424,7 @@ class LangGraphAnalysisService:
             queue_wait_ms = self._elapsed_millis(semaphore_started_at)
             provider_started_at = perf_counter()
             repaired = await self.provider_client.invoke(
+                request=request,
                 messages=messages,
                 model=prompt_config.modelName or settings.default_model,
                 temperature=0,
@@ -411,8 +435,9 @@ class LangGraphAnalysisService:
                 timeout_millis=self._resolve_repair_timeout_millis(request),
             )
             provider_latency_ms = self._elapsed_millis(provider_started_at)
+        repaired_result_json = repaired.get("result_json")
         return self._json_resolution(
-            result_json=self._parse_result_json(repaired["content"]),
+            result_json=repaired_result_json or self._parse_result_json(repaired["content"]),
             token_used=int(repaired["token_used"]),
             provider_call_count=1,
             queue_wait_ms=queue_wait_ms,
@@ -658,6 +683,14 @@ class LangGraphAnalysisService:
 
     def _split_book_chunks(self, source_payload: dict[str, Any], chapters: list[dict[str, Any]], target_tokens: int) -> list[dict[str, Any]]:
         book = source_payload.get("book") or {}
+        if self._should_force_chunking(chapters):
+            return [
+                {
+                    "input_text": self._build_book_input_text(book, chunk),
+                    "chapters": chunk,
+                }
+                for chunk in self._split_chapters_by_fixed_size(chapters, LARGE_BOOK_FORCE_CHUNK_SEGMENT_SIZE)
+            ]
         chunks: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
         for chapter in chapters:
@@ -675,6 +708,17 @@ class LangGraphAnalysisService:
                 "chapters": chunk,
             }
             for chunk in chunks
+        ]
+
+    def _should_force_chunking(self, chapters: list[dict[str, Any]]) -> bool:
+        return len(chapters or []) >= LARGE_BOOK_FORCE_CHUNK_CHAPTER_COUNT
+
+    def _split_chapters_by_fixed_size(self, chapters: list[dict[str, Any]], segment_size: int) -> list[list[dict[str, Any]]]:
+        safe_segment_size = max(1, int(segment_size))
+        return [
+            chapters[index:index + safe_segment_size]
+            for index in range(0, len(chapters), safe_segment_size)
+            if chapters[index:index + safe_segment_size]
         ]
 
     def _build_book_input_text(self, book: dict[str, Any], chapters: list[dict[str, Any]]) -> str:
@@ -700,6 +744,17 @@ class LangGraphAnalysisService:
             "你正在整合同一本小说的多段局部分析结果。\n请去重、补全跨章节关系，输出一份最终结论。\n"
             f"原始分析要求：\n{original}\n\n{{content}}"
         )
+
+    def _build_chunk_merge_input(self, source_payload: dict[str, Any], chunk_outputs: list[str]) -> str:
+        book = source_payload.get("book") or {}
+        parts = [
+            f"Book: {book.get('bookName', '')}",
+            f"Author: {book.get('author', '')}",
+            f"Intro: {book.get('intro', '')}",
+            "",
+        ]
+        parts.extend(chunk_outputs)
+        return "\n\n".join(parts)
 
     def _estimate_tokens(self, text: str) -> int:
         count = 0
@@ -761,7 +816,7 @@ class LangGraphAnalysisService:
             stream_mode=False,
             use_chunking=True,
             chunk_count=len(chunk_results),
-            provider_call_count=len(runtime_metas),
+            provider_call_count=sum(int(meta.get("providerCallCount") or 0) for meta in runtime_metas),
             queue_wait_ms=sum(int(meta.get("queueWaitMillis") or 0) for meta in runtime_metas),
             provider_latency_ms=sum(int(meta.get("providerLatencyMillis") or 0) for meta in runtime_metas),
         )
@@ -810,3 +865,36 @@ class LangGraphAnalysisService:
         if len(compact) <= max_length:
             return compact
         return compact[:max_length] + "..."
+
+    def _build_final_fallback_result(
+        self,
+        *,
+        request: RunRequest,
+        analysis_type: str,
+        input_text: str,
+        prompt_config: PromptConfigPayload,
+        failure_reason: str,
+    ) -> dict[str, Any]:
+        _ = failure_reason
+        model_name = prompt_config.modelName or settings.default_model
+        summary_source = input_text or prompt_config.promptContent or ""
+        summary = self._short_text(summary_source, 200)
+        content = f"{analysis_type} analysis result\nmodel: {model_name}\nsummary: {summary}"
+        result_json: dict[str, Any] = {
+            "analysisType": analysis_type,
+            "summary": summary,
+        }
+        if analysis_type == "theme":
+            result_json.setdefault("historicalWordCloud", [])
+            result_json.setdefault("themeTable", [])
+            result_json.setdefault("hotBooks", [])
+            result_json.setdefault("insightCards", [])
+            result_json.setdefault("snapshotComparisons", [])
+            result_json.setdefault("trendPreview", self._short_text(content, 260))
+            result_json.setdefault("historyAnalysisCount", len(request.sourcePayload.get("snapshots") or []))
+        return {
+            "model_name": model_name,
+            "content": content,
+            "token_used": max(120, len(summary_source) // 2),
+            "result_json": result_json,
+        }

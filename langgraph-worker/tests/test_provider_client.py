@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from app.models.analysis import PromptConfigPayload, RunRequest
 from app.services.provider_client import OpenAICompatibleProviderClient
 
 
@@ -105,7 +106,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
         client = OpenAICompatibleProviderClient()
 
         result = await client.invoke(
-            messages=[{"role": "user", "content": "请只回复ok"}],
+            messages=[{"role": "user", "content": "璇峰彧鍥炲ok"}],
             model="deepseek-chat",
             temperature=0.3,
             max_tokens=16,
@@ -129,7 +130,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(httpx.ConnectError):
             await client.invoke(
-                messages=[{"role": "user", "content": "请只回复ok"}],
+                messages=[{"role": "user", "content": "璇峰彧鍥炲ok"}],
                 model="deepseek-chat",
                 temperature=0.3,
                 max_tokens=16,
@@ -155,7 +156,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
 
         events = [
             event async for event in client.stream(
-                messages=[{"role": "user", "content": "请只回复ok"}],
+                messages=[{"role": "user", "content": "璇峰彧鍥炲ok"}],
                 model="deepseek-chat",
                 temperature=0.3,
                 max_tokens=16,
@@ -169,6 +170,101 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(2, len(factory.constructor_calls))
         self.assertEqual(1, sleep_mock.await_count)
+
+
+class RoutingProviderClient(OpenAICompatibleProviderClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_order: list[str] = []
+        self.openai_effects: list[object] = []
+        self.dify_effects: list[object] = []
+
+    async def _invoke_openai_compatible(self, **kwargs) -> dict:
+        self.call_order.append("openai")
+        effect = self.openai_effects.pop(0)
+        if isinstance(effect, Exception):
+            raise effect
+        return effect
+
+    async def _invoke_dify_blocking(self, **kwargs) -> dict:
+        self.call_order.append("dify")
+        effect = self.dify_effects.pop(0)
+        if isinstance(effect, Exception):
+            raise effect
+        return effect
+
+
+class ProviderClientRoutingTest(unittest.IsolatedAsyncioTestCase):
+    def _build_request(self, provider_type: str | None = None) -> RunRequest:
+        return RunRequest(
+            taskId="task-provider-routing",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                providerType=provider_type,
+                modelName="deepseek-chat",
+            ),
+            sourcePayload={"inputText": "trend content", "snapshots": [{"snapshotId": 1}]},
+            limits={},
+        )
+
+    async def test_invoke_should_try_dify_before_openai_when_primary_provider_is_dify(self) -> None:
+        client = RoutingProviderClient()
+        client.dify_effects = [RuntimeError("dify unavailable")]
+        client.openai_effects = [{"model_name": "deepseek-chat", "content": "openai fallback", "token_used": 21}]
+
+        result = await client.invoke(
+            request=self._build_request("dify"),
+            messages=[{"role": "user", "content": "hello"}],
+            model="deepseek-chat",
+            temperature=0.3,
+            max_tokens=32,
+            require_json=False,
+        )
+
+        self.assertEqual(["dify", "openai"], client.call_order)
+        self.assertEqual("openai fallback", result["content"])
+
+    async def test_invoke_should_try_openai_before_dify_when_primary_provider_is_not_dify(self) -> None:
+        client = RoutingProviderClient()
+        client.openai_effects = [RuntimeError("openai unavailable")]
+        client.dify_effects = [{"model_name": "dify:workflow-1", "content": "dify fallback", "token_used": 13}]
+
+        result = await client.invoke(
+            request=self._build_request("openai-compatible"),
+            messages=[{"role": "user", "content": "hello"}],
+            model="deepseek-chat",
+            temperature=0.3,
+            max_tokens=32,
+            require_json=False,
+        )
+
+        self.assertEqual(["openai", "dify"], client.call_order)
+        self.assertEqual("dify fallback", result["content"])
+
+    async def test_invoke_should_return_final_fallback_payload_when_all_providers_fail(self) -> None:
+        client = RoutingProviderClient()
+        client.openai_effects = [RuntimeError("openai unavailable")]
+        client.dify_effects = [RuntimeError("dify unavailable")]
+
+        result = await client.invoke(
+            request=self._build_request("openai-compatible"),
+            messages=[{"role": "system", "content": "prompt"}, {"role": "user", "content": "trend content"}],
+            model="deepseek-chat",
+            temperature=0.3,
+            max_tokens=32,
+            require_json=False,
+        )
+
+        self.assertEqual(["openai", "dify"], client.call_order)
+        self.assertEqual("deepseek-chat", result["model_name"])
+        self.assertIn("theme analysis result", result["content"])
+        self.assertIn("summary", result["result_json"])
+        self.assertEqual("theme", result["result_json"]["analysisType"])
+        self.assertNotIn("modelName", result["result_json"])
+        self.assertNotIn("content", result["result_json"])
+        self.assertNotIn("meta", result["result_json"])
 
 
 if __name__ == "__main__":

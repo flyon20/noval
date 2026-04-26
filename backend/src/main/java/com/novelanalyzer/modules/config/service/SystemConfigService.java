@@ -38,7 +38,7 @@ public class SystemConfigService {
     private static final Map<String, DefaultSystemConfig> DEFAULT_SYSTEM_CONFIGS = Map.ofEntries(
         Map.entry("ai.provider.type", new DefaultSystemConfig("openai-compatible", "ai", "AI provider type", true)),
         Map.entry("ai.timeout.millis", new DefaultSystemConfig("15000", "ai", "AI request timeout in milliseconds", true)),
-        Map.entry("analysis.runtime.mode", new DefaultSystemConfig("legacy", "analysis", "Analysis runtime mode: legacy or langgraph", true)),
+        Map.entry("analysis.runtime.mode", new DefaultSystemConfig("langgraph", "analysis", "Analysis runtime mode: legacy or langgraph", true)),
         Map.entry("ai.openai-compatible.base-url", new DefaultSystemConfig("", "ai", "OpenAI compatible base URL, blank means fallback to application config", true)),
         Map.entry("ai.openai-compatible.default-model", new DefaultSystemConfig("deepseek-chat", "ai", "Default OpenAI compatible model name", true)),
         Map.entry("ai.openai-compatible.api-key", new DefaultSystemConfig("", "ai", "OpenAI compatible API key (stored in DB, takes precedence over env var)", true)),
@@ -174,7 +174,7 @@ public class SystemConfigService {
                 .filter(model -> candidate.equals(model.getModelKey()) || candidate.equals(model.getModelName()))
                 .findFirst();
             if (matched.isPresent()) {
-                return matched;
+                return matched.map(this::toRuntimeModel);
             }
         }
         String defaultModelKey = registry.getDefaultModelKey();
@@ -183,11 +183,31 @@ public class SystemConfigService {
             .filter(model -> defaultModelKey != null && defaultModelKey.equals(model.getModelKey()))
             .findFirst();
         if (defaultModel.isPresent()) {
-            return defaultModel;
+            return defaultModel.map(this::toRuntimeModel);
         }
         return registry.getModels().stream()
             .filter(model -> Boolean.TRUE.equals(model.getEnabled()))
-            .findFirst();
+            .findFirst()
+            .map(this::toRuntimeModel);
+    }
+
+    private AiModelRegistryModelVO toRuntimeModel(AiModelRegistryModelVO model) {
+        AiModelRegistryModelVO runtime = new AiModelRegistryModelVO();
+        runtime.setModelKey(model.getModelKey());
+        runtime.setDisplayName(model.getDisplayName());
+        runtime.setProviderType(model.getProviderType());
+        runtime.setModelName(model.getModelName());
+        runtime.setBaseUrl(model.getBaseUrl());
+        runtime.setApiKey(configSecretService.decryptIfNecessary(model.getApiKey()));
+        runtime.setApiKeyConfigured(model.getApiKeyConfigured());
+        runtime.setApiKeyMasked(model.getApiKeyMasked());
+        runtime.setEnabled(model.getEnabled());
+        runtime.setIsDefault(model.getIsDefault());
+        runtime.setDefaultTemperature(model.getDefaultTemperature());
+        runtime.setMaxTokens(model.getMaxTokens());
+        runtime.setTemperatureSpecJson(model.getTemperatureSpecJson());
+        runtime.setPromptBindings(model.getPromptBindings());
+        return runtime;
     }
 
     private SystemConfigVO toVO(SystemConfigEntity entity) {
