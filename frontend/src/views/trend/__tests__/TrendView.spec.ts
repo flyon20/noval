@@ -1224,7 +1224,8 @@ describe('TrendView', () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
     const { crawlerApi } = await import('@/api/crawler');
-    const trendPreview = 'preview only contract marker';
+    const initialTrendPreview = 'initial visual preview marker';
+    const resultTrendPreview = 'rerun result preview marker';
     const themeDistribution = [{ theme: 'urban-brain-live-fortune-good-evil', count: 3, ratio: 60 }];
     const themeTable = [
       {
@@ -1263,7 +1264,7 @@ describe('TrendView', () => {
         message: 'success',
         data: createVisualPayload({
           boardSummary: '',
-          trendPreview,
+          trendPreview: initialTrendPreview,
           detailContent: '',
           historicalWordCloud: [],
           themeDistribution: [],
@@ -1280,7 +1281,7 @@ describe('TrendView', () => {
       resultJson: {
         summary: 'summary should not satisfy preview',
         boardSummary: 'compat board summary',
-        trendPreview,
+        trendPreview: resultTrendPreview,
         historicalWordCloud,
         themeDistribution,
         themeTable,
@@ -1291,12 +1292,13 @@ describe('TrendView', () => {
     })) as never);
 
     const wrapper = await mountTrendView();
-
-    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain(trendPreview);
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain(initialTrendPreview);
 
     await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
     await flushPromises();
 
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).toContain('summary should not satisfy preview');
+    expect(wrapper.get('[data-test="trend-result-preview"]').text()).not.toContain(initialTrendPreview);
     expect(wrapper.get('[data-test="trend-result-support-grid"]').text()).toContain('still rising');
     expect(wrapper.get('[data-test="trend-result-theme-table"]').text()).toContain(themeTable[0].theme);
     expect(wrapper.get('[data-test="trend-result-hot-books"]').text()).toContain(hotBooks[0].bookName);
@@ -1331,6 +1333,10 @@ describe('TrendView', () => {
     expect(summaryCards.exists()).toBe(true);
     expect(summaryCards.props('summary')).toContain('compat board summary');
 
+    const trendResultPreview = wrapper.findComponent({ name: 'TrendResultPreview' });
+    expect(trendResultPreview.exists()).toBe(true);
+    expect(trendResultPreview.props('resultContent')).toContain('这是一个很长的趋势分析结果');
+
     const trendState = wrapper.vm as {
       trend: {
         state: {
@@ -1340,7 +1346,7 @@ describe('TrendView', () => {
         };
       };
     };
-    expect(trendState.trend.state.result?.resultJson?.trendPreview).toBe(trendPreview);
+    expect(trendState.trend.state.result?.resultJson?.trendPreview).toBe(resultTrendPreview);
   });
 });
 
