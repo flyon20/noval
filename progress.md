@@ -19,6 +19,12 @@
 - Preserved rollback coverage by making legacy-path tests explicitly set `analysis.runtime.mode=legacy` before asserting OpenAI streaming, progress, chunk, and trend behavior.
 - Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest,Phase5BackendIntegrationTest" test` passed with 48 tests, 0 failures, 0 errors.
 
+## Session Addendum: 2026-04-26 AI Execution Consolidation Task 7
+- Removed Java direct AI provider execution from `AiGatewayService`, leaving prompt rendering/token estimation and the cancellation handle while `AnalysisService` routes blocking, streaming, chunk, and merge execution through `langgraph-worker`.
+- Updated legacy-mode streaming assertions to verify LangGraph worker streaming payloads and zero Java OpenAI-compatible calls instead of old OpenAI streaming helper behavior.
+- Verified residual search results: `[chunk-progress]` remains only as non-provider chunk progress text, and `ReflectionTestUtils` remains in focused helper tests/cache inspection rather than old streaming assertions.
+- Verification evidence: `mvn "-Dtest=AiGatewayServiceTest,AnalysisServiceTimeoutTest,LangGraphWorkerClientTest" test` passed with 18 tests, 0 failures, 0 errors.
+- Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest" test` passed with 31 tests, 0 failures, 0 errors.
 ## Session: 2026-03-20
 
 ### Phase 1: 文档与现状梳理

@@ -235,83 +235,20 @@ public class AnalysisService {
                 }
                 CrawlBookEntity book = crawlerRepository.findBookById(request.getBookId())
                     .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
-                if (isLangGraphRuntimeEnabled()) {
-                    AnalysisResultVO result = streamLangGraphBookAnalysis(
-                        emitter,
-                        request,
-                        promptConfig,
-                        book,
-                        chapters,
-                        analysisType,
-                        invocationHandle
-                    );
-                    ensureNotCancelled(invocationHandle);
-                    sendDoneEvent(emitter, result);
-                    emitter.complete();
-                    return;
-                }
-                String inputText = buildBookInputText(book, chapters);
-                boolean useChunk = shouldUseChunkedAnalysis(promptConfig, analysisType, inputText, chapters);
-                int analysisTimeoutMillis = resolveBookAnalysisTimeoutMillis(
-                    request.getChapterCount(),
-                    chapters.size(),
-                    useChunk
+                AnalysisResultVO result = streamLangGraphBookAnalysis(
+                    emitter,
+                    request,
+                    promptConfig,
+                    book,
+                    chapters,
+                    analysisType,
+                    invocationHandle
                 );
-
-                if (!useChunk) {
-                    boolean streamed = aiGatewayService.streamToEmitter(
-                        promptConfig, inputText, analysisType, analysisTimeoutMillis, emitter, invocationHandle,
-                        (em, aiResult) -> {
-                            try {
-                                String cacheKey = buildAnalysisCacheKey(
-                                    promptConfig, request.getBookId(), analysisType, request.getChapterCount());
-                                attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size());
-                                Long resultId = saveAnalysisResult(
-                                    request.getPlatform(), request.getBookId(), analysisType,
-                                    request.getChapterCount(), promptConfig.getId(), aiResult);
-                                AnalysisResultVO vo = new AnalysisResultVO();
-                                vo.setId(resultId);
-                                vo.setBookId(request.getBookId());
-                                vo.setAnalysisType(analysisType);
-                                vo.setModelName(aiResult.getModelName());
-                                vo.setResultContent(aiResult.getContent());
-                                vo.setResultJson(aiResult.getResultJson());
-                                vo.setTokenUsed(aiResult.getTokenUsed());
-                                crawlerCacheService.put(cacheKey, vo, ANALYSIS_TTL_SECONDS);
-                                sendDoneEvent(em, vo);
-                                em.complete();
-                            } catch (Exception e) {
-                                em.completeWithError(e);
-                            }
-                        },
-                        err -> completeWithErrorEvent(emitter, traceId,
-                            err instanceof Exception ex ? ex : new RuntimeException(err))
-                    );
-                    if (streamed) return; // 真流式已异步启动，退出当前线程
-                }
-
-                if (useChunk) {
-                    AnalysisResultVO result = streamChunkedAnalysis(
-                        emitter,
-                        request,
-                        promptConfig,
-                        book,
-                        chapters,
-                        analysisType,
-                        invocationHandle
-                    );
-                    ensureNotCancelled(invocationHandle);
-                    sendDoneEvent(emitter, result);
-                    emitter.complete();
-                    return;
-                }
-
-                // 降级：chunk 分析或流式不可用 → 阻塞等全文再切割推送
-                AnalysisResultVO result = analyze(analysisType, request);
                 ensureNotCancelled(invocationHandle);
-                sendDeltaEvents(emitter, result.getResultContent());
                 sendDoneEvent(emitter, result);
                 emitter.complete();
+                return;
+
             } catch (AnalysisCancelledException ignored) {
                 emitter.complete();
             } catch (Exception ex) {
@@ -377,9 +314,7 @@ public class AnalysisService {
 
         try {
             Map<Long, List<CrawlRankEntity>> ranksBySnapshot = loadBoardSnapshotRanks(snapshots);
-            AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
-                ? invokeLangGraphTrendAnalysis(promptConfig, board, snapshots, ranksBySnapshot)
-                : invokeAi(promptConfig, buildTrendInputText(board, snapshots, ranksBySnapshot), "theme");
+            AiInvokeResult aiResult = invokeLangGraphTrendAnalysis(promptConfig, board, snapshots, ranksBySnapshot);
             aiResult.setResultJson(normalizeTrendResultJson(aiResult, board, snapshots.size()));
             Long anchorBookId = findAnchorBookId(ranksBySnapshot);
             Long resultId = saveAnalysisResult(
@@ -831,6 +766,57 @@ public class AnalysisService {
             chapters
         );
         limits.put("timeoutMillis", resolveBookAnalysisTimeoutMillis(requestedChapterCount, chapters.size(), useChunk));
+        return request;
+    }
+
+    private Map<String, Object> buildLangGraphChunkRequest(PromptConfigEntity promptConfig,
+                                                           CrawlBookEntity book,
+                                                           List<ChapterVO> chapters,
+                                                           String inputText,
+                                                           String analysisType,
+                                                           int timeoutMillis) {
+        Map<String, Object> request = buildLangGraphBookRequest(
+            promptConfig,
+            firstNonBlank(book.getPlatform(), "fanqie"),
+            book,
+            chapters,
+            analysisType,
+            false
+        );
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sourcePayload = (Map<String, Object>) request.get("sourcePayload");
+        sourcePayload.put("kind", "book_chunk_analysis");
+        sourcePayload.put("inputText", inputText);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> limits = (Map<String, Object>) request.get("limits");
+        limits.put("timeoutMillis", timeoutMillis);
+        return request;
+    }
+
+    private Map<String, Object> buildLangGraphMergeRequest(PromptConfigEntity promptConfig,
+                                                           CrawlBookEntity book,
+                                                           String inputText,
+                                                           String analysisType,
+                                                           int timeoutMillis) {
+        Map<String, Object> bookPayload = new LinkedHashMap<>();
+        bookPayload.put("platform", firstNonBlank(book.getPlatform(), "fanqie"));
+        bookPayload.put("bookId", book.getId());
+        bookPayload.put("bookName", book.getBookName());
+        bookPayload.put("author", book.getAuthor());
+        bookPayload.put("intro", book.getIntro());
+        bookPayload.put("bookUrl", book.getBookUrl());
+
+        Map<String, Object> sourcePayload = new LinkedHashMap<>();
+        sourcePayload.put("kind", "book_chunk_merge");
+        sourcePayload.put("platform", firstNonBlank(book.getPlatform(), "fanqie"));
+        sourcePayload.put("analysisType", analysisType);
+        sourcePayload.put("inputText", inputText);
+        sourcePayload.put("book", bookPayload);
+
+        Map<String, Object> request = buildLangGraphRunRequest(promptConfig, analysisType, sourcePayload, false);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> limits = (Map<String, Object>) request.get("limits");
+        limits.put("timeoutMillis", timeoutMillis);
         return request;
     }
 
@@ -1444,7 +1430,7 @@ public class AnalysisService {
         List<List<ChapterVO>> chunks = splitChaptersForChunkedAnalysis(promptConfig, book, chapters, analysisType);
         if (chunks.size() <= 1) {
             ensureNotCancelled(invocationHandle);
-            return invokeAi(promptConfig, buildBookInputText(book, chapters), analysisType, timeoutMillis);
+            return invokeLangGraphBookAnalysis(promptConfig, book, chapters, analysisType);
         }
 
         List<ChunkAnalysisOutcome> outcomes = invocationHandle == null
@@ -1464,12 +1450,13 @@ public class AnalysisService {
             promptConfig,
             buildChunkMergePromptTemplate(promptConfig, analysisType)
         );
-        AiInvokeResult mergedResult = aiGatewayService.analyze(
+        AiInvokeResult mergedResult = langGraphWorkerClient.run(buildLangGraphMergeRequest(
             mergePrompt,
+            book,
             buildChunkMergeInput(book, chunkOutputs),
             analysisType,
             timeoutMillis
-        );
+        ));
         ensureNotCancelled(invocationHandle);
         tokenUsed += Math.max(0, mergedResult.getTokenUsed());
 
@@ -1542,7 +1529,14 @@ public class AnalysisService {
             promptConfig,
             buildChunkPromptTemplate(promptConfig, analysisType, chunkIndex + 1, chunkCount)
         );
-        AiInvokeResult chunkResult = aiGatewayService.analyze(chunkPrompt, chunkInput, analysisType, timeoutMillis);
+        AiInvokeResult chunkResult = langGraphWorkerClient.run(buildLangGraphChunkRequest(
+            chunkPrompt,
+            book,
+            chunk,
+            chunkInput,
+            analysisType,
+            timeoutMillis
+        ));
         return new ChunkAnalysisOutcome(chunkIndex, chunk, chunkResult);
     }
 
@@ -1927,26 +1921,6 @@ public class AnalysisService {
             .min(Comparator.comparing(CrawlRankEntity::getRankNo, Comparator.nullsLast(Integer::compareTo)))
             .map(CrawlRankEntity::getBookId)
             .orElse(null);
-    }
-
-    private AiInvokeResult invokeAi(PromptConfigEntity promptConfig, String inputText, String analysisType) {
-        return invokeAi(promptConfig, inputText, analysisType, null);
-    }
-
-    private AiInvokeResult invokeAi(PromptConfigEntity promptConfig,
-                                    String inputText,
-                                    String analysisType,
-                                    Integer timeoutOverrideMillis) {
-        long start = System.currentTimeMillis();
-        AiInvokeResult aiResult = aiGatewayService.analyze(promptConfig, inputText, analysisType, timeoutOverrideMillis);
-        long costTime = System.currentTimeMillis() - start;
-        if (aiResult.getTokenUsed() <= 0) {
-            aiResult.setTokenUsed(Math.max(120, inputText.length() / 2));
-        }
-        if (costTime > 0 && aiResult.getTokenUsed() > 0 && aiResult.getResultJson() == null) {
-            aiResult.setResultJson(java.util.Map.of());
-        }
-        return aiResult;
     }
 
     private Long saveAnalysisResult(String platform,

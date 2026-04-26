@@ -986,16 +986,8 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
-    void shouldRespectSystemConfigWhenCheckingStreamingSwitch() {
-        updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
-        Boolean enabled = ReflectionTestUtils.invokeMethod(aiGatewayService, "isOpenAiCompatibleStreamingEnabled");
-        assertThat(enabled).isTrue();
-    }
-
-    @Test
-    void shouldUseRealStreamingWhenSystemSwitchIsEnabled() throws Exception {
+    void shouldStreamLegacyModeThroughLangGraphWorkerWithoutOpenAiDirectCall() throws Exception {
         updateSystemConfig("analysis.runtime.mode", "legacy");
-        updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
         String token = loginAndGetToken("admin", "admin123");
 
         MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
@@ -1012,36 +1004,14 @@ class Phase4AnalysisIntegrationTest {
         String body = streamStart.getResponse().getContentAsString();
 
         assertThat(body).contains("\"event\":\"start\"");
-        assertThat(body).doesNotContain("mock summary DEFAULT");
-        assertThat(LAST_OPENAI_REQUEST_BODY.get()).contains("\"stream\" : true");
+        assertThat(body).contains("mock langgraph stream");
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"stream\":true");
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
     }
 
     @Test
-    void shouldEmitProgressEventBeforeSlowStreamingProviderReturnsFirstDelta() throws Exception {
-        updateSystemConfig("analysis.runtime.mode", "legacy");
-        updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
-        updatePromptConfigDirectly(1L, "SLOW_STREAM {{content}}", "deepseek-chat");
-        String token = loginAndGetToken("admin", "admin123");
-
-        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
-                .header("Authorization", "Bearer " + token)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
-                    """))
-            .andExpect(request().asyncStarted())
-            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
-            .andReturn();
-
-        streamStart.getAsyncResult(10000);
-        String body = streamStart.getResponse().getContentAsString();
-
-        assertThat(body).contains("[analysis-progress]");
-        assertThat(body).contains("mock summary STREAM");
-    }
-
-    @Test
-    void shouldTreatAppStreamingFlagAsGlobalKillSwitch() throws Exception {
+    void shouldIgnoreOpenAiStreamingFlagAfterExecutionMovesToLangGraphWorker() throws Exception {
         updateSystemConfig("analysis.runtime.mode", "legacy");
         updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
         boolean original = aiProperties.getOpenAiCompatible().isStreamingEnabled();
@@ -1063,42 +1033,13 @@ class Phase4AnalysisIntegrationTest {
             String body = streamStart.getResponse().getContentAsString();
 
             assertThat(body).contains("\"event\":\"done\"");
-            assertThat(body).contains("langgraph deconstruct content");
+            assertThat(body).contains("mock langgraph stream");
             assertThat(body).doesNotContain("mock summary STREAM");
-            assertThat(LAST_OPENAI_REQUEST_BODY.get()).doesNotContain("\"stream\":true");
+            assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
             assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
         } finally {
             aiProperties.getOpenAiCompatible().setStreamingEnabled(original);
         }
-    }
-
-    @Test
-    void shouldEmitChunkProgressDeltaWhenChunkedAnalysisTakesOver() throws Exception {
-        updateSystemConfig("analysis.runtime.mode", "legacy");
-        updateSystemConfig("analysis.chunk.max-input-tokens", "1000");
-        updateSystemConfig("analysis.chunk.target-input-tokens", "1000");
-        long bookId = insertBook("fanqie", "stream-chunk-1", "Chunk Stream Book", "Author Chunk",
-            "Chunk intro", "https://fanqienovel.com/page/stream-chunk-1");
-        insertChapter(bookId, 1, "Chapter 1", "A".repeat(5000));
-        insertChapter(bookId, 2, "Chapter 2", "B".repeat(5000));
-        insertChapter(bookId, 3, "Chapter 3", "C".repeat(5000));
-
-        String token = loginAndGetToken("admin", "admin123");
-        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
-                .header("Authorization", "Bearer " + token)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("""
-                    {"platform":"fanqie","bookId":%d,"chapterCount":3,"forceReanalyze":true}
-                    """.formatted(bookId)))
-            .andExpect(request().asyncStarted())
-            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
-            .andReturn();
-
-        streamStart.getAsyncResult(10000);
-        String body = streamStart.getResponse().getContentAsString();
-
-        assertThat(body).contains("[chunk-progress]");
-        assertThat(body).contains("1/3");
     }
 
     @Test
