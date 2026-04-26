@@ -38,7 +38,7 @@ public class SystemConfigService {
     private static final Map<String, DefaultSystemConfig> DEFAULT_SYSTEM_CONFIGS = Map.ofEntries(
         Map.entry("ai.provider.type", new DefaultSystemConfig("openai-compatible", "ai", "AI provider type", true)),
         Map.entry("ai.timeout.millis", new DefaultSystemConfig("15000", "ai", "AI request timeout in milliseconds", true)),
-        Map.entry("analysis.runtime.mode", new DefaultSystemConfig("legacy", "analysis", "Analysis runtime mode: legacy or langgraph", true)),
+        Map.entry("analysis.runtime.mode", new DefaultSystemConfig("langgraph", "analysis", "Analysis runtime mode: legacy or langgraph", true)),
         Map.entry("ai.openai-compatible.base-url", new DefaultSystemConfig("", "ai", "OpenAI compatible base URL, blank means fallback to application config", true)),
         Map.entry("ai.openai-compatible.default-model", new DefaultSystemConfig("deepseek-chat", "ai", "Default OpenAI compatible model name", true)),
         Map.entry("ai.openai-compatible.api-key", new DefaultSystemConfig("", "ai", "OpenAI compatible API key (stored in DB, takes precedence over env var)", true)),

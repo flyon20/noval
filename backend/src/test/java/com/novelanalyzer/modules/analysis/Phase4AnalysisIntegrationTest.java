@@ -994,6 +994,7 @@ class Phase4AnalysisIntegrationTest {
 
     @Test
     void shouldUseRealStreamingWhenSystemSwitchIsEnabled() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "legacy");
         updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
         String token = loginAndGetToken("admin", "admin123");
 
@@ -1017,6 +1018,7 @@ class Phase4AnalysisIntegrationTest {
 
     @Test
     void shouldEmitProgressEventBeforeSlowStreamingProviderReturnsFirstDelta() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "legacy");
         updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
         updatePromptConfigDirectly(1L, "SLOW_STREAM {{content}}", "deepseek-chat");
         String token = loginAndGetToken("admin", "admin123");
@@ -1040,6 +1042,7 @@ class Phase4AnalysisIntegrationTest {
 
     @Test
     void shouldTreatAppStreamingFlagAsGlobalKillSwitch() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "legacy");
         updateSystemConfig("ai.openai-compatible.streaming-enabled", "true");
         boolean original = aiProperties.getOpenAiCompatible().isStreamingEnabled();
         aiProperties.getOpenAiCompatible().setStreamingEnabled(false);
@@ -1071,6 +1074,7 @@ class Phase4AnalysisIntegrationTest {
 
     @Test
     void shouldEmitChunkProgressDeltaWhenChunkedAnalysisTakesOver() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "legacy");
         updateSystemConfig("analysis.chunk.max-input-tokens", "1000");
         updateSystemConfig("analysis.chunk.target-input-tokens", "1000");
         long bookId = insertBook("fanqie", "stream-chunk-1", "Chunk Stream Book", "Author Chunk",

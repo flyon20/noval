@@ -595,7 +595,7 @@ public class AnalysisService {
 
     private boolean isLangGraphRuntimeEnabled() {
         return "langgraph".equalsIgnoreCase(
-            systemConfigService.getValueOrDefault("analysis.runtime.mode", "legacy")
+            systemConfigService.getValueOrDefault("analysis.runtime.mode", "langgraph")
         );
     }
 

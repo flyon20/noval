@@ -13,6 +13,12 @@
 - Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest" test` passed with 34 tests, 0 failures, 0 errors.
 - Verification evidence: `npm test -- --run src/views/trend/__tests__/TrendView.spec.ts` passed with 17 tests.
 
+## Session Addendum: 2026-04-26 AI Execution Consolidation Task 6
+- Red test verified: `mvn "-Dtest=Phase4AnalysisIntegrationTest,Phase5BackendIntegrationTest" test` failed because `analysis.runtime.mode` default still returned `legacy` while the new expectation is `langgraph`.
+- Changed the `SystemConfigService` default for `analysis.runtime.mode` to `langgraph` and aligned the no-row fallback in `AnalysisService` to `langgraph`.
+- Preserved rollback coverage by making legacy-path tests explicitly set `analysis.runtime.mode=legacy` before asserting OpenAI streaming, progress, chunk, and trend behavior.
+- Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest,Phase5BackendIntegrationTest" test` passed with 48 tests, 0 failures, 0 errors.
+
 ## Session: 2026-03-20
 
 ### Phase 1: 文档与现状梳理

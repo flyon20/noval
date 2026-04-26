@@ -71,6 +71,14 @@ class Phase5BackendIntegrationTest {
 
         mockMvc.perform(get("/api/config/system")
                 .header("Authorization", "Bearer " + token)
+                .param("configKey", "analysis.runtime.mode"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configKey").value("analysis.runtime.mode"))
+            .andExpect(jsonPath("$.data.configValue").value("langgraph"));
+
+        mockMvc.perform(get("/api/config/system")
+                .header("Authorization", "Bearer " + token)
                 .param("configKey", "ai.timeout.millis"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
@@ -587,6 +595,7 @@ class Phase5BackendIntegrationTest {
 
     @Test
     void shouldReturnBoardScopedTrendAnalysis() throws Exception {
+        setSystemConfig("analysis.runtime.mode", "legacy");
         String token = loginAndGetToken("admin", "admin123");
 
         mockMvc.perform(get("/api/analysis/trend")
@@ -676,6 +685,20 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
+    }
+
+    private void setSystemConfig(String configKey, String configValue) {
+        jdbcTemplate.update(
+            "DELETE FROM system_config WHERE config_key = ?",
+            configKey
+        );
+        jdbcTemplate.update(
+            "INSERT INTO system_config (config_key, config_value, config_type, description, is_editable, deleted) VALUES (?, ?, ?, ?, 1, 0)",
+            configKey,
+            configValue,
+            "test",
+            "test override"
+        );
     }
 
     private String jsonStringLiteral(String value) {
