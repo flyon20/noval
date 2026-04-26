@@ -1220,7 +1220,7 @@ describe('TrendView', () => {
     expect(wrapper.find('[data-test="trend-result-theme-table"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('脑洞之王');
   });
-  test('keeps rendering trend compatibility fields from existing resultJson names', async () => {
+  test('keeps trend compatibility fields available through rerun runtime state and render pipeline', async () => {
     const { analysisApi } = await import('@/api/analysis');
     const { dataApi } = await import('@/api/data');
     const { crawlerApi } = await import('@/api/crawler');

@@ -377,8 +377,11 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('{"type":"object"}', prompt)
         self.assertIn("output example:", prompt)
         self.assertIn('{"summary":"example"}', prompt)
-        self.assertIn("Keep summary, boardSummary, trendPreview, and comparisonSummary concise", prompt)
-        self.assertIn("Keep hotBooks, themeTable, themeDistribution, systemArchetypes, microInnovationSignals", prompt)
+        self.assertIn("Return exactly one JSON object", prompt)
+        self.assertIn("Do not output markdown", prompt)
+        self.assertIn("boardSummary", prompt)
+        self.assertIn("trendPreview", prompt)
+        self.assertIn("themeDistribution", prompt)
 
     async def test_should_not_salvage_nested_json_object_from_truncated_outer_json(self) -> None:
         service = LangGraphAnalysisService(
