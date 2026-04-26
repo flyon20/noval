@@ -372,6 +372,48 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldAnalyzeLegacySingleBookViaWorkerAndPreserveMetadata() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "legacy");
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult result = mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":2,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.analysisType").value("deconstruct"))
+            .andExpect(jsonPath("$.data.modelName").value("langgraph-worker:deepseek-chat"))
+            .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
+            .andExpect(jsonPath("$.data.resultJson.analysisType").value("deconstruct"))
+            .andExpect(jsonPath("$.data.resultJson.requestedChapterCount").value(2))
+            .andExpect(jsonPath("$.data.resultJson.actualChapterCount").value(2))
+            .andExpect(jsonPath("$.data.resultJson.inputChapterCount").value(2))
+            .andExpect(jsonPath("$.data.resultJson.promptRuntime.promptType").value("deconstruct"))
+            .andReturn();
+
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(OPENAI_REQUEST_COUNT.get()).isZero();
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"agentType\":\"deconstruct\"");
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).contains("\"kind\":\"book_analysis\"");
+
+        String response = result.getResponse().getContentAsString();
+        String resultContent = JsonPath.read(response, "$.data.resultContent");
+        assertThat(resultContent).isEqualTo("langgraph deconstruct content");
+
+        String resultJson = jdbcTemplate.queryForObject(
+            "SELECT result_json FROM analysis_result WHERE analysis_type='deconstruct' ORDER BY id DESC LIMIT 1",
+            String.class
+        );
+        assertThat(resultJson).contains("\"source\":\"mock-langgraph\"");
+        assertThat(resultJson).contains("\"analysisType\":\"deconstruct\"");
+        assertThat(resultJson).contains("\"chapterCount\"");
+        assertThat(resultJson).contains("\"promptRuntime\"");
+    }
+
+    @Test
     void shouldAnalyzeViaLangGraphRuntimeWhenSystemModeIsEnabled() throws Exception {
         updateSystemConfig("analysis.runtime.mode", "langgraph");
         String token = loginAndGetToken("admin", "admin123");

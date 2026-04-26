@@ -609,7 +609,22 @@ public class AnalysisService {
         int analysisTimeoutMillis = resolveBookAnalysisTimeoutMillis(requestedChapterCount, chapters.size(), useChunk);
         return useChunk
             ? invokeChunkedAnalysis(promptConfig, book, chapters, analysisType, analysisTimeoutMillis)
-            : invokeAi(promptConfig, inputText, analysisType, analysisTimeoutMillis);
+            : invokeLegacyCompatiblePythonBookAnalysis(promptConfig, book, chapters, analysisType, requestedChapterCount);
+    }
+
+    private AiInvokeResult invokeLegacyCompatiblePythonBookAnalysis(PromptConfigEntity promptConfig,
+                                                                    CrawlBookEntity book,
+                                                                    List<ChapterVO> chapters,
+                                                                    String analysisType,
+                                                                    Integer requestedChapterCount) {
+        return langGraphWorkerClient.run(buildLegacyCompatibleBookRequest(
+            promptConfig,
+            book.getPlatform(),
+            book,
+            chapters,
+            analysisType,
+            requestedChapterCount
+        ));
     }
 
     private AiInvokeResult invokeLangGraphBookAnalysis(PromptConfigEntity promptConfig,
@@ -786,6 +801,36 @@ public class AnalysisService {
         sourcePayload.put("chapters", chapterPayload);
 
         return buildLangGraphRunRequest(promptConfig, analysisType, sourcePayload, stream);
+    }
+
+    private Map<String, Object> buildLegacyCompatibleBookRequest(PromptConfigEntity promptConfig,
+                                                                 String platform,
+                                                                 CrawlBookEntity book,
+                                                                 List<ChapterVO> chapters,
+                                                                 String analysisType,
+                                                                 Integer requestedChapterCount) {
+        Map<String, Object> request = buildLangGraphBookRequest(
+            promptConfig,
+            platform,
+            book,
+            chapters,
+            analysisType,
+            false
+        );
+        @SuppressWarnings("unchecked")
+        Map<String, Object> contextMeta = (Map<String, Object>) request.get("contextMeta");
+        contextMeta.put("runtimeMode", "legacy-compatible-python");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> limits = (Map<String, Object>) request.get("limits");
+        boolean useChunk = shouldUseChunkedAnalysis(
+            promptConfig,
+            analysisType,
+            buildBookInputText(book, chapters),
+            chapters
+        );
+        limits.put("timeoutMillis", resolveBookAnalysisTimeoutMillis(requestedChapterCount, chapters.size(), useChunk));
+        return request;
     }
 
     private Map<String, Object> buildLangGraphTrendRequest(PromptConfigEntity promptConfig,

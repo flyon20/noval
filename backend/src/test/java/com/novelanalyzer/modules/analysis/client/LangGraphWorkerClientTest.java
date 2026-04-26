@@ -51,4 +51,33 @@ class LangGraphWorkerClientTest {
 
         assertThat(timeoutMillis).isEqualTo(190000);
     }
+
+    @Test
+    void shouldPreferWorkerContentAndPreserveResultJsonMetadata() {
+        Map<String, Object> runtime = new LinkedHashMap<>();
+        runtime.put("runtimeMode", "legacy-compatible-python");
+        runtime.put("totalDurationMillis", 654L);
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("runtime", runtime);
+        meta.put("chapterCount", Map.of("requested", 2, "actual", 2));
+        Map<String, Object> resultJson = new LinkedHashMap<>();
+        resultJson.put("analysisType", "deconstruct");
+        resultJson.put("summary", "worker summary");
+        resultJson.put("detailContent", "worker detail content");
+        resultJson.put("meta", meta);
+        resultJson.put("promptRuntime", Map.of("promptType", "deconstruct"));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("modelName", "langgraph-worker:deepseek-chat");
+        payload.put("content", "worker top-level content");
+        payload.put("tokenUsed", 156);
+        payload.put("resultJson", resultJson);
+
+        Object invokeResult = ReflectionTestUtils.invokeMethod(client, "toAiInvokeResult", payload);
+
+        assertThat(invokeResult).isNotNull();
+        assertThat(ReflectionTestUtils.getField(invokeResult, "modelName")).isEqualTo("langgraph-worker:deepseek-chat");
+        assertThat(ReflectionTestUtils.getField(invokeResult, "content")).isEqualTo("worker top-level content");
+        assertThat(ReflectionTestUtils.getField(invokeResult, "tokenUsed")).isEqualTo(156);
+        assertThat(ReflectionTestUtils.getField(invokeResult, "resultJson")).isEqualTo(resultJson);
+    }
 }
