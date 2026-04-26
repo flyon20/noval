@@ -7,6 +7,12 @@
 - Updated backend integration coverage so legacy single-book execution asserts worker usage, preserved chapter metadata, prompt/model payload passthrough, history reuse, and no Java OpenAI provider call on the blocking legacy path.
 - Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest,LangGraphWorkerClientTest" test` passed with 37 tests, 0 failures, 0 errors.
 
+## Session Addendum: 2026-04-26 AI Execution Consolidation Task 5
+- Added regression assertions that LangGraph-backed trend analysis still exits through Java-side normalization for both blocking and streaming paths.
+- Locked normalized trend fields in backend coverage: `boardSummary`, `trendPreview`, `historicalWordCloud`, `themeDistribution`, `hotBooks`, `insightCards`, and `snapshotComparisons`.
+- Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest" test` passed with 34 tests, 0 failures, 0 errors.
+- Verification evidence: `npm test -- --run src/views/trend/__tests__/TrendView.spec.ts` passed with 17 tests.
+
 ## Session: 2026-03-20
 
 ### Phase 1: 文档与现状梳理

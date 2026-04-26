@@ -648,7 +648,14 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.analysisType").value("theme"))
             .andExpect(jsonPath("$.data.resultJson.source").value("mock-langgraph"))
-            .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"));
+            .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"))
+            .andExpect(jsonPath("$.data.resultJson.boardSummary").exists())
+            .andExpect(jsonPath("$.data.resultJson.trendPreview").exists())
+            .andExpect(jsonPath("$.data.resultJson.historicalWordCloud").isArray())
+            .andExpect(jsonPath("$.data.resultJson.themeDistribution").isArray())
+            .andExpect(jsonPath("$.data.resultJson.hotBooks").isArray())
+            .andExpect(jsonPath("$.data.resultJson.insightCards").isArray())
+            .andExpect(jsonPath("$.data.resultJson.snapshotComparisons").isArray());
 
         Map<String, Object> requestPayload = JsonPath.parse(LAST_LANGGRAPH_REQUEST_BODY.get()).read("$");
         Map<String, Object> promptConfig = JsonPath.read(LAST_LANGGRAPH_REQUEST_BODY.get(), "$.promptConfig");
@@ -743,6 +750,13 @@ class Phase4AnalysisIntegrationTest {
         assertThat(body).contains("\"event\":\"start\"");
         assertThat(body).contains("\"analysisType\":\"theme\"");
         assertThat(body).contains("\"source\":\"mock-langgraph\"");
+        assertThat(body).contains("\"boardSummary\"");
+        assertThat(body).contains("\"trendPreview\"");
+        assertThat(body).contains("\"historicalWordCloud\"");
+        assertThat(body).contains("\"themeDistribution\"");
+        assertThat(body).contains("\"hotBooks\"");
+        assertThat(body).contains("\"insightCards\"");
+        assertThat(body).contains("\"snapshotComparisons\"");
         assertThat(body).contains("\"event\":\"done\"");
     }
 
