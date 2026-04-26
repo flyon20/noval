@@ -834,24 +834,14 @@ class LangGraphAnalysisService:
         prompt_config: PromptConfigPayload,
         failure_reason: str,
     ) -> dict[str, Any]:
+        _ = failure_reason
         model_name = prompt_config.modelName or settings.default_model
         summary_source = input_text or prompt_config.promptContent or ""
         summary = self._short_text(summary_source, 200)
         content = f"{analysis_type} analysis result\nmodel: {model_name}\nsummary: {summary}"
         result_json: dict[str, Any] = {
             "analysisType": analysis_type,
-            "modelName": model_name,
             "summary": summary,
-            "content": content,
-            "detailContent": content,
-            "meta": {
-                "providerFailures": [
-                    {
-                        "provider": (prompt_config.providerType or settings.provider_type or "openai-compatible"),
-                        "reason": failure_reason,
-                    }
-                ]
-            },
         }
         if analysis_type == "theme":
             result_json.setdefault("historicalWordCloud", [])

@@ -262,7 +262,9 @@ class ProviderClientRoutingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("theme analysis result", result["content"])
         self.assertIn("summary", result["result_json"])
         self.assertEqual("theme", result["result_json"]["analysisType"])
-        self.assertEqual("deepseek-chat", result["result_json"]["modelName"])
+        self.assertNotIn("modelName", result["result_json"])
+        self.assertNotIn("content", result["result_json"])
+        self.assertNotIn("meta", result["result_json"])
 
 
 if __name__ == "__main__":

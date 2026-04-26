@@ -333,12 +333,8 @@ class OpenAICompatibleProviderClient:
         content = f"{analysis_type} analysis result\nmodel: {model_name}\nsummary: {summary}"
         result_json: dict[str, Any] = {
             "analysisType": analysis_type,
-            "modelName": model_name,
             "summary": summary,
-            "content": content,
         }
-        if failures:
-            result_json["meta"] = {"providerFailures": failures}
         return {
             "model_name": model_name,
             "content": content,

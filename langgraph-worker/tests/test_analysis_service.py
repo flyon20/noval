@@ -560,7 +560,6 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         response = await service.run(request)
 
         self.assertEqual("theme", response.resultJson["analysisType"])
-        self.assertEqual("deepseek-chat", response.resultJson["modelName"])
         self.assertIn("theme analysis result", response.content)
         self.assertIn("trendPreview", response.resultJson)
         self.assertIn("historicalWordCloud", response.resultJson)
@@ -568,6 +567,9 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hotBooks", response.resultJson)
         self.assertIn("insightCards", response.resultJson)
         self.assertIn("snapshotComparisons", response.resultJson)
+        self.assertNotIn("modelName", response.resultJson)
+        self.assertNotIn("content", response.resultJson)
+        self.assertNotIn("providerFailures", response.resultJson["meta"])
         self.assertNotIn("themeDistribution", response.resultJson)
         self.assertNotIn("systemArchetypes", response.resultJson)
         self.assertNotIn("microInnovationSignals", response.resultJson)
