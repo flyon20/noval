@@ -78,6 +78,23 @@ class SequencedProviderClient:
         raise AssertionError("stream should not be used in this test")
 
 
+class InspectingChunkProviderClient:
+    def __init__(self) -> None:
+        self.invoke_calls: list[dict] = []
+
+    async def invoke(self, **kwargs):
+        self.invoke_calls.append(kwargs)
+        call_index = len(self.invoke_calls)
+        return {
+            "model_name": kwargs["model"],
+            "content": '{"summary":"call %s","detailContent":"detail %s"}' % (call_index, call_index),
+            "token_used": call_index * 10,
+        }
+
+    async def stream(self, **kwargs):
+        raise AssertionError("stream should not be used in this test")
+
+
 class StreamRepairProviderClient:
     def __init__(self, stream_content: str, repaired_content: str) -> None:
         self.stream_content = stream_content
@@ -200,6 +217,103 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(fake_client.invoke_calls), 3)
         self.assertTrue(response.resultJson["meta"]["runtime"]["useChunking"])
         self.assertGreaterEqual(response.resultJson["meta"]["runtime"]["chunkCount"], 2)
+
+    async def test_should_force_chunk_mode_for_single_book_when_chapter_count_hits_java_legacy_threshold(self) -> None:
+        provider = InspectingChunkProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-force-chunk-threshold",
+            agentType="deconstruct",
+            promptConfig=PromptConfigPayload(
+                promptContent="Analyze carefully {{content}}",
+                modelName="deepseek-chat",
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": f"c{i}", "content": f"chapter-{i}"}
+                    for i in range(1, 9)
+                ],
+                "inputText": "short but multi-chapter book",
+            },
+            limits={"chunkMaxInputTokens": 999999, "chunkTargetInputTokens": 999999},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual(4, len(provider.invoke_calls))
+        self.assertEqual("chunk_merge", response.resultJson["analysisMode"])
+        self.assertEqual(3, response.resultJson["segmentCount"])
+        self.assertEqual(8, response.resultJson["inputChapterCount"])
+        self.assertTrue(response.resultJson["meta"]["runtime"]["useChunking"])
+        self.assertEqual(3, response.resultJson["meta"]["runtime"]["chunkCount"])
+
+    async def test_should_accumulate_chunk_and_merge_tokens_and_merge_metadata(self) -> None:
+        provider = InspectingChunkProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-chunk-merge-meta",
+            agentType="deconstruct",
+            promptConfig=PromptConfigPayload(
+                promptContent="Analyze carefully {{content}}",
+                modelName="deepseek-chat",
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": "c1", "content": "A" * 4000},
+                    {"chapterTitle": "c2", "content": "B" * 4000},
+                ],
+                "inputText": "A" * 9000,
+            },
+            limits={"chunkMaxInputTokens": 1000, "chunkTargetInputTokens": 1000, "chunkParallelism": 2},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("chunk_merge", response.resultJson["analysisMode"])
+        self.assertEqual(2, response.resultJson["segmentCount"])
+        self.assertEqual(2, response.resultJson["inputChapterCount"])
+        self.assertEqual(60, response.tokenUsed)
+        self.assertEqual(3, response.resultJson["meta"]["runtime"]["providerCallCount"])
+
+    async def test_should_preserve_structured_output_constraints_in_chunk_merge_prompt(self) -> None:
+        provider = InspectingChunkProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-chunk-merge-structured",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="# Output Format\nUse Markdown report with tables.\n\n{{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+                outputExampleJson='{"summary":"example"}',
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": "c1", "content": "A" * 4000},
+                    {"chapterTitle": "c2", "content": "B" * 4000},
+                ],
+                "inputText": "A" * 9000,
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={"chunkMaxInputTokens": 1000, "chunkTargetInputTokens": 1000},
+        )
+
+        await service.run(request)
+
+        merge_messages = provider.invoke_calls[-1]["messages"]
+        merged_prompt_payload = "\n".join(message["content"] for message in merge_messages)
+        self.assertIn("Return exactly one JSON object", merged_prompt_payload)
+        self.assertIn("Do not output markdown", merged_prompt_payload)
+        self.assertIn("output schema:", merged_prompt_payload)
+        self.assertIn("output example:", merged_prompt_payload)
+        self.assertIn("Book: Book", merged_prompt_payload)
+        self.assertIn("Author: Author", merged_prompt_payload)
+        self.assertIn("Intro: Intro", merged_prompt_payload)
+        self.assertIn("##", merged_prompt_payload)
 
     async def test_should_emit_runtime_metrics_before_done_in_stream_mode(self) -> None:
         service = LangGraphAnalysisService(provider_client=FakeProviderClient())

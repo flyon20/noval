@@ -31,6 +31,10 @@ class JsonResolution(TypedDict):
     provider_latency_ms: int
 
 
+LARGE_BOOK_FORCE_CHUNK_CHAPTER_COUNT = 8
+LARGE_BOOK_FORCE_CHUNK_SEGMENT_SIZE = 3
+
+
 class LangGraphAnalysisService:
     def __init__(self, provider_client: OpenAICompatibleProviderClient | None = None) -> None:
         self.provider_client = provider_client or OpenAICompatibleProviderClient()
@@ -198,7 +202,7 @@ class LangGraphAnalysisService:
             int(request.limits.get("chunkTargetInputTokens") or 3500),
         )
         estimated_tokens = self._estimate_tokens(input_text)
-        if chapters and estimated_tokens > max_input_tokens:
+        if self._should_force_chunking(chapters) or (chapters and estimated_tokens > max_input_tokens):
             return {
                 "input_text": input_text,
                 "use_chunking": True,
@@ -274,6 +278,11 @@ class LangGraphAnalysisService:
             f"## 分段 {index}\n{result.content}"
             for index, result in enumerate(chunk_results, start=1)
         )
+        source_payload = request.sourcePayload or {}
+        merged_input = self._build_chunk_merge_input(
+            source_payload,
+            merged_input.split("\n\n"),
+        )
         merged_prompt = self._build_merge_prompt(request.promptConfig)
         merged = await self._invoke_once(
             request=request,
@@ -283,6 +292,7 @@ class LangGraphAnalysisService:
         merged.tokenUsed += sum(result.tokenUsed for result in chunk_results)
         merged.resultJson.setdefault("analysisMode", "chunk_merge")
         merged.resultJson.setdefault("segmentCount", len(chunk_results))
+        merged.resultJson.setdefault("inputChapterCount", len(source_payload.get("chapters") or []))
         return self._apply_runtime_meta(
             merged,
             self._build_chunk_runtime_meta(request, chunk_results, merged),
@@ -673,6 +683,14 @@ class LangGraphAnalysisService:
 
     def _split_book_chunks(self, source_payload: dict[str, Any], chapters: list[dict[str, Any]], target_tokens: int) -> list[dict[str, Any]]:
         book = source_payload.get("book") or {}
+        if self._should_force_chunking(chapters):
+            return [
+                {
+                    "input_text": self._build_book_input_text(book, chunk),
+                    "chapters": chunk,
+                }
+                for chunk in self._split_chapters_by_fixed_size(chapters, LARGE_BOOK_FORCE_CHUNK_SEGMENT_SIZE)
+            ]
         chunks: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
         for chapter in chapters:
@@ -690,6 +708,17 @@ class LangGraphAnalysisService:
                 "chapters": chunk,
             }
             for chunk in chunks
+        ]
+
+    def _should_force_chunking(self, chapters: list[dict[str, Any]]) -> bool:
+        return len(chapters or []) >= LARGE_BOOK_FORCE_CHUNK_CHAPTER_COUNT
+
+    def _split_chapters_by_fixed_size(self, chapters: list[dict[str, Any]], segment_size: int) -> list[list[dict[str, Any]]]:
+        safe_segment_size = max(1, int(segment_size))
+        return [
+            chapters[index:index + safe_segment_size]
+            for index in range(0, len(chapters), safe_segment_size)
+            if chapters[index:index + safe_segment_size]
         ]
 
     def _build_book_input_text(self, book: dict[str, Any], chapters: list[dict[str, Any]]) -> str:
@@ -715,6 +744,17 @@ class LangGraphAnalysisService:
             "你正在整合同一本小说的多段局部分析结果。\n请去重、补全跨章节关系，输出一份最终结论。\n"
             f"原始分析要求：\n{original}\n\n{{content}}"
         )
+
+    def _build_chunk_merge_input(self, source_payload: dict[str, Any], chunk_outputs: list[str]) -> str:
+        book = source_payload.get("book") or {}
+        parts = [
+            f"Book: {book.get('bookName', '')}",
+            f"Author: {book.get('author', '')}",
+            f"Intro: {book.get('intro', '')}",
+            "",
+        ]
+        parts.extend(chunk_outputs)
+        return "\n\n".join(parts)
 
     def _estimate_tokens(self, text: str) -> int:
         count = 0
