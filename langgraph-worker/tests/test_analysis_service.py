@@ -568,6 +568,11 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("hotBooks", response.resultJson)
         self.assertIn("insightCards", response.resultJson)
         self.assertIn("snapshotComparisons", response.resultJson)
+        self.assertNotIn("themeDistribution", response.resultJson)
+        self.assertNotIn("systemArchetypes", response.resultJson)
+        self.assertNotIn("microInnovationSignals", response.resultJson)
+        self.assertNotIn("boardSummary", response.resultJson)
+        self.assertNotIn("comparisonSummary", response.resultJson)
 
 
 if __name__ == "__main__":

@@ -496,16 +496,11 @@ class LangGraphAnalysisService:
         result_json.setdefault("detailContent", content)
         if analysis_type == "theme":
             result_json.setdefault("historicalWordCloud", [])
-            result_json.setdefault("themeDistribution", [])
             result_json.setdefault("themeTable", [])
             result_json.setdefault("hotBooks", [])
-            result_json.setdefault("systemArchetypes", [])
-            result_json.setdefault("microInnovationSignals", [])
             result_json.setdefault("insightCards", [])
             result_json.setdefault("snapshotComparisons", [])
-            result_json.setdefault("boardSummary", self._short_text(content, 180))
             result_json.setdefault("trendPreview", self._short_text(content, 300))
-            result_json.setdefault("comparisonSummary", "")
             result_json.setdefault("historyAnalysisCount", len(request.sourcePayload.get("snapshots") or []))
         response = RunResponse(
             taskId=request.taskId,
@@ -859,17 +854,12 @@ class LangGraphAnalysisService:
             },
         }
         if analysis_type == "theme":
-            result_json.setdefault("boardSummary", self._short_text(content, 180))
-            result_json.setdefault("trendPreview", self._short_text(content, 260))
-            result_json.setdefault("comparisonSummary", "")
             result_json.setdefault("historicalWordCloud", [])
-            result_json.setdefault("themeDistribution", [])
             result_json.setdefault("themeTable", [])
             result_json.setdefault("hotBooks", [])
-            result_json.setdefault("systemArchetypes", [])
-            result_json.setdefault("microInnovationSignals", [])
             result_json.setdefault("insightCards", [])
             result_json.setdefault("snapshotComparisons", [])
+            result_json.setdefault("trendPreview", self._short_text(content, 260))
             result_json.setdefault("historyAnalysisCount", len(request.sourcePayload.get("snapshots") or []))
         return {
             "model_name": model_name,
