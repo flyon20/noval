@@ -25,6 +25,12 @@
 - Verified residual search results: `[chunk-progress]` remains only as non-provider chunk progress text, and `ReflectionTestUtils` remains in focused helper tests/cache inspection rather than old streaming assertions.
 - Verification evidence: `mvn "-Dtest=AiGatewayServiceTest,AnalysisServiceTimeoutTest,LangGraphWorkerClientTest" test` passed with 18 tests, 0 failures, 0 errors.
 - Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest" test` passed with 31 tests, 0 failures, 0 errors.
+
+## Session Addendum: 2026-04-26 AI Execution Consolidation Task 8
+- Fixed the backend AI regression fixture by giving `Phase5BackendIntegrationTest` a mock LangGraph worker and internal API key now that legacy-compatible trend execution also routes through the worker.
+- Verification evidence: `mvn "-Dtest=Phase4AnalysisIntegrationTest,LangGraphWorkerClientTest,AiGatewayServiceTest,AnalysisServiceTimeoutTest,Phase5BackendIntegrationTest" test` passed with 63 tests, 0 failures, 0 errors.
+- Verification evidence: `python -m unittest discover -s tests -v` passed with 32 tests.
+- Verification evidence: `npm test -- --run src/views/trend/__tests__/TrendView.spec.ts src/views/analysis/__tests__/AnalysisView.spec.ts src/views/config/prompt/__tests__/PromptConfigView.spec.ts` passed with 3 files and 32 tests.
 ## Session: 2026-03-20
 
 ### Phase 1: 文档与现状梳理
