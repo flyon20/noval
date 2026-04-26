@@ -816,7 +816,7 @@ class LangGraphAnalysisService:
             stream_mode=False,
             use_chunking=True,
             chunk_count=len(chunk_results),
-            provider_call_count=len(runtime_metas),
+            provider_call_count=sum(int(meta.get("providerCallCount") or 0) for meta in runtime_metas),
             queue_wait_ms=sum(int(meta.get("queueWaitMillis") or 0) for meta in runtime_metas),
             provider_latency_ms=sum(int(meta.get("providerLatencyMillis") or 0) for meta in runtime_metas),
         )

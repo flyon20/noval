@@ -116,6 +116,29 @@ class StreamRepairProviderClient:
         yield {"event": "done", "tokenUsed": 11}
 
 
+class ChunkMergeRepairProviderClient:
+    def __init__(self) -> None:
+        self.invoke_calls: list[dict] = []
+
+    async def invoke(self, **kwargs):
+        self.invoke_calls.append(kwargs)
+        is_repair = "JSON repair task" in kwargs["messages"][0]["content"]
+        if is_repair:
+            return {
+                "model_name": kwargs["model"],
+                "content": '{"summary":"repaired merge","detailContent":"repaired merge detail","historicalWordCloud":[],"themeDistribution":[],"themeTable":[],"hotBooks":[],"systemArchetypes":[],"microInnovationSignals":[],"insightCards":[],"snapshotComparisons":[]}',
+                "token_used": 7,
+            }
+        return {
+            "model_name": kwargs["model"],
+            "content": "non-json chunk merge output",
+            "token_used": 11,
+        }
+
+    async def stream(self, **kwargs):
+        raise AssertionError("stream should not be used in this test")
+
+
 class RepairFallbackProviderClient:
     def __init__(self) -> None:
         self.invoke_calls: list[dict] = []
@@ -314,6 +337,36 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Author: Author", merged_prompt_payload)
         self.assertIn("Intro: Intro", merged_prompt_payload)
         self.assertIn("##", merged_prompt_payload)
+
+    async def test_should_accumulate_nested_provider_call_count_across_chunk_and_merge_stages(self) -> None:
+        provider = ChunkMergeRepairProviderClient()
+        service = LangGraphAnalysisService(provider_client=provider)
+        request = RunRequest(
+            taskId="task-chunk-merge-runtime-count",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+                outputExampleJson='{"summary":"example"}',
+            ),
+            sourcePayload={
+                "book": {"bookName": "Book", "author": "Author", "intro": "Intro"},
+                "chapters": [
+                    {"chapterTitle": "c1", "content": "A" * 4000},
+                    {"chapterTitle": "c2", "content": "B" * 4000},
+                ],
+                "inputText": "A" * 9000,
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={"chunkMaxInputTokens": 1000, "chunkTargetInputTokens": 1000},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual(6, response.resultJson["meta"]["runtime"]["providerCallCount"])
+        self.assertEqual(6, len(provider.invoke_calls))
 
     async def test_should_emit_runtime_metrics_before_done_in_stream_mode(self) -> None:
         service = LangGraphAnalysisService(provider_client=FakeProviderClient())
