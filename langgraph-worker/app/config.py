@@ -8,6 +8,10 @@ class Settings(BaseModel):
     host: str = "0.0.0.0"
     port: int = int(os.getenv("LANGGRAPH_WORKER_PORT", "8001"))
     internal_api_key: str = os.getenv("AI_LANGGRAPH_WORKER_INTERNAL_API_KEY", "")
+    provider_type: str = os.getenv("AI_PROVIDER_TYPE", "openai-compatible")
+    dify_base_url: str = os.getenv("AI_DIFY_BASE_URL", "")
+    dify_api_key: str = os.getenv("DIFY_API_KEY", os.getenv("AI_DIFY_API_KEY", ""))
+    fallback_model: str = os.getenv("AI_FALLBACK_MODEL", "local-fallback")
     openai_base_url: str = os.getenv("AI_OPENAI_COMPATIBLE_BASE_URL", "https://api.deepseek.com/v1")
     openai_api_key: str = os.getenv("DEEPSEEK_API_KEY", os.getenv("AI_OPENAI_COMPATIBLE_API_KEY", ""))
     default_model: str = os.getenv("AI_OPENAI_COMPATIBLE_DEFAULT_MODEL", "deepseek-chat")

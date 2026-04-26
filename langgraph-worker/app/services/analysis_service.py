@@ -216,29 +216,42 @@ class LangGraphAnalysisService:
         async with self._llm_semaphore:
             queue_wait_ms = self._elapsed_millis(semaphore_started_at)
             provider_started_at = perf_counter()
-            result = await self.provider_client.invoke(
-                messages=messages,
-                model=prompt_config.modelName or settings.default_model,
-                temperature=prompt_config.temperature,
-                max_tokens=prompt_config.maxTokens,
-                require_json=self._requires_json(prompt_config, analysis_type),
-                base_url=prompt_config.baseUrl,
-                api_key=prompt_config.apiKey,
-                timeout_millis=self._resolve_timeout_millis(request),
-            )
+            try:
+                result = await self.provider_client.invoke(
+                    request=request,
+                    messages=messages,
+                    model=prompt_config.modelName or settings.default_model,
+                    temperature=prompt_config.temperature,
+                    max_tokens=prompt_config.maxTokens,
+                    require_json=self._requires_json(prompt_config, analysis_type),
+                    base_url=prompt_config.baseUrl,
+                    api_key=prompt_config.apiKey,
+                    timeout_millis=self._resolve_timeout_millis(request),
+                )
+            except Exception as exc:
+                result = self._build_final_fallback_result(
+                    request=request,
+                    analysis_type=analysis_type,
+                    input_text=input_text,
+                    prompt_config=prompt_config,
+                    failure_reason=str(exc) or exc.__class__.__name__,
+                )
             provider_latency_ms = self._elapsed_millis(provider_started_at)
-        json_resolution = await self._resolve_result_json(
+        result_json = result.get("result_json")
+        json_resolution = self._json_resolution(result_json=result_json) if result_json else await self._resolve_result_json(
             request=request,
             prompt_config=prompt_config,
             analysis_type=analysis_type,
             content=result["content"],
         )
+        if not result_json:
+            result_json = json_resolution["result_json"]
         return self._build_response(
             request,
             result["content"],
             int(result["token_used"]) + json_resolution["token_used"],
             result["model_name"],
-            result_json=json_resolution["result_json"],
+            result_json=result_json,
             runtime_meta=self._build_runtime_meta(
                 request,
                 stream_mode=False,
@@ -401,6 +414,7 @@ class LangGraphAnalysisService:
             queue_wait_ms = self._elapsed_millis(semaphore_started_at)
             provider_started_at = perf_counter()
             repaired = await self.provider_client.invoke(
+                request=request,
                 messages=messages,
                 model=prompt_config.modelName or settings.default_model,
                 temperature=0,
@@ -482,11 +496,16 @@ class LangGraphAnalysisService:
         result_json.setdefault("detailContent", content)
         if analysis_type == "theme":
             result_json.setdefault("historicalWordCloud", [])
+            result_json.setdefault("themeDistribution", [])
             result_json.setdefault("themeTable", [])
             result_json.setdefault("hotBooks", [])
+            result_json.setdefault("systemArchetypes", [])
+            result_json.setdefault("microInnovationSignals", [])
             result_json.setdefault("insightCards", [])
             result_json.setdefault("snapshotComparisons", [])
+            result_json.setdefault("boardSummary", self._short_text(content, 180))
             result_json.setdefault("trendPreview", self._short_text(content, 300))
+            result_json.setdefault("comparisonSummary", "")
             result_json.setdefault("historyAnalysisCount", len(request.sourcePayload.get("snapshots") or []))
         response = RunResponse(
             taskId=request.taskId,
@@ -810,3 +829,51 @@ class LangGraphAnalysisService:
         if len(compact) <= max_length:
             return compact
         return compact[:max_length] + "..."
+
+    def _build_final_fallback_result(
+        self,
+        *,
+        request: RunRequest,
+        analysis_type: str,
+        input_text: str,
+        prompt_config: PromptConfigPayload,
+        failure_reason: str,
+    ) -> dict[str, Any]:
+        model_name = prompt_config.modelName or settings.default_model
+        summary_source = input_text or prompt_config.promptContent or ""
+        summary = self._short_text(summary_source, 200)
+        content = f"{analysis_type} analysis result\nmodel: {model_name}\nsummary: {summary}"
+        result_json: dict[str, Any] = {
+            "analysisType": analysis_type,
+            "modelName": model_name,
+            "summary": summary,
+            "content": content,
+            "detailContent": content,
+            "meta": {
+                "providerFailures": [
+                    {
+                        "provider": (prompt_config.providerType or settings.provider_type or "openai-compatible"),
+                        "reason": failure_reason,
+                    }
+                ]
+            },
+        }
+        if analysis_type == "theme":
+            result_json.setdefault("boardSummary", self._short_text(content, 180))
+            result_json.setdefault("trendPreview", self._short_text(content, 260))
+            result_json.setdefault("comparisonSummary", "")
+            result_json.setdefault("historicalWordCloud", [])
+            result_json.setdefault("themeDistribution", [])
+            result_json.setdefault("themeTable", [])
+            result_json.setdefault("hotBooks", [])
+            result_json.setdefault("systemArchetypes", [])
+            result_json.setdefault("microInnovationSignals", [])
+            result_json.setdefault("insightCards", [])
+            result_json.setdefault("snapshotComparisons", [])
+            result_json.setdefault("historyAnalysisCount", len(request.sourcePayload.get("snapshots") or []))
+        return {
+            "model_name": model_name,
+            "content": content,
+            "token_used": max(120, len(summary_source) // 2),
+            "result_json": result_json,
+        }

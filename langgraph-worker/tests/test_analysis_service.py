@@ -99,6 +99,14 @@ class StreamRepairProviderClient:
         yield {"event": "done", "tokenUsed": 11}
 
 
+class AlwaysFailingProviderClient:
+    async def invoke(self, **kwargs):
+        raise RuntimeError("all providers failed")
+
+    async def stream(self, **kwargs):
+        raise RuntimeError("stream should not be used in this test")
+
+
 class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_should_not_force_json_for_single_book_analysis_with_legacy_output_schema(self) -> None:
         provider = TimeoutCapturingProviderClient()
@@ -529,6 +537,37 @@ class AnalysisServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], response.resultJson["hotBooks"])
         self.assertEqual([], response.resultJson["insightCards"])
         self.assertEqual([], response.resultJson["snapshotComparisons"])
+
+    async def test_theme_final_fallback_should_keep_structured_contract_keys(self) -> None:
+        service = LangGraphAnalysisService(provider_client=AlwaysFailingProviderClient())
+        request = RunRequest(
+            taskId="task-theme-fallback",
+            agentType="trend_theme",
+            promptConfig=PromptConfigPayload(
+                promptType="theme",
+                promptContent="JSON ONLY {{content}}",
+                providerType="openai-compatible",
+                modelName="deepseek-chat",
+                outputJsonSchema='{"type":"object"}',
+            ),
+            sourcePayload={
+                "inputText": "trend content",
+                "snapshots": [{"snapshotId": 1}, {"snapshotId": 2}],
+            },
+            limits={},
+        )
+
+        response = await service.run(request)
+
+        self.assertEqual("theme", response.resultJson["analysisType"])
+        self.assertEqual("deepseek-chat", response.resultJson["modelName"])
+        self.assertIn("theme analysis result", response.content)
+        self.assertIn("trendPreview", response.resultJson)
+        self.assertIn("historicalWordCloud", response.resultJson)
+        self.assertIn("themeTable", response.resultJson)
+        self.assertIn("hotBooks", response.resultJson)
+        self.assertIn("insightCards", response.resultJson)
+        self.assertIn("snapshotComparisons", response.resultJson)
 
 
 if __name__ == "__main__":
