@@ -10,6 +10,12 @@ public class AuthProperties {
     private String demoPassword;
     private String jwtSecret;
     private long accessTokenExpireSeconds;
+    private long refreshTokenExpireSeconds;
+    private int sessionMaxDevices;
+    private String refreshCookieName;
+    private String refreshCookiePath;
+    private boolean refreshCookieSecure;
+    private String refreshCookieSameSite;
 
     public boolean isDemoEnabled() {
         return demoEnabled;
@@ -49,5 +55,53 @@ public class AuthProperties {
 
     public void setAccessTokenExpireSeconds(long accessTokenExpireSeconds) {
         this.accessTokenExpireSeconds = accessTokenExpireSeconds;
+    }
+
+    public long getRefreshTokenExpireSeconds() {
+        return refreshTokenExpireSeconds;
+    }
+
+    public void setRefreshTokenExpireSeconds(long refreshTokenExpireSeconds) {
+        this.refreshTokenExpireSeconds = refreshTokenExpireSeconds;
+    }
+
+    public int getSessionMaxDevices() {
+        return sessionMaxDevices;
+    }
+
+    public void setSessionMaxDevices(int sessionMaxDevices) {
+        this.sessionMaxDevices = sessionMaxDevices;
+    }
+
+    public String getRefreshCookieName() {
+        return refreshCookieName;
+    }
+
+    public void setRefreshCookieName(String refreshCookieName) {
+        this.refreshCookieName = refreshCookieName;
+    }
+
+    public String getRefreshCookiePath() {
+        return refreshCookiePath;
+    }
+
+    public void setRefreshCookiePath(String refreshCookiePath) {
+        this.refreshCookiePath = refreshCookiePath;
+    }
+
+    public boolean isRefreshCookieSecure() {
+        return refreshCookieSecure;
+    }
+
+    public void setRefreshCookieSecure(boolean refreshCookieSecure) {
+        this.refreshCookieSecure = refreshCookieSecure;
+    }
+
+    public String getRefreshCookieSameSite() {
+        return refreshCookieSameSite;
+    }
+
+    public void setRefreshCookieSameSite(String refreshCookieSameSite) {
+        this.refreshCookieSameSite = refreshCookieSameSite;
     }
 }

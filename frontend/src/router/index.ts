@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { restoreSessionFromStorage } from '@/lib/auth-session';
+import { useAuthStore } from '@/stores/auth';
 import { resolveAuthRedirect } from '@/router/guards';
 
 const router = createRouter({
@@ -33,6 +33,10 @@ const router = createRouter({
           component: () => import('@/views/trend/TrendView.vue'),
         },
         {
+          path: 'knowledge',
+          component: () => import('@/views/knowledge/KnowledgeChatView.vue'),
+        },
+        {
           path: 'history',
           component: () => import('@/views/history/HistoryView.vue'),
         },
@@ -55,8 +59,10 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to) => {
-  const session = restoreSessionFromStorage();
+router.beforeEach(async (to) => {
+  const authStore = useAuthStore();
+  await authStore.ensureAuthRestored();
+
   const redirect = resolveAuthRedirect(
     {
       path: to.path,
@@ -65,8 +71,8 @@ router.beforeEach((to) => {
         roles: Array.isArray(to.meta.roles) ? (to.meta.roles as string[]) : undefined,
       },
     },
-    !!session,
-    session?.roles ?? [],
+    authStore.restoreStatus,
+    authStore.session?.roles ?? [],
   );
 
   return redirect ?? true;

@@ -10,9 +10,8 @@ class AuthConfigValidatorTest {
     @Test
     void shouldRejectBlankJwtSecret() {
         AuthProperties properties = new AuthProperties();
+        applyValidSessionDefaults(properties);
         properties.setJwtSecret("");
-        properties.setDemoEnabled(false);
-        properties.setAccessTokenExpireSeconds(7200);
 
         AuthConfigValidator validator = new AuthConfigValidator(properties);
 
@@ -24,9 +23,8 @@ class AuthConfigValidatorTest {
     @Test
     void shouldRejectTooShortJwtSecret() {
         AuthProperties properties = new AuthProperties();
+        applyValidSessionDefaults(properties);
         properties.setJwtSecret("short-secret");
-        properties.setDemoEnabled(false);
-        properties.setAccessTokenExpireSeconds(7200);
 
         AuthConfigValidator validator = new AuthConfigValidator(properties);
 
@@ -38,12 +36,22 @@ class AuthConfigValidatorTest {
     @Test
     void shouldAcceptSecureJwtSecret() {
         AuthProperties properties = new AuthProperties();
+        applyValidSessionDefaults(properties);
         properties.setJwtSecret("secure-jwt-secret-with-enough-length-1234567890");
-        properties.setDemoEnabled(false);
-        properties.setAccessTokenExpireSeconds(7200);
 
         AuthConfigValidator validator = new AuthConfigValidator(properties);
 
         assertThatNoException().isThrownBy(validator::validate);
+    }
+
+    private void applyValidSessionDefaults(AuthProperties properties) {
+        properties.setDemoEnabled(false);
+        properties.setAccessTokenExpireSeconds(900);
+        properties.setRefreshTokenExpireSeconds(604800);
+        properties.setSessionMaxDevices(3);
+        properties.setRefreshCookieName("refresh_token");
+        properties.setRefreshCookiePath("/api/auth");
+        properties.setRefreshCookieSecure(true);
+        properties.setRefreshCookieSameSite("Strict");
     }
 }

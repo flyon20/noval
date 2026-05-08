@@ -8,5 +8,7 @@ export function renderAnalysisMarkdown(content: string) {
     mangle: false,
   });
 
-  return DOMPurify.sanitize(html);
+  const sanitized = DOMPurify.sanitize(html);
+  const wrapped = `<div class="analysis-result__markdown">${sanitized}</div>`;
+  return DOMPurify.sanitize(wrapped);
 }

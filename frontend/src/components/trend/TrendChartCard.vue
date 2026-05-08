@@ -77,9 +77,17 @@ const shouldRenderChart = computed(() => hasSeries.value && canUseCanvas());
   gap: 0.9rem;
   padding: 1rem 1rem 0.75rem;
   border-radius: 1.25rem;
-  border: 1px solid var(--color-border);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: var(--shadow-soft);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  color: var(--color-text);
 }
 
 .trend-chart-card__header {
@@ -99,10 +107,10 @@ const shouldRenderChart = computed(() => hasSeries.value && canUseCanvas());
 }
 
 .trend-chart-card__subtitle {
-  margin-top: 0.3rem;
+  margin-top: 0.25rem;
   color: var(--color-text-muted);
-  line-height: 1.6;
-  font-size: 0.88rem;
+  line-height: 1.5;
+  font-size: 0.82rem;
 }
 
 .trend-chart-card__body {
@@ -121,7 +129,7 @@ const shouldRenderChart = computed(() => hasSeries.value && canUseCanvas());
   padding: 1rem;
   border-radius: 1rem;
   color: var(--color-text-muted);
-  background: rgba(35, 65, 58, 0.05);
+  background: color-mix(in srgb, var(--color-primary-soft) 72%, transparent);
   text-align: center;
 }
 </style>

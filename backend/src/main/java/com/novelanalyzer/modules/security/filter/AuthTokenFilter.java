@@ -2,6 +2,7 @@ package com.novelanalyzer.modules.security.filter;
 
 import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
+import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.Result;
 import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.web.RequestIpResolver;
@@ -9,6 +10,8 @@ import com.novelanalyzer.common.utils.JsonResponseWriter;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.config.SecurityProperties;
+import com.novelanalyzer.modules.auth.model.AuthSessionEntity;
+import com.novelanalyzer.modules.auth.service.AuthSessionService;
 import com.novelanalyzer.modules.security.repository.IpBlacklistRepository;
 import com.novelanalyzer.modules.security.repository.OperationLogRepository;
 import com.novelanalyzer.modules.security.service.RateLimitService;
@@ -45,6 +48,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
     private final OperationLogRepository operationLogRepository;
     private final JsonResponseWriter jsonResponseWriter;
     private final RequestIpResolver requestIpResolver;
+    private final AuthSessionService authSessionService;
 
     public AuthTokenFilter(JwtUtils jwtUtils,
                            AuthProperties authProperties,
@@ -54,7 +58,8 @@ public class AuthTokenFilter extends OncePerRequestFilter {
                            IpBlacklistRepository ipBlacklistRepository,
                            OperationLogRepository operationLogRepository,
                            JsonResponseWriter jsonResponseWriter,
-                           RequestIpResolver requestIpResolver) {
+                           RequestIpResolver requestIpResolver,
+                           AuthSessionService authSessionService) {
         this.jwtUtils = jwtUtils;
         this.authProperties = authProperties;
         this.securityProperties = securityProperties;
@@ -64,6 +69,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
         this.operationLogRepository = operationLogRepository;
         this.jsonResponseWriter = jsonResponseWriter;
         this.requestIpResolver = requestIpResolver;
+        this.authSessionService = authSessionService;
     }
 
     @Override
@@ -71,7 +77,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String requestPath = request.getRequestURI();
-        if (isWhitelisted(requestPath) || !isProtectedPath(requestPath)) {
+        if (requestPath.startsWith("/api/auth/logout") || isWhitelisted(requestPath) || !isProtectedPath(requestPath)) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -115,6 +121,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
 
         try {
             Claims claims = jwtUtils.parseClaims(token, authProperties.getJwtSecret());
+            validateSession(claims);
             AuthUser authUser = buildAuthUser(claims);
             AuthUserHolder.set(authUser);
             rateLimitService.assertWithinLimit(requestIp, requestPath, authUser);
@@ -122,7 +129,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
         } catch (JwtException ex) {
             jsonResponseWriter.write(response, Result.fail(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
         } catch (Exception ex) {
-            if (ex instanceof com.novelanalyzer.common.exception.BusinessException be) {
+            if (ex instanceof BusinessException be) {
                 jsonResponseWriter.write(response, Result.fail(be.getResultCode(), be.getMessage()));
                 return;
             }
@@ -163,5 +170,19 @@ public class AuthTokenFilter extends OncePerRequestFilter {
             roles.addAll(Arrays.asList(rolesValue.split(",")));
         }
         return AuthUser.of(userId, username, roles);
+    }
+
+    private void validateSession(Claims claims) {
+        Long userId = claims.get("uid", Long.class);
+        String sessionId = claims.get("sid", String.class);
+        if (userId == null || sessionId == null || sessionId.isBlank()) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+        }
+        AuthSessionEntity session = authSessionService.findActiveSessionBySessionId(sessionId)
+            .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired");
+        }
+        authSessionService.updateActivity(sessionId);
     }
 }

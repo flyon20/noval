@@ -27,9 +27,15 @@ def rank(req: RankRequest):
     try:
         crawler = build_crawler(req.platform, timeout_seconds=req.timeoutSeconds)
         if req.channelCode and req.boardCode:
-            data = crawler.fetch_rank(req.channelCode, req.boardCode)
+            if req.rankFetchCount is not None:
+                data = crawler.fetch_rank(req.channelCode, req.boardCode, req.rankFetchCount)
+            else:
+                data = crawler.fetch_rank(req.channelCode, req.boardCode)
         elif req.category:
-            data = crawler.fetch_rank(req.category)
+            if req.rankFetchCount is not None:
+                data = crawler.fetch_rank(req.category, None, req.rankFetchCount)
+            else:
+                data = crawler.fetch_rank(req.category)
         else:
             raise ValueError("either category or channelCode + boardCode is required")
         return ApiResult(code=200, message="success", data=data)

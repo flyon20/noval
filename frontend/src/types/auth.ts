@@ -1,15 +1,38 @@
 export interface LoginRequest {
-  username: string;
+  phone: string;
   password: string;
 }
 
 export interface RegisterRequest {
-  username: string;
+  phone: string;
+  smsCode: string;
+  smsOutId?: string;
   password: string;
 }
 
-export interface RefreshTokenRequest {
-  token: string;
+export interface SmsLoginRequest {
+  phone: string;
+  smsCode: string;
+  smsOutId?: string;
+  deviceLabel?: string;
+}
+
+export interface SmsSendRequest {
+  phone: string;
+  bizType: 'REGISTER' | 'LOGIN' | 'RESET_PASSWORD';
+  turnstileToken?: string;
+}
+
+export interface SmsSendResponse {
+  debugVerifyCode?: string | null;
+  smsOutId?: string | null;
+}
+
+export interface PasswordResetRequest {
+  phone: string;
+  smsCode: string;
+  smsOutId?: string;
+  newPassword: string;
 }
 
 export interface TokenResponse {
@@ -22,12 +45,14 @@ export interface JwtClaims {
   sub: string;
   uid: number;
   username: string;
+  phone?: string;
   roles: string;
   iat: number;
   exp: number;
 }
 
 export type RoleCode = 'ADMIN' | 'USER';
+export type AuthRestoreStatus = 'restoring' | 'authenticated' | 'logged_out';
 
 export interface AuthSession {
   userId: number;

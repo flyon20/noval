@@ -7,6 +7,106 @@
   --el-color-danger: var(--color-danger);
   --el-border-radius-base: 14px;
   --el-font-size-base: 15px;
+  --el-bg-color: var(--color-surface-strong);
+  --el-bg-color-page: var(--color-bg);
+  --el-bg-color-overlay: color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
+  --el-fill-color-blank: var(--color-surface-strong);
+  --el-fill-color-light: color-mix(in srgb, var(--color-primary-soft) 72%, var(--color-surface));
+  --el-fill-color-lighter: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  --el-fill-color-extra-light: color-mix(in srgb, var(--color-surface) 96%, transparent);
+  --el-border-color: var(--color-border);
+  --el-border-color-light: color-mix(in srgb, var(--color-border-strong) 55%, transparent);
+  --el-border-color-lighter: color-mix(in srgb, var(--color-border) 72%, transparent);
+  --el-text-color-primary: var(--color-text);
+  --el-text-color-regular: var(--color-text);
+  --el-text-color-secondary: var(--color-text-muted);
+  --el-text-color-placeholder: color-mix(in srgb, var(--color-text-muted) 80%, transparent);
+  --el-mask-color: rgba(5, 8, 18, 0.58);
+  --el-mask-color-extra-light: rgba(5, 8, 18, 0.3);
+}
+
+:root[data-theme='dark'] {
+  --el-color-primary-light-3: #a4b3ff;
+  --el-bg-color: color-mix(in srgb, var(--color-surface-strong) 100%, transparent);
+  --el-bg-color-overlay: color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
+  --el-fill-color-blank: color-mix(in srgb, var(--color-surface-strong) 100%, transparent);
+  --el-fill-color-light: color-mix(in srgb, var(--color-primary-soft) 92%, var(--color-surface));
+  --el-fill-color-lighter: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  --el-fill-color-extra-light: color-mix(in srgb, var(--color-surface) 98%, transparent);
+  --el-border-color: var(--color-border);
+  --el-border-color-light: color-mix(in srgb, var(--color-border-strong) 68%, transparent);
+  --el-border-color-lighter: color-mix(in srgb, var(--color-border) 86%, transparent);
+  --el-text-color-primary: var(--color-text);
+  --el-text-color-regular: var(--color-text);
+  --el-text-color-secondary: var(--color-text-muted);
+  --el-text-color-placeholder: color-mix(in srgb, var(--color-text-muted) 88%, transparent);
+  --el-mask-color: rgba(2, 6, 23, 0.72);
+  --el-mask-color-extra-light: rgba(2, 6, 23, 0.44);
+
+  .el-drawer,
+  .el-dialog,
+  .el-card,
+  .el-select-dropdown,
+  .el-popper.is-pure {
+    background: color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
+    color: var(--color-text);
+    border-color: color-mix(in srgb, var(--color-border-strong) 64%, transparent);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.42);
+  }
+
+  .el-drawer__header,
+  .el-drawer__body {
+    background: transparent;
+    color: var(--color-text);
+  }
+
+  .el-select__wrapper,
+  .el-input__wrapper,
+  .el-textarea__inner {
+    background: color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
+    color: var(--color-text);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-border-strong) 62%, transparent) inset;
+  }
+
+  .el-input__inner,
+  .el-textarea__inner,
+  .el-select-dropdown__item,
+  .el-form-item__label,
+  .el-drawer__close-btn {
+    color: var(--color-text);
+  }
+
+  .el-select-dropdown__item.is-hovering,
+  .el-select-dropdown__item.hover,
+  .el-select-dropdown__item:hover {
+    background: color-mix(in srgb, var(--color-primary-soft) 84%, transparent);
+  }
+
+  .el-table,
+  .el-table__inner-wrapper,
+  .el-table tr,
+  .el-table td.el-table__cell,
+  .el-table th.el-table__cell {
+    background: transparent;
+    color: var(--color-text);
+  }
+
+  .el-table th.el-table__cell {
+    background: color-mix(in srgb, var(--color-surface) 90%, transparent);
+  }
+
+  .el-table td.el-table__cell,
+  .el-table tr {
+    background: color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
+  }
+
+  .el-table__body tr:hover > td.el-table__cell {
+    background: color-mix(in srgb, var(--color-primary-soft) 78%, transparent) !important;
+  }
+
+  .el-skeleton__item {
+    background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  }
 }
 
 /* Mobile touch target improvements */

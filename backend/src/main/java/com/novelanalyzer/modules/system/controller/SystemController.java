@@ -2,7 +2,9 @@ package com.novelanalyzer.modules.system.controller;
 
 import com.novelanalyzer.common.result.Result;
 import com.novelanalyzer.modules.security.annotation.RequireRole;
+import com.novelanalyzer.modules.system.service.AuthPublicConfigService;
 import com.novelanalyzer.modules.system.service.LoginBootstrapService;
+import com.novelanalyzer.modules.system.vo.AuthPublicConfigVO;
 import com.novelanalyzer.modules.system.vo.LoginBootstrapVO;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.validation.annotation.Validated;
@@ -21,9 +23,12 @@ import java.util.Map;
 public class SystemController {
 
     private final LoginBootstrapService loginBootstrapService;
+    private final AuthPublicConfigService authPublicConfigService;
 
-    public SystemController(LoginBootstrapService loginBootstrapService) {
+    public SystemController(LoginBootstrapService loginBootstrapService,
+                            AuthPublicConfigService authPublicConfigService) {
         this.loginBootstrapService = loginBootstrapService;
+        this.authPublicConfigService = authPublicConfigService;
     }
 
     @GetMapping("/health")
@@ -32,6 +37,11 @@ public class SystemController {
         data.put("status", "UP");
         data.put("service", "novel-analyzer-backend");
         return Result.success(data);
+    }
+
+    @GetMapping("/auth-public-config")
+    public Result<AuthPublicConfigVO> authPublicConfig() {
+        return Result.success(authPublicConfigService.getPublicConfig());
     }
 
     @PostMapping("/login-bootstrap")

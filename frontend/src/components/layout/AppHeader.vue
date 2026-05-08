@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { SwitchButton } from '@element-plus/icons-vue';
+import { Moon, Sunny, SwitchButton } from '@element-plus/icons-vue';
+import { getCurrentTheme, THEME_EVENT_NAME, toggleTheme, type AppTheme } from '@/lib/theme';
 
 defineProps<{
   username: string;
@@ -13,32 +14,54 @@ const emit = defineEmits<{
 }>();
 
 const route = useRoute();
+const currentTheme = ref<AppTheme>('light');
 
 const pageCopy = computed(() => {
   if (route.path.startsWith('/rank')) {
-    return { title: '扫榜', subtitle: '查看当前榜单与书籍详情。' };
+    return { title: '扫榜' };
   }
   if (route.path.startsWith('/analysis')) {
-    return { title: '单书分析', subtitle: '查看当前书籍分析结果。' };
+    return { title: '单书分析' };
   }
   if (route.path.startsWith('/trend')) {
-    return { title: '趋势分析', subtitle: '查看趋势结果与图表。' };
+    return { title: '趋势分析' };
   }
   if (route.path.startsWith('/history')) {
-    return { title: '历史回看', subtitle: '回看历史分析记录。' };
+    return { title: '历史回看' };
   }
   if (route.path.startsWith('/config/prompt')) {
-    return { title: '提示词配置', subtitle: '管理提示词内容。' };
+    return { title: '提示词配置' };
   }
   if (route.path.startsWith('/config/system')) {
-    return { title: '系统配置', subtitle: '管理系统参数。' };
+    return { title: '系统配置' };
   }
-  return { title: '控制台', subtitle: '查看当前页面内容。' };
+  return { title: '控制台' };
 });
 
 const userInitial = computed(() => {
   // props.username not directly accessible in computed without defineProps ref
   return '';
+});
+
+function syncTheme(theme?: AppTheme) {
+  currentTheme.value = theme ?? getCurrentTheme();
+}
+
+function handleThemeToggle() {
+  syncTheme(toggleTheme());
+}
+
+function handleThemeChange(event: Event) {
+  syncTheme((event as CustomEvent<AppTheme>).detail);
+}
+
+onMounted(() => {
+  syncTheme();
+  document.addEventListener(THEME_EVENT_NAME, handleThemeChange as EventListener);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener(THEME_EVENT_NAME, handleThemeChange as EventListener);
 });
 </script>
 
@@ -46,7 +69,6 @@ const userInitial = computed(() => {
   <header class="app-header">
     <div class="app-header__identity">
       <h2 class="app-header__title">{{ pageCopy.title }}</h2>
-      <p class="app-header__subtitle">{{ pageCopy.subtitle }}</p>
     </div>
 
     <div class="app-header__actions">
@@ -62,11 +84,26 @@ const userInitial = computed(() => {
         >
           {{ role }}
         </el-tag>
+        <el-button
+          class="app-header__theme-toggle"
+          circle
+          plain
+          :icon="currentTheme === 'dark' ? Sunny : Moon"
+          @click="handleThemeToggle"
+        />
         <el-button plain type="primary" @click="emit('logout')">退出登录</el-button>
       </template>
       <!-- Mobile: compact avatar + icon button -->
       <div class="app-header__mobile-actions">
         <div class="app-header__avatar">{{ username ? username.charAt(0).toUpperCase() : 'U' }}</div>
+        <el-button
+          class="app-header__mobile-theme"
+          circle
+          plain
+          :icon="currentTheme === 'dark' ? Sunny : Moon"
+          size="small"
+          @click="handleThemeToggle"
+        />
         <el-button
           class="app-header__mobile-logout"
           circle
@@ -82,14 +119,22 @@ const userInitial = computed(() => {
 
 <style scoped lang="scss">
 .app-header {
+  --app-header-mobile-height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  width: 100%;
+  max-width: 100%;
   padding: 1.2rem 1.6rem;
   border-bottom: 1px solid var(--color-border);
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.1));
+  background: color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
+  backdrop-filter: blur(10px) saturate(1.08);
+  -webkit-backdrop-filter: blur(10px) saturate(1.08);
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  box-shadow: 0 10px 24px rgba(18, 25, 58, 0.06);
 }
 
 .app-header__identity {
@@ -103,10 +148,10 @@ const userInitial = computed(() => {
   gap: 0.75rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+  min-width: 0;
 }
 
-.app-header__title,
-.app-header__subtitle {
+.app-header__title {
   margin: 0;
 }
 
@@ -115,21 +160,22 @@ const userInitial = computed(() => {
   font-family: var(--font-heading);
 }
 
-.app-header__subtitle {
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
-
 .app-header__user {
   color: var(--color-text-muted);
   font-size: 0.92rem;
 }
 
 .app-header__tag {
-  background: rgba(199, 146, 92, 0.08);
-  border-color: rgba(199, 146, 92, 0.22);
+  background: rgba(92, 124, 250, 0.08);
+  border-color: rgba(92, 124, 250, 0.18);
   color: var(--color-accent-strong);
+}
+
+.app-header__theme-toggle,
+.app-header__mobile-theme,
+.app-header__mobile-logout {
+  border-color: color-mix(in srgb, var(--color-border-strong) 76%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 88%, transparent);
 }
 
 /* Mobile: hide desktop elements, show compact ones */
@@ -156,22 +202,31 @@ const userInitial = computed(() => {
   justify-content: center;
 }
 
-.app-header__mobile-logout {
-  border-color: rgba(36, 61, 54, 0.2);
-}
-
 @media (max-width: 768px) {
   .app-header {
     padding: 0.75rem 0.875rem;
-    min-height: 52px;
-  }
-
-  .app-header__subtitle {
-    display: none;
+    min-height: var(--app-header-mobile-height);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
+    z-index: 40;
+    border-radius: 0;
+    border-bottom-color: rgba(255, 255, 255, 0.16);
+    background: color-mix(in srgb, var(--color-surface-strong) 94%, transparent);
+    backdrop-filter: blur(8px) saturate(1.04);
+    -webkit-backdrop-filter: blur(8px) saturate(1.04);
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
   }
 
   .app-header__title {
     font-size: 1.05rem;
+    max-width: 58vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Hide desktop actions, show mobile compact actions */

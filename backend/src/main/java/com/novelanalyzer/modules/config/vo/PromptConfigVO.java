@@ -1,5 +1,7 @@
 package com.novelanalyzer.modules.config.vo;
 
+import java.time.LocalDateTime;
+
 public class PromptConfigVO {
 
     private Long id;
@@ -9,10 +11,21 @@ public class PromptConfigVO {
     private String modelName;
     private Double temperature;
     private Integer maxTokens;
+    private Boolean isDefault;
+    private String inputJsonSchema;
+    private String inputExampleJson;
     private String outputJsonSchema;
     private String outputExampleJson;
     private String postProcessType;
     private String parseConfigJson;
+    private String scopeType;
+    private Long ownerUserId;
+    private Long sourcePromptConfigId;
+    private Boolean isPublished;
+    private Long publishedVersionNo;
+    private String editableScope;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 
     public Long getId() {
         return id;
@@ -70,6 +83,30 @@ public class PromptConfigVO {
         this.maxTokens = maxTokens;
     }
 
+    public Boolean getIsDefault() {
+        return isDefault;
+    }
+
+    public void setIsDefault(Boolean isDefault) {
+        this.isDefault = isDefault;
+    }
+
+    public String getInputJsonSchema() {
+        return inputJsonSchema;
+    }
+
+    public void setInputJsonSchema(String inputJsonSchema) {
+        this.inputJsonSchema = inputJsonSchema;
+    }
+
+    public String getInputExampleJson() {
+        return inputExampleJson;
+    }
+
+    public void setInputExampleJson(String inputExampleJson) {
+        this.inputExampleJson = inputExampleJson;
+    }
+
     public String getOutputJsonSchema() {
         return outputJsonSchema;
     }
@@ -100,5 +137,69 @@ public class PromptConfigVO {
 
     public void setParseConfigJson(String parseConfigJson) {
         this.parseConfigJson = parseConfigJson;
+    }
+
+    public String getEditableScope() {
+        return editableScope;
+    }
+
+    public void setEditableScope(String editableScope) {
+        this.editableScope = editableScope;
+    }
+
+    public String getScopeType() {
+        return scopeType;
+    }
+
+    public void setScopeType(String scopeType) {
+        this.scopeType = scopeType;
+    }
+
+    public Long getOwnerUserId() {
+        return ownerUserId;
+    }
+
+    public void setOwnerUserId(Long ownerUserId) {
+        this.ownerUserId = ownerUserId;
+    }
+
+    public Long getSourcePromptConfigId() {
+        return sourcePromptConfigId;
+    }
+
+    public void setSourcePromptConfigId(Long sourcePromptConfigId) {
+        this.sourcePromptConfigId = sourcePromptConfigId;
+    }
+
+    public Boolean getIsPublished() {
+        return isPublished;
+    }
+
+    public void setIsPublished(Boolean isPublished) {
+        this.isPublished = isPublished;
+    }
+
+    public Long getPublishedVersionNo() {
+        return publishedVersionNo;
+    }
+
+    public void setPublishedVersionNo(Long publishedVersionNo) {
+        this.publishedVersionNo = publishedVersionNo;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }

@@ -7,11 +7,14 @@ import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankBoard;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.jdbc.Sql;
@@ -39,6 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
+        "spring.data.redis.database=15",
         "spring.sql.init.mode=never",
         "app.security.rate-limit-per-minute=100"
     }
@@ -57,14 +61,30 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 class CrawlerPhase3IntegrationTest {
 
+    private static final String ADMIN_PHONE = "15599316908";
+
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     @MockBean
     private PythonCrawlerClient pythonCrawlerClient;
+
+    @BeforeEach
+    void prepareState() {
+        jdbcTemplate.update("UPDATE sys_user SET phone = ? WHERE id = 1", ADMIN_PHONE);
+        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
+        try {
+            connection.serverCommands().flushDb();
+        } finally {
+            connection.close();
+        }
+    }
 
     @Test
     void shouldSyncBoardCatalogFromCrawler() throws Exception {
@@ -119,13 +139,14 @@ class CrawlerPhase3IntegrationTest {
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain"}
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","rankFetchCount":40}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.platform").value("fanqie"))
             .andExpect(jsonPath("$.data.channelCode").value("male-new"))
-            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"));
+            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"))
+            .andExpect(jsonPath("$.data.rankFetchCount").value(40));
 
         mockMvc.perform(get("/api/crawler/preference")
                 .header("Authorization", "Bearer " + token)
@@ -134,7 +155,92 @@ class CrawlerPhase3IntegrationTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.userId").value(2))
             .andExpect(jsonPath("$.data.channelCode").value("male-new"))
-            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"));
+            .andExpect(jsonPath("$.data.boardCode").value("urban-brain"))
+            .andExpect(jsonPath("$.data.rankFetchCount").value(40));
+    }
+
+    @Test
+    void shouldDefaultBoardRefreshToThirtyBooksWhenRankFetchCountMissing() throws Exception {
+        insertSystemConfig("crawler.rank.refresh-days", "5");
+        insertSystemConfig("crawler.rank.force-cooldown-days", "2");
+        insertSystemConfig("crawler.rank.force-max-times", "2");
+
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 30, 20))
+            .thenReturn(rankItems(45));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/rank/refresh")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","refreshMode":"FORCE"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.total").value(30));
+
+        Integer persistedRankCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM crawl_rank WHERE channel_code = ? AND board_code = ? AND deleted = 0",
+            Integer.class,
+            "male-new",
+            "urban-brain"
+        );
+        assertThat(persistedRankCount).isEqualTo(30);
+
+        Integer snapshotRecordCount = jdbcTemplate.queryForObject(
+            """
+                SELECT record_count
+                FROM rank_snapshot
+                WHERE rank_board_id = (
+                    SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ? AND deleted = 0
+                )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+            Integer.class,
+            "fanqie",
+            "male-new",
+            "urban-brain"
+        );
+        assertThat(snapshotRecordCount).isEqualTo(30);
+    }
+
+    @Test
+    void shouldRespectRequestedRankFetchCountWhenRefreshingBoard() throws Exception {
+        insertSystemConfig("crawler.rank.refresh-days", "5");
+        insertSystemConfig("crawler.rank.force-cooldown-days", "2");
+        insertSystemConfig("crawler.rank.force-max-times", "2");
+
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 40, 20))
+            .thenReturn(rankItems(45));
+
+        String token = loginAndGetToken("admin", "admin123");
+        mockMvc.perform(post("/api/crawler/rank/refresh")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","refreshMode":"FORCE","rankFetchCount":40}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.total").value(40));
+
+        Integer snapshotRecordCount = jdbcTemplate.queryForObject(
+            """
+                SELECT record_count
+                FROM rank_snapshot
+                WHERE rank_board_id = (
+                    SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ? AND deleted = 0
+                )
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+            Integer.class,
+            "fanqie",
+            "male-new",
+            "urban-brain"
+        );
+        assertThat(snapshotRecordCount).isEqualTo(40);
     }
 
     @Test
@@ -220,7 +326,7 @@ class CrawlerPhase3IntegrationTest {
         insertSystemConfig("crawler.rank.force-cooldown-days", "2");
         insertSystemConfig("crawler.rank.force-max-times", "2");
 
-        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 20)).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 30, 20)).thenReturn(List.of(
             rankItem(1, "Book 01", "Author 01", "https://fanqienovel.com/page/board-01"),
             rankItem(2, "Book 02", "Author 02", "https://fanqienovel.com/page/board-02"),
             rankItem(3, "Book 03", "Author 03", "https://fanqienovel.com/page/board-03"),
@@ -275,7 +381,7 @@ class CrawlerPhase3IntegrationTest {
             .andExpect(jsonPath("$.data.total").value(12))
             .andExpect(jsonPath("$.data.reused").value(true));
 
-        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-new", "urban-brain", 20);
+        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-new", "urban-brain", 30, 20);
     }
 
     @Test
@@ -298,7 +404,7 @@ class CrawlerPhase3IntegrationTest {
             "{\"platform\":\"fanqie\",\"channelCode\":\"male-read\",\"boardCode\":\"urban-power\",\"refreshMode\":\"FORCE\"}",
             2, LocalDateTime.now().minusHours(6), LocalDateTime.now().minusHours(6).plusMinutes(1));
 
-        when(pythonCrawlerClient.fetchRank("fanqie", "male-read", "urban-power", 20)).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-read", "urban-power", 30, 20)).thenReturn(List.of(
             rankItem(1, "Crawler Forced Book", "Crawler Author", "https://fanqienovel.com/page/crawler-force")
         ));
 
@@ -316,7 +422,7 @@ class CrawlerPhase3IntegrationTest {
             .andExpect(jsonPath("$.data.reused").value(true))
             .andExpect(jsonPath("$.data.refreshLimited").value(true));
 
-        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-read", "urban-power", 20);
+        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-read", "urban-power", 30, 20);
     }
 
     @Test
@@ -626,9 +732,15 @@ class CrawlerPhase3IntegrationTest {
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/auth/login")
+        String phone = switch (username) {
+            case "admin" -> ADMIN_PHONE;
+            case "writer" -> "13800138001";
+            case "15599316908" -> "15599316908";
+            default -> username;
+        };
+        MvcResult result = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
@@ -644,6 +756,17 @@ class CrawlerPhase3IntegrationTest {
         item.setBookUrl(url);
         item.setPlatformBookId("pid-" + rankNo);
         return item;
+    }
+
+    private List<ExternalRankItem> rankItems(int count) {
+        return java.util.stream.IntStream.rangeClosed(1, count)
+            .mapToObj(index -> rankItem(
+                index,
+                "Book " + String.format("%02d", index),
+                "Author " + String.format("%02d", index),
+                "https://fanqienovel.com/page/board-" + String.format("%02d", index)
+            ))
+            .toList();
     }
 
     private ExternalBookDetail bookDetail(String url) {

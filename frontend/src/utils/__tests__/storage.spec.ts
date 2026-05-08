@@ -6,18 +6,17 @@ import {
 import { ACCESS_TOKEN_KEY, TOKEN_EXPIRE_AT_KEY, TOKEN_TYPE_KEY } from '@/constants/auth';
 
 describe('storage utils', () => {
-  test('persists and reads token snapshot', () => {
+  test('persistTokenSnapshot no longer stores access tokens in localStorage', () => {
     persistTokenSnapshot({
       accessToken: 'token-1',
       tokenType: 'Bearer',
       expireAt: 1_710_007_200_000,
     });
 
-    expect(readTokenSnapshot()).toEqual({
-      accessToken: 'token-1',
-      tokenType: 'Bearer',
-      expireAt: 1_710_007_200_000,
-    });
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull();
+    expect(localStorage.getItem(TOKEN_TYPE_KEY)).toBeNull();
+    expect(localStorage.getItem(TOKEN_EXPIRE_AT_KEY)).toBeNull();
+    expect(readTokenSnapshot()).toBeNull();
   });
 
   test('clears persisted token snapshot', () => {

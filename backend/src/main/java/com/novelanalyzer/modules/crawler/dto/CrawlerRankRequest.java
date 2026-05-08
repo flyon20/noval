@@ -21,6 +21,8 @@ public class CrawlerRankRequest {
 
     private String forceReason;
 
+    private Integer rankFetchCount;
+
     @AssertTrue(message = "category or channelCode/boardCode is required")
     public boolean isScopeValid() {
         return hasLegacyCategory() || hasBoardSelection();
@@ -33,6 +35,12 @@ public class CrawlerRankRequest {
     public boolean hasBoardSelection() {
         return channelCode != null && !channelCode.isBlank()
             && boardCode != null && !boardCode.isBlank();
+    }
+
+    @AssertTrue(message = "rankFetchCount must be between 10 and 100, in steps of 10")
+    public boolean isRankFetchCountValid() {
+        return rankFetchCount == null
+            || (rankFetchCount >= 10 && rankFetchCount <= 100 && rankFetchCount % 10 == 0);
     }
 
     public String getPlatform() {
@@ -81,5 +89,13 @@ public class CrawlerRankRequest {
 
     public void setForceReason(String forceReason) {
         this.forceReason = forceReason;
+    }
+
+    public Integer getRankFetchCount() {
+        return rankFetchCount;
+    }
+
+    public void setRankFetchCount(Integer rankFetchCount) {
+        this.rankFetchCount = rankFetchCount;
     }
 }

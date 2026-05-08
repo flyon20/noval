@@ -4,18 +4,30 @@ html,
 body,
 #app {
   min-height: 100%;
+  max-width: 100%;
 }
 
 html {
   background:
-    radial-gradient(circle at top left, rgba(210, 136, 61, 0.12), transparent 24%),
-    linear-gradient(180deg, var(--color-bg), #efe8db);
+    radial-gradient(circle at 15% 10%, rgba(92, 124, 250, 0.18), transparent 30%),
+    radial-gradient(circle at 85% 0%, rgba(255, 255, 255, 0.2), transparent 35%),
+    linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
+  color: var(--color-text);
+  overflow-x: hidden;
 }
 
 body {
   margin: 0;
+  background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-body);
+  transition: background 0.25s ease, color 0.25s ease;
+  overflow-x: hidden;
+}
+
+#app {
+  background: var(--color-bg);
+  overflow-x: clip;
 }
 
 * {

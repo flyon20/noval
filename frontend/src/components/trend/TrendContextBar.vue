@@ -57,9 +57,6 @@ function handleBoardChange(boardCode: string) {
         <h2 class="trend-context__title">榜单趋势分析</h2>
         <span class="trend-context__status">状态：{{ activeStatus }}</span>
       </div>
-      <p class="trend-context__description">
-        下拉切换频道和榜单，只展示当前选择的数据；趋势分析仍需手动启动。
-      </p>
       <div class="trend-context__chips">
         <span class="trend-context__chip">平台：{{ platformLabel }}</span>
         <span class="trend-context__chip">当前榜单：{{ activeBoardName }}</span>
@@ -113,18 +110,26 @@ function handleBoardChange(boardCode: string) {
   gap: 0.9rem;
   align-items: center;
   padding: 1rem 1.1rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.35rem;
   background:
-    radial-gradient(circle at top right, rgba(204, 121, 36, 0.16), transparent 26%),
-    linear-gradient(135deg, rgba(251, 246, 237, 0.98), rgba(240, 246, 239, 0.94));
-  box-shadow: var(--shadow-soft);
+    radial-gradient(circle at top right, color-mix(in srgb, var(--color-accent) 18%, transparent), transparent 26%),
+    radial-gradient(circle at bottom left, color-mix(in srgb, #ff93ba 16%, transparent), transparent 22%),
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
 }
 
 .trend-context__copy,
 .trend-context__field {
   display: grid;
   gap: 0.45rem;
+  min-width: 0;
 }
 
 .trend-context__eyebrow,
@@ -143,8 +148,7 @@ function handleBoardChange(boardCode: string) {
   flex-wrap: wrap;
 }
 
-.trend-context__title,
-.trend-context__description {
+.trend-context__title {
   margin: 0;
 }
 
@@ -159,30 +163,27 @@ function handleBoardChange(boardCode: string) {
   min-height: 32px;
   padding: 0.3rem 0.8rem;
   border-radius: 999px;
-  background: rgba(190, 108, 28, 0.12);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: var(--color-text);
   font-size: 0.88rem;
   font-weight: 600;
-}
-
-.trend-context__description {
-  color: var(--color-text-muted);
-  line-height: 1.55;
-  font-size: 0.95rem;
 }
 
 .trend-context__chips {
   display: flex;
   gap: 0.55rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .trend-context__chip {
   min-height: 34px;
   padding: 0.35rem 0.8rem;
   border-radius: 999px;
-  border: 1px solid rgba(35, 65, 58, 0.1);
-  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 92%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   color: var(--color-text);
   font-size: 0.9rem;
 }
@@ -194,8 +195,8 @@ function handleBoardChange(boardCode: string) {
 :deep(.trend-context__select .el-select__wrapper) {
   min-height: 42px;
   border-radius: 0.95rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
-  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
   box-shadow: none;
 }
 
@@ -216,8 +217,13 @@ function handleBoardChange(boardCode: string) {
     align-items: flex-start;
   }
 
-  .trend-context__description {
-    font-size: 0.92rem;
+  .trend-context__eyebrow {
+    display: none;
+  }
+
+  .trend-context__chip {
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 }
 </style>

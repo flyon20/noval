@@ -1,14 +1,27 @@
 import { resolveAuthRedirect } from '@/router/guards';
 
 describe('route guards', () => {
-  test('redirects unauthenticated users from protected routes', () => {
+  test('waits while auth state is restoring on protected routes', () => {
     expect(
       resolveAuthRedirect(
         {
           path: '/rank',
           meta: {},
         },
-        false,
+        'restoring',
+        [],
+      ),
+    ).toBeNull();
+  });
+
+  test('redirects logged out users from protected routes', () => {
+    expect(
+      resolveAuthRedirect(
+        {
+          path: '/rank',
+          meta: {},
+        },
+        'logged_out',
         [],
       ),
     ).toBe('/login');
@@ -23,7 +36,7 @@ describe('route guards', () => {
             public: true,
           },
         },
-        true,
+        'authenticated',
         ['USER'],
       ),
     ).toBe('/rank');
@@ -36,7 +49,7 @@ describe('route guards', () => {
           path: '/rank',
           meta: {},
         },
-        true,
+        'authenticated',
         ['USER'],
       ),
     ).toBeNull();
@@ -51,7 +64,7 @@ describe('route guards', () => {
             roles: ['ADMIN'],
           },
         },
-        true,
+        'authenticated',
         ['USER'],
       ),
     ).toBe('/rank');
@@ -66,7 +79,7 @@ describe('route guards', () => {
             roles: ['ADMIN'],
           },
         },
-        true,
+        'authenticated',
         ['ADMIN'],
       ),
     ).toBeNull();

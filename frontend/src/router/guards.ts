@@ -1,3 +1,5 @@
+import type { AuthRestoreStatus } from '@/types/auth';
+
 interface GuardRouteLike {
   path: string;
   meta?: {
@@ -8,18 +10,22 @@ interface GuardRouteLike {
 
 export function resolveAuthRedirect(
   to: GuardRouteLike,
-  isAuthenticated: boolean,
+  authStatus: AuthRestoreStatus,
   currentRoles: string[] = [],
 ) {
-  if (!isAuthenticated && !to.meta?.public) {
+  if (authStatus === 'restoring') {
+    return null;
+  }
+
+  if (authStatus === 'logged_out' && !to.meta?.public) {
     return '/login';
   }
 
-  if (isAuthenticated && to.path === '/login') {
+  if (authStatus === 'authenticated' && to.path === '/login') {
     return '/rank';
   }
 
-  if (to.meta?.roles?.length) {
+  if (authStatus === 'authenticated' && to.meta?.roles?.length) {
     const canAccess = to.meta.roles.some((role) => currentRoles.includes(role));
 
     if (!canAccess) {

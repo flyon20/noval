@@ -45,7 +45,27 @@ public class SystemConfigRepository {
         if (entity.getEditable() == null) {
             entity.setEditable(1);
         }
-        systemConfigMapper.insert(entity);
-        return entity;
+        try {
+            systemConfigMapper.insert(entity);
+            return entity;
+        } catch (RuntimeException ex) {
+            Optional<SystemConfigEntity> insertedByOtherThread = findByKey(entity.getConfigKey());
+            if (insertedByOtherThread.isPresent()) {
+                SystemConfigEntity dbEntity = insertedByOtherThread.get();
+                dbEntity.setConfigValue(entity.getConfigValue());
+                if (entity.getConfigType() != null) {
+                    dbEntity.setConfigType(entity.getConfigType());
+                }
+                if (entity.getDescription() != null) {
+                    dbEntity.setDescription(entity.getDescription());
+                }
+                if (entity.getEditable() != null) {
+                    dbEntity.setEditable(entity.getEditable());
+                }
+                systemConfigMapper.updateById(dbEntity);
+                return dbEntity;
+            }
+            throw ex;
+        }
     }
 }

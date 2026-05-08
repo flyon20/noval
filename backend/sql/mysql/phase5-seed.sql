@@ -3,19 +3,24 @@
 --   mysql -h127.0.0.1 -uroot -p novel_analyzer < backend/sql/mysql/phase5-seed.sql
 
 INSERT INTO prompt_config
-    (prompt_type, prompt_name, prompt_content, model_name, status, is_default, dify_workflow_id, dify_api_key_ref, output_json_schema, output_example_json, post_process_type, parse_config_json, deleted)
+    (prompt_type, prompt_name, scope_type, owner_user_id, source_prompt_config_id, prompt_content, model_name, status, is_default, dify_workflow_id, dify_api_key_ref, input_json_schema, input_example_json, output_json_schema, output_example_json, post_process_type, parse_config_json, deleted)
 VALUES
     (
         'theme',
         'default-theme',
-        'Analyze the exact selected rank board for the last three snapshots and return valid JSON only: {{content}}',
+        'SYSTEM',
+        NULL,
+        NULL,
+        'Analyze the exact selected rank board for the last three snapshots and return valid JSON only. The JSON must include boardSummary, themeDistribution, themeTable.representativeBooks, hotBooks, insightCards, and snapshotComparisons: {{content}}',
         'dify',
         1,
         1,
         '',
         'DIFY_API_KEY',
-        '{"type":"object","properties":{"analysisType":{"type":"string"},"platform":{"type":"string"},"channelCode":{"type":"string"},"boardCode":{"type":"string"},"boardName":{"type":"string"},"summary":{"type":"string"},"historicalWordCloud":{"type":"array"},"themeTable":{"type":"array"},"snapshotComparisons":{"type":"array"},"hotBooks":{"type":"array"},"insightCards":{"type":"array"},"comparisonSummary":{"type":"string"},"historyAnalysisCount":{"type":"integer"},"detailContent":{"type":"string"}},"required":["analysisType","summary","historicalWordCloud","themeTable","snapshotComparisons","hotBooks","insightCards","comparisonSummary","historyAnalysisCount"]}',
-        '{"analysisType":"theme","platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","boardName":"Urban Brain","summary":"Urban-brain remains the clearest direction across the latest board snapshots.","historicalWordCloud":[{"name":"urban-brain","value":24},{"name":"system-flow","value":15}],"themeTable":[{"theme":"urban-brain","count":3,"trend":"rising"},{"theme":"system-flow","count":2,"trend":"stable"}],"snapshotComparisons":[{"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","change":"holding"}],"hotBooks":[{"bookName":"Brain City King","author":"Author One","rankLabel":"#1","reason":"Keeps leading the board"}],"insightCards":[{"label":"Lead lane","value":"urban-brain","note":"Dominates the board history"}],"comparisonSummary":"Urban-brain has become the clearest board-level direction.","historyAnalysisCount":3,"detailContent":"Detailed board trend analysis."}',
+        '{"type":"object","properties":{"platform":{"type":"string"},"channelCode":{"type":"string"},"boardCode":{"type":"string"},"boardName":{"type":"string"},"snapshotCount":{"type":"integer"},"snapshots":{"type":"array"}},"required":["platform","channelCode","boardCode","boardName","snapshotCount","snapshots"]}',
+        '{"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","boardName":"Urban Brain","snapshotCount":3,"snapshots":[{"snapshotTime":"2026-03-20 11:30:00","recordCount":30,"ranks":[{"rankNo":1,"bookId":1001,"bookName":"Brain City King","author":"Author One","intro":"Urban-brain city upgrade story"}]}]}',
+        '{"type":"object","properties":{"analysisType":{"type":"string"},"platform":{"type":"string"},"channelCode":{"type":"string"},"boardCode":{"type":"string"},"boardName":{"type":"string"},"summary":{"type":"string"},"boardSummary":{"type":"string"},"trendPreview":{"type":"string"},"detailContent":{"type":"string"},"historicalWordCloud":{"type":"array"},"themeDistribution":{"type":"array"},"themeTable":{"type":"array"},"hotBooks":{"type":"array"},"insightCards":{"type":"array"},"snapshotComparisons":{"type":"array"},"comparisonSummary":{"type":"string"},"historyAnalysisCount":{"type":"integer"}},"required":["analysisType","summary","boardSummary","historicalWordCloud","themeDistribution","themeTable","hotBooks","insightCards","snapshotComparisons","comparisonSummary","historyAnalysisCount"]}',
+        '{"analysisType":"theme","platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","boardName":"Urban Brain","summary":"Urban-brain remains the clearest direction across the latest board snapshots.","boardSummary":"This board keeps concentrating on urban-brain and system-flow hybrids, with the top title staying highly stable.","trendPreview":"Urban-brain continues to dominate this board.","detailContent":"Detailed board trend analysis.","historicalWordCloud":[{"name":"urban-brain","value":24},{"name":"system-flow","value":15}],"themeDistribution":[{"theme":"urban-brain","count":3,"ratio":50.0},{"theme":"system-flow","count":2,"ratio":33.3}],"themeTable":[{"theme":"urban-brain","count":3,"ratio":50.0,"trend":"rising","representativeBooks":[{"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"The highest-ranked representative title in this lane."}]},{"theme":"system-flow","count":2,"ratio":33.3,"trend":"stable","representativeBooks":[{"theme":"system-flow","bookName":"System Runner","author":"Author Two","rankNo":2,"reason":"A stable follow-up theme with clear retention."}]}],"snapshotComparisons":[{"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","topThemeRatio":50.0,"leadBookName":"Brain City King","change":"holding"}],"hotBooks":[{"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"Keeps leading the board"}],"insightCards":[{"label":"Lead lane","value":"urban-brain","note":"Dominates the board history"},{"label":"Lead title","value":"Brain City King","note":"Most representative latest book"}],"comparisonSummary":"Urban-brain has become the clearest board-level direction.","historyAnalysisCount":3}',
         'json_extract',
         '{"parser":"json","trimMarkdownFence":true}',
         0
@@ -25,10 +30,129 @@ ON DUPLICATE KEY UPDATE
     model_name = VALUES(model_name),
     status = VALUES(status),
     is_default = VALUES(is_default),
+    input_json_schema = VALUES(input_json_schema),
+    input_example_json = VALUES(input_example_json),
     output_json_schema = VALUES(output_json_schema),
     output_example_json = VALUES(output_example_json),
     post_process_type = VALUES(post_process_type),
     parse_config_json = VALUES(parse_config_json),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO prompt_publish_version
+    (id, version_no, published_by, publish_note, deleted)
+VALUES
+    (1, 1, 1, 'seed publish for prompt governance', 0)
+ON DUPLICATE KEY UPDATE
+    version_no = VALUES(version_no),
+    published_by = VALUES(published_by),
+    publish_note = VALUES(publish_note),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO prompt_publish_item
+    (publish_version_id, prompt_type, prompt_config_id, prompt_name, deleted)
+SELECT
+    1,
+    selected.prompt_type,
+    selected.id,
+    selected.prompt_name,
+    0
+FROM (
+    SELECT pc.prompt_type, pc.id, pc.prompt_name
+    FROM prompt_config pc
+    JOIN (
+        SELECT prompt_type, MIN(id) AS id
+        FROM prompt_config
+        WHERE scope_type = 'SYSTEM'
+          AND status = 1
+          AND deleted = 0
+          AND prompt_type IN ('deconstruct', 'structure', 'plot', 'theme')
+          AND (
+              prompt_name = 'default'
+              OR prompt_name = CONCAT('default-', prompt_type)
+          )
+        GROUP BY prompt_type
+    ) default_prompt ON default_prompt.id = pc.id
+) selected
+ON DUPLICATE KEY UPDATE
+    publish_version_id = VALUES(publish_version_id),
+    prompt_config_id = VALUES(prompt_config_id),
+    prompt_name = VALUES(prompt_name),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO user_prompt_binding
+    (id, user_id, prompt_type, binding_mode, bound_prompt_config_id, last_selected_prompt_config_id, effective_prompt_config_id, publish_version_id, fallback_warning, status, deleted)
+SELECT
+    1,
+    1,
+    'theme',
+    'GLOBAL',
+    NULL,
+    NULL,
+    selected.id,
+    1,
+    NULL,
+    1,
+    0
+FROM (
+    SELECT id
+    FROM prompt_config
+    WHERE scope_type = 'SYSTEM'
+      AND status = 1
+      AND deleted = 0
+      AND prompt_type = 'theme'
+      AND (prompt_name = 'default' OR prompt_name = 'default-theme')
+    ORDER BY id
+    LIMIT 1
+) selected
+ON DUPLICATE KEY UPDATE
+    binding_mode = VALUES(binding_mode),
+    bound_prompt_config_id = VALUES(bound_prompt_config_id),
+    last_selected_prompt_config_id = VALUES(last_selected_prompt_config_id),
+    effective_prompt_config_id = VALUES(effective_prompt_config_id),
+    publish_version_id = VALUES(publish_version_id),
+    fallback_warning = VALUES(fallback_warning),
+    status = VALUES(status),
+    deleted = VALUES(deleted),
+    update_time = CURRENT_TIMESTAMP;
+
+INSERT INTO user_prompt_effective_history
+    (id, user_id, prompt_type, publish_version_id, binding_mode, bound_prompt_config_id, effective_prompt_config_id, effective_source, previous_effective_prompt_config_id, selected_model_key, fallback, deleted)
+SELECT
+    1,
+    1,
+    'theme',
+    1,
+    'GLOBAL',
+    NULL,
+    selected.id,
+    'GLOBAL_PUBLISHED',
+    NULL,
+    'deepseek-chat',
+    0,
+    0
+FROM (
+    SELECT id
+    FROM prompt_config
+    WHERE scope_type = 'SYSTEM'
+      AND status = 1
+      AND deleted = 0
+      AND prompt_type = 'theme'
+      AND (prompt_name = 'default' OR prompt_name = 'default-theme')
+    ORDER BY id
+    LIMIT 1
+) selected
+ON DUPLICATE KEY UPDATE
+    publish_version_id = VALUES(publish_version_id),
+    binding_mode = VALUES(binding_mode),
+    bound_prompt_config_id = VALUES(bound_prompt_config_id),
+    effective_prompt_config_id = VALUES(effective_prompt_config_id),
+    effective_source = VALUES(effective_source),
+    previous_effective_prompt_config_id = VALUES(previous_effective_prompt_config_id),
+    selected_model_key = VALUES(selected_model_key),
+    fallback = VALUES(fallback),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
 
@@ -90,7 +214,7 @@ VALUES
         4,
         'dify',
         'Detailed board trend analysis for the latest three urban-brain snapshots.',
-        '{"analysisType":"theme","platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","boardName":"Urban Brain","summary":"Urban-brain remains the clearest direction across the latest board snapshots.","historicalWordCloud":[{"name":"urban-brain","value":24},{"name":"system-flow","value":15}],"themeTable":[{"theme":"urban-brain","count":3,"trend":"rising"},{"theme":"system-flow","count":2,"trend":"stable"}],"snapshotComparisons":[{"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","change":"holding"},{"snapshotTime":"2026-03-19 11:30:00","topTheme":"urban-brain","change":"rising"},{"snapshotTime":"2026-03-18 11:30:00","topTheme":"system-flow","change":"baseline"}],"hotBooks":[{"bookName":"Brain City King","author":"Author One","rankLabel":"#1","reason":"Keeps leading the board"}],"insightCards":[{"label":"Lead lane","value":"urban-brain","note":"Dominates the board history"},{"label":"Lead title","value":"Brain City King","note":"Most representative latest book"}],"comparisonSummary":"Urban-brain has become the clearest board-level direction across the last three snapshots.","historyAnalysisCount":3,"trendPreview":"Urban-brain continues to dominate this board.","detailContent":"Detailed board trend analysis for the last three snapshots."}',
+        '{"analysisType":"theme","platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","boardName":"Urban Brain","summary":"Urban-brain remains the clearest direction across the latest board snapshots.","boardSummary":"This board keeps concentrating on urban-brain and system-flow hybrids, with the top title staying highly stable.","historicalWordCloud":[{"name":"urban-brain","value":24},{"name":"system-flow","value":15}],"themeDistribution":[{"theme":"urban-brain","count":3,"ratio":50.0},{"theme":"system-flow","count":2,"ratio":33.3}],"themeTable":[{"theme":"urban-brain","count":3,"ratio":50.0,"trend":"rising","representativeBooks":[{"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"Keeps leading the board"}]},{"theme":"system-flow","count":2,"ratio":33.3,"trend":"stable","representativeBooks":[{"theme":"system-flow","bookName":"System Runner","author":"Author Two","rankNo":2,"reason":"Stable presence in the same board lane"}]}],"snapshotComparisons":[{"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","topThemeRatio":50.0,"leadBookName":"Brain City King","change":"holding"},{"snapshotTime":"2026-03-19 11:30:00","topTheme":"urban-brain","topThemeRatio":50.0,"leadBookName":"Brain City King","change":"rising"},{"snapshotTime":"2026-03-18 11:30:00","topTheme":"system-flow","topThemeRatio":33.3,"leadBookName":"System Runner","change":"baseline"}],"hotBooks":[{"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"Keeps leading the board"}],"insightCards":[{"label":"Lead lane","value":"urban-brain","note":"Dominates the board history"},{"label":"Lead title","value":"Brain City King","note":"Most representative latest book"}],"comparisonSummary":"Urban-brain has become the clearest board-level direction across the last three snapshots.","historyAnalysisCount":3,"trendPreview":"Urban-brain continues to dominate this board.","detailContent":"Detailed board trend analysis for the last three snapshots."}',
         160,
         600,
         '2026-03-20 12:30:00',
@@ -127,6 +251,7 @@ VALUES
     ('crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
     ('crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
     ('analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0),
+    ('auth.bootstrap-admin-phones', '15599316908', 'auth', 'Comma-separated admin phone bootstrap list', 1, 0),
     ('security.audit.enabled', 'true', 'security', 'Whether audit logging is enabled', 1, 0)
 ON DUPLICATE KEY UPDATE
     config_value = VALUES(config_value),

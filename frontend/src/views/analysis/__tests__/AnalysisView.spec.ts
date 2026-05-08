@@ -2,6 +2,9 @@ import ElementPlus from 'element-plus';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import AnalysisView from '../AnalysisView.vue';
+import { analysisApi } from '@/api/analysis';
+import { dataApi } from '@/api/data';
+import { userConfigApi } from '@/api/config';
 import type { AnalysisResult, AnalysisType } from '@/types/analysis';
 
 const push = vi.fn();
@@ -14,8 +17,33 @@ vi.mock('@/api/analysis', () => ({
   },
 }));
 
+vi.mock('@/api/data', () => ({
+  dataApi: {
+    getHistory: vi.fn().mockResolvedValue({
+      data: {
+        data: [],
+      },
+    }),
+  },
+}));
+
 vi.mock('@/api/config', () => ({
   systemConfigApi: {
+    getModelOptions: vi.fn().mockResolvedValue({
+      data: {
+        data: [
+          {
+            modelKey: 'deepseek-chat',
+            displayName: 'DeepSeek Chat',
+            providerType: 'openai-compatible',
+            isDefault: true,
+            defaultTemperature: 1,
+            maxTokens: 8192,
+            temperatureSpecJson: '{"min":0,"max":2}',
+          },
+        ],
+      },
+    }),
     getAvailableModels: vi.fn().mockResolvedValue({
       data: {
         data: ['deepseek-chat'],
@@ -23,12 +51,23 @@ vi.mock('@/api/config', () => ({
     }),
   },
   userConfigApi: {
-    get: vi.fn().mockResolvedValue({
-      data: {
+    get: vi.fn().mockImplementation((configKey: string) => {
+      if (configKey === 'analysis.current-context') {
+        return Promise.resolve({
+          data: {
+            data: {
+              configValue: null,
+            },
+          },
+        });
+      }
+      return Promise.resolve({
         data: {
-          configValue: 'deepseek-chat',
+          data: {
+            configValue: 'deepseek-chat',
+          },
         },
-      },
+      });
     }),
     update: vi.fn().mockResolvedValue({
       data: {
@@ -82,7 +121,35 @@ function createStreamTask(result: AnalysisResult) {
 
 describe('AnalysisView', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     push.mockReset();
+    vi.mocked(analysisApi.streamDeconstruct).mockReset();
+    vi.mocked(analysisApi.streamStructure).mockReset();
+    vi.mocked(analysisApi.streamPlot).mockReset();
+    vi.mocked(dataApi.getHistory).mockResolvedValue({
+      data: {
+        data: [],
+      },
+    } as never);
+    vi.mocked(userConfigApi.get).mockImplementation((configKey: string) => {
+      if (configKey === 'analysis.current-context') {
+        return Promise.resolve({
+          data: {
+            data: {
+              configValue: null,
+            },
+          },
+        });
+      }
+
+      return Promise.resolve({
+        data: {
+          data: {
+            configValue: 'deepseek-chat',
+          },
+        },
+      });
+    });
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
       value: {
@@ -115,7 +182,7 @@ describe('AnalysisView', () => {
     expect(push).toHaveBeenCalledWith('/rank');
   });
 
-  test('waits for manual start, then runs all three analysis modes in parallel', async () => {
+  test('waits for manual start, then runs only the active analysis mode on first trigger', async () => {
     const { analysisApi } = await import('@/api/analysis');
     vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
       createStreamTask(
@@ -162,22 +229,8 @@ describe('AnalysisView', () => {
       },
       expect.any(Object),
     );
-    expect(analysisApi.streamStructure).toHaveBeenCalledWith(
-      {
-        platform: 'fanqie',
-        bookId: 1001,
-        chapterCount: 3,
-      },
-      expect.any(Object),
-    );
-    expect(analysisApi.streamPlot).toHaveBeenCalledWith(
-      {
-        platform: 'fanqie',
-        bookId: 1001,
-        chapterCount: 3,
-      },
-      expect.any(Object),
-    );
+    expect(analysisApi.streamStructure).not.toHaveBeenCalled();
+    expect(analysisApi.streamPlot).not.toHaveBeenCalled();
     expect(wrapper.findAll('[data-test="analysis-mode-panel"]')).toHaveLength(1);
     expect(wrapper.get('[data-test="analysis-mode-panel"]').attributes('data-mode')).toBe('deconstruct');
     expect(wrapper.text()).toContain('deconstruct result');
@@ -188,8 +241,54 @@ describe('AnalysisView', () => {
 
     expect(wrapper.findAll('[data-test="analysis-mode-panel"]')).toHaveLength(1);
     expect(wrapper.get('[data-test="analysis-mode-panel"]').attributes('data-mode')).toBe('plot');
-    expect(wrapper.text()).toContain('plot result');
+    expect(wrapper.text()).not.toContain('plot result');
     expect(wrapper.text()).not.toContain('deconstruct result');
+  });
+
+  test('shows full streaming text instead of preview truncation while analysis is still running', async () => {
+    vi.useFakeTimers();
+    const { analysisApi } = await import('@/api/analysis');
+    const fullText = 'LONG-STREAM-SEGMENT-'.repeat(80);
+
+    vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
+      vi.fn().mockImplementation((_payload, callbacks) => {
+        callbacks.onStart({
+          event: 'start',
+          traceId: 'trace-streaming',
+          analysisType: 'deconstruct',
+        });
+        callbacks.onDelta({
+          event: 'delta',
+          delta: fullText,
+          chunkIndex: 0,
+        });
+
+        return {
+          abort: vi.fn(),
+          result: new Promise<AnalysisResult>(() => undefined),
+        };
+      }),
+    );
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/analysis', component: AnalysisView }],
+    });
+    await router.push('/analysis?bookId=1001&platform=fanqie&chapterCount=10');
+
+    const wrapper = mount(AnalysisView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(fullText.slice(-80));
   });
 
   test('stops and reruns only the targeted panel', async () => {
@@ -239,6 +338,8 @@ describe('AnalysisView', () => {
     await wrapper.findAll('[data-test="analysis-tab"]')[1].trigger('click');
 
     const structurePanel = wrapper.get('[data-test="analysis-mode-panel"][data-mode="structure"]');
+    await structurePanel.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
     await structurePanel.get('[data-test="analysis-toolbar-stop"]').trigger('click');
 
     expect(structureAbort).toHaveBeenCalledTimes(1);
@@ -257,5 +358,175 @@ describe('AnalysisView', () => {
       },
       expect.any(Object),
     );
+  });
+
+  test('shows actual chapter count when fetched chapters are fewer than requested', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
+      createStreamTask(
+        createResult('deconstruct', '# deconstruct result', {
+          requestedChapterCount: 10,
+          actualChapterCount: 8,
+          inputChapterCount: 8,
+        }),
+      ),
+    );
+    vi.mocked(analysisApi.streamStructure).mockImplementation(
+      createStreamTask(createResult('structure', '# structure result')),
+    );
+    vi.mocked(analysisApi.streamPlot).mockImplementation(
+      createStreamTask(createResult('plot', '# plot result')),
+    );
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/analysis', component: AnalysisView }],
+    });
+    await router.push('/analysis?bookId=1001&platform=fanqie&chapterCount=10');
+
+    const wrapper = mount(AnalysisView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('抓取章节：8/10');
+  });
+
+  test('restores persisted analysis context and results when route query is missing', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    const { dataApi } = await import('@/api/data');
+    const { userConfigApi } = await import('@/api/config');
+
+    vi.mocked(analysisApi.streamDeconstruct).mockImplementation(createStreamTask(createResult('deconstruct')));
+    vi.mocked(analysisApi.streamStructure).mockImplementation(createStreamTask(createResult('structure')));
+    vi.mocked(analysisApi.streamPlot).mockImplementation(createStreamTask(createResult('plot')));
+    vi.mocked(userConfigApi.get).mockImplementation((configKey: string) => {
+      if (configKey === 'analysis.current-context') {
+        return Promise.resolve({
+          data: {
+            data: {
+              configValue: JSON.stringify({
+                platform: 'fanqie',
+                bookId: 1001,
+                chapterCount: 5,
+                bookTitle: 'Persisted Book',
+                author: 'Persisted Author',
+                activeMode: 'plot',
+              }),
+            },
+          },
+        });
+      }
+
+      return Promise.resolve({
+        data: {
+          data: {
+            configValue: 'deepseek-chat',
+          },
+        },
+      });
+    });
+    vi.mocked(dataApi.getHistory).mockResolvedValue({
+      data: {
+        data: [
+          {
+            id: 11,
+            bookId: 1001,
+            bookName: 'Persisted Book',
+            analysisType: 'plot',
+            chapterCount: 5,
+            modelName: 'deepseek-chat',
+            resultContent: '# plot restored',
+            resultJson: {},
+            createdAt: '2026-03-26 20:00:00',
+          },
+          {
+            id: 10,
+            bookId: 1001,
+            bookName: 'Persisted Book',
+            analysisType: 'deconstruct',
+            chapterCount: 5,
+            modelName: 'deepseek-chat',
+            resultContent: '# deconstruct restored',
+            resultJson: {},
+            createdAt: '2026-03-26 19:59:00',
+          },
+        ],
+      },
+    } as never);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/analysis', component: AnalysisView }],
+    });
+    await router.push('/analysis');
+
+    const wrapper = mount(AnalysisView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    expect(dataApi.getHistory).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      bookId: 1001,
+      limit: 20,
+    });
+    expect(wrapper.text()).toContain('Persisted Book');
+    expect(wrapper.get('[data-test="analysis-mode-panel"]').attributes('data-mode')).toBe('plot');
+    expect(wrapper.text()).toContain('plot restored');
+    expect(analysisApi.streamDeconstruct).not.toHaveBeenCalled();
+    expect(analysisApi.streamStructure).not.toHaveBeenCalled();
+    expect(analysisApi.streamPlot).not.toHaveBeenCalled();
+  });
+
+  test('keeps rendering single-book metadata from existing resultJson names', async () => {
+    const { analysisApi } = await import('@/api/analysis');
+    vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
+      createStreamTask(
+        createResult('deconstruct', '# deconstruct result', {
+          analysisMode: 'chunk_merge',
+          segmentCount: 4,
+          requestedChapterCount: 10,
+          actualChapterCount: 8,
+          inputChapterCount: 8,
+          chapterFetchDegraded: true,
+          promptRuntime: 'langgraph',
+        }),
+      ),
+    );
+    vi.mocked(analysisApi.streamStructure).mockImplementation(
+      createStreamTask(createResult('structure', '# structure result')),
+    );
+    vi.mocked(analysisApi.streamPlot).mockImplementation(
+      createStreamTask(createResult('plot', '# plot result')),
+    );
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/analysis', component: AnalysisView }],
+    });
+    await router.push('/analysis?bookId=1001&platform=fanqie&chapterCount=10');
+
+    const wrapper = mount(AnalysisView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('分析方式：分段汇总');
+    expect(wrapper.text()).toContain('4 段');
+    expect(wrapper.text()).toContain('抓取章节：8/10');
   });
 });

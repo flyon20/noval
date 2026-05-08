@@ -17,6 +17,12 @@ public class PromptConfigEntity {
     private String promptType;
     @TableField("prompt_name")
     private String promptName;
+    @TableField("scope_type")
+    private String scopeType;
+    @TableField("owner_user_id")
+    private Long ownerUserId;
+    @TableField("source_prompt_config_id")
+    private Long sourcePromptConfigId;
     @TableField("prompt_content")
     private String promptContent;
     @TableField("model_name")
@@ -31,6 +37,10 @@ public class PromptConfigEntity {
     private String difyWorkflowId;
     @TableField("dify_api_key_ref")
     private String difyApiKeyRef;
+    @TableField("input_json_schema")
+    private String inputJsonSchema;
+    @TableField("input_example_json")
+    private String inputExampleJson;
     @TableField("output_json_schema")
     private String outputJsonSchema;
     @TableField("output_example_json")
@@ -76,6 +86,30 @@ public class PromptConfigEntity {
 
     public void setPromptContent(String promptContent) {
         this.promptContent = promptContent;
+    }
+
+    public String getScopeType() {
+        return scopeType;
+    }
+
+    public void setScopeType(String scopeType) {
+        this.scopeType = scopeType;
+    }
+
+    public Long getOwnerUserId() {
+        return ownerUserId;
+    }
+
+    public void setOwnerUserId(Long ownerUserId) {
+        this.ownerUserId = ownerUserId;
+    }
+
+    public Long getSourcePromptConfigId() {
+        return sourcePromptConfigId;
+    }
+
+    public void setSourcePromptConfigId(Long sourcePromptConfigId) {
+        this.sourcePromptConfigId = sourcePromptConfigId;
     }
 
     public String getModelName() {
@@ -132,6 +166,22 @@ public class PromptConfigEntity {
 
     public void setDifyApiKeyRef(String difyApiKeyRef) {
         this.difyApiKeyRef = difyApiKeyRef;
+    }
+
+    public String getInputJsonSchema() {
+        return inputJsonSchema;
+    }
+
+    public void setInputJsonSchema(String inputJsonSchema) {
+        this.inputJsonSchema = inputJsonSchema;
+    }
+
+    public String getInputExampleJson() {
+        return inputExampleJson;
+    }
+
+    public void setInputExampleJson(String inputExampleJson) {
+        this.inputExampleJson = inputExampleJson;
     }
 
     public String getOutputJsonSchema() {

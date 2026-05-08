@@ -7,6 +7,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -29,23 +30,34 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 class LoginRateLimitIntegrationTest {
 
+    private static final String TEST_IP = "198.18.0.9";
+
     @Autowired
     private MockMvc mockMvc;
 
     @Test
     void shouldRateLimitLoginAttempts() throws Exception {
         for (int i = 0; i < 3; i++) {
-            mockMvc.perform(post("/api/auth/login")
+            mockMvc.perform(post("/api/auth/login/password")
+                    .with(remoteAddr(TEST_IP))
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content("{\"username\":\"admin\",\"password\":\"wrong\"}"))
+                    .content("{\"phone\":\"13800138000\",\"password\":\"wrong\"}"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(401));
         }
 
-        mockMvc.perform(post("/api/auth/login")
+        mockMvc.perform(post("/api/auth/login/password")
+                .with(remoteAddr(TEST_IP))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"wrong\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"wrong\"}"))
             .andExpect(status().isTooManyRequests())
             .andExpect(jsonPath("$.code").value(429));
+    }
+
+    private RequestPostProcessor remoteAddr(String ip) {
+        return request -> {
+            request.setRemoteAddr(ip);
+            return request;
+        };
     }
 }

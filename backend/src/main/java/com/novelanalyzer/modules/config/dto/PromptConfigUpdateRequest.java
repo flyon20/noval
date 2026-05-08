@@ -23,6 +23,8 @@ public class PromptConfigUpdateRequest {
     private Double temperature;
     @Min(value = 1, message = "maxTokens must be greater than 0")
     private Integer maxTokens;
+    private String inputJsonSchema;
+    private String inputExampleJson;
     private String outputJsonSchema;
     private String outputExampleJson;
     private String postProcessType;
@@ -74,6 +76,22 @@ public class PromptConfigUpdateRequest {
 
     public void setMaxTokens(Integer maxTokens) {
         this.maxTokens = maxTokens;
+    }
+
+    public String getInputJsonSchema() {
+        return inputJsonSchema;
+    }
+
+    public void setInputJsonSchema(String inputJsonSchema) {
+        this.inputJsonSchema = inputJsonSchema;
+    }
+
+    public String getInputExampleJson() {
+        return inputExampleJson;
+    }
+
+    public void setInputExampleJson(String inputExampleJson) {
+        this.inputExampleJson = inputExampleJson;
     }
 
     public String getOutputJsonSchema() {

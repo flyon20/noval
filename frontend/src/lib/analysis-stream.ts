@@ -102,6 +102,15 @@ function isAbortError(error: unknown) {
   return error instanceof Error && error.message === 'Analysis stream aborted';
 }
 
+function isAnalysisProgressDelta(payload: unknown) {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  const delta = 'delta' in payload ? (payload as { delta?: unknown }).delta : undefined;
+  return typeof delta === 'string' && delta.startsWith('[analysis-progress]');
+}
+
 export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = AnalysisResult>(
   deps: AnalysisStreamRunnerDeps<TRequest, TDone>,
 ) {
@@ -153,6 +162,9 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
               }
 
               if (item.event === 'delta') {
+                if (isAnalysisProgressDelta(item.payload)) {
+                  continue;
+                }
                 sawDelta = true;
                 callbacks.onDelta(item.payload as StreamDeltaEvent);
                 continue;

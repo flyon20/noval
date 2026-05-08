@@ -1,61 +1,157 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { Lock, User } from '@element-plus/icons-vue';
+import { Iphone, Lock, Message, RefreshRight } from '@element-plus/icons-vue';
 import { authApi } from '@/api/auth';
 import { systemApi } from '@/api/system';
 import { HOME_ROUTE } from '@/constants/auth';
 import { DEFAULT_PLATFORM } from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
 import { useAuthStore } from '@/stores/auth';
+import TurnstileWidget from '@/components/auth/TurnstileWidget.vue';
 
-type AuthMode = 'login' | 'register';
+type AuthMode = 'password-login' | 'sms-login' | 'register' | 'reset-password';
 
 const PASSWORD_RULE_TEXT = '密码需至少 8 位，且包含大写字母、小写字母和数字';
-const REGISTER_UNAVAILABLE_MESSAGE = '注册入口暂时不可用，请稍后重试';
-const REGISTER_INVALID_MESSAGE = '注册信息有误，请检查用户名、密码和确认密码';
-const LOGIN_INVALID_MESSAGE = '登录信息有误，请检查用户名和密码';
+const PHONE_RULE = /^1\d{10}$/;
+const SMS_COUNTDOWN_SECONDS = 60;
 const AUTH_MESSAGE_MAP: Record<string, string> = {
-  'username already exists': '用户名已存在，请更换后重试',
-  'username or password is incorrect': '登录失败，请检查用户名和密码',
-  'bad credentials': '登录失败，请检查用户名和密码',
   'password is required': '请输入密码',
-  'username is required': '请输入用户名',
+  'phone is required': '请输入手机号',
+  'smsCode is required': '请输入短信验证码',
+  'newPassword is required': '请输入新密码',
+  '验证码发送过于频繁，请稍后再试': '验证码发送过于频繁，请稍后再试',
+  '手机号未注册，请先注册': '手机号未注册，请先注册',
+  '手机号已注册，请直接登录': '手机号已注册，请直接登录',
+  '验证码错误或已失效': '验证码错误或已失效',
 };
 
 const router = useRouter();
 const authStore = useAuthStore();
 
 const form = reactive({
-  username: '',
+  phone: '',
   password: '',
+  smsCode: '',
   confirmPassword: '',
 });
 
 const state = reactive({
-  mode: 'login' as AuthMode,
+  mode: 'password-login' as AuthMode,
   submitting: false,
+  sendingSms: false,
+  smsCountdown: 0,
+  turnstileConfigLoaded: false,
+  turnstileEnabled: false,
+  turnstileSiteKey: '',
+  turnstileToken: '',
+  debugVerifyCode: '',
+  smsOutId: '',
   errorMessage: '',
   traceId: '',
 });
 
+const countdownTimer = ref<ReturnType<typeof setInterval> | null>(null);
+const turnstileRef = ref<{ reset: () => void } | null>(null);
+const lastTurnstilePhone = ref('');
+
+const isPasswordLoginMode = computed(() => state.mode === 'password-login');
+const isSmsLoginMode = computed(() => state.mode === 'sms-login');
 const isRegisterMode = computed(() => state.mode === 'register');
-const usernamePlaceholder = computed(() => (
-  isRegisterMode.value ? '创建用户名，用于后续登录' : '用户名'
+const isResetMode = computed(() => state.mode === 'reset-password');
+const showPasswordField = computed(() => !isSmsLoginMode.value);
+const showSmsCodeField = computed(() => isSmsLoginMode.value || isRegisterMode.value || isResetMode.value);
+const showConfirmPasswordField = computed(() => isRegisterMode.value || isResetMode.value);
+const submitLabel = computed(() => {
+  if (isRegisterMode.value) {
+    return '注册并进入';
+  }
+  if (isResetMode.value) {
+    return '重置密码';
+  }
+  return '登录';
+});
+const headingLabel = computed(() => {
+  if (isRegisterMode.value) {
+    return '手机号注册';
+  }
+  if (isSmsLoginMode.value) {
+    return '验证码登录';
+  }
+  if (isResetMode.value) {
+    return '重置密码';
+  }
+  return '账号登录';
+});
+const titleLabel = computed(() => {
+  if (isRegisterMode.value) {
+    return '创建新账号';
+  }
+  if (isSmsLoginMode.value) {
+    return '短信快速登录';
+  }
+  if (isResetMode.value) {
+    return '找回账号密码';
+  }
+  return '进入工作台';
+});
+const phonePlaceholder = computed(() => (
+  isRegisterMode.value ? '请输入手机号完成注册' : '手机号'
 ));
-const passwordPlaceholder = computed(() => (
-  isRegisterMode.value ? '设置密码，至少 8 位，含大小写字母和数字' : '密码'
+const passwordPlaceholder = computed(() => {
+  if (isRegisterMode.value) {
+    return '设置密码，至少 8 位，含大小写字母和数字';
+  }
+  if (isResetMode.value) {
+    return '输入新密码';
+  }
+  return '密码';
+});
+const smsButtonLabel = computed(() => (
+  state.smsCountdown > 0 ? `${state.smsCountdown}s 后重试` : '发送验证码'
 ));
-const confirmPasswordPlaceholder = '再次输入密码，需与上方一致';
+const smsBizType = computed<'REGISTER' | 'LOGIN' | 'RESET_PASSWORD'>(() => {
+  if (isRegisterMode.value) {
+    return 'REGISTER';
+  }
+  if (isResetMode.value) {
+    return 'RESET_PASSWORD';
+  }
+  return 'LOGIN';
+});
+const showTurnstile = computed(() => showSmsCodeField.value && state.turnstileEnabled && !!state.turnstileSiteKey);
 
 function triggerLoginBootstrap() {
   try {
-    void systemApi.loginBootstrap({ platform: DEFAULT_PLATFORM }).catch((error) => {
-      console.warn('login bootstrap failed', error);
-    });
-  } catch (error) {
-    console.warn('login bootstrap failed', error);
+    void systemApi.loginBootstrap({ platform: DEFAULT_PLATFORM }).catch(() => undefined);
+  } catch {
+    // ignore
   }
+}
+
+function resetTransientState() {
+  state.debugVerifyCode = '';
+  state.errorMessage = '';
+  state.traceId = '';
+}
+
+function stopCountdown() {
+  if (countdownTimer.value) {
+    clearInterval(countdownTimer.value);
+    countdownTimer.value = null;
+  }
+}
+
+function startCountdown() {
+  stopCountdown();
+  state.smsCountdown = SMS_COUNTDOWN_SECONDS;
+  countdownTimer.value = setInterval(() => {
+    state.smsCountdown -= 1;
+    if (state.smsCountdown <= 0) {
+      stopCountdown();
+      state.smsCountdown = 0;
+    }
+  }, 1000);
 }
 
 function switchMode(mode: AuthMode) {
@@ -64,10 +160,20 @@ function switchMode(mode: AuthMode) {
   }
 
   state.mode = mode;
-  state.errorMessage = '';
-  state.traceId = '';
+  resetTransientState();
   form.password = '';
+  form.smsCode = '';
   form.confirmPassword = '';
+  clearTurnstileVerification();
+  state.smsOutId = '';
+}
+
+function clearTurnstileVerification({ resetWidget = false }: { resetWidget?: boolean } = {}) {
+  state.turnstileToken = '';
+  lastTurnstilePhone.value = '';
+  if (resetWidget) {
+    turnstileRef.value?.reset();
+  }
 }
 
 function matchesPasswordRule(password: string) {
@@ -77,22 +183,42 @@ function matchesPasswordRule(password: string) {
     && /\d/.test(password);
 }
 
+function validatePhone() {
+  const phone = form.phone.trim();
+  if (!phone) {
+    state.errorMessage = '请输入手机号';
+    return false;
+  }
+  if (!PHONE_RULE.test(phone)) {
+    state.errorMessage = '请输入正确的 11 位手机号';
+    return false;
+  }
+  return true;
+}
+
 function validateForm() {
-  if (!form.username.trim() || !form.password) {
-    state.errorMessage = '请输入用户名和密码';
-    state.traceId = '';
+  resetTransientState();
+  if (!validatePhone()) {
     return false;
   }
 
-  if (isRegisterMode.value && !matchesPasswordRule(form.password)) {
+  if (showSmsCodeField.value && !form.smsCode.trim()) {
+    state.errorMessage = '请输入短信验证码';
+    return false;
+  }
+
+  if (showPasswordField.value && !form.password) {
+    state.errorMessage = isResetMode.value ? '请输入新密码' : '请输入密码';
+    return false;
+  }
+
+  if ((isRegisterMode.value || isResetMode.value) && !matchesPasswordRule(form.password)) {
     state.errorMessage = PASSWORD_RULE_TEXT;
-    state.traceId = '';
     return false;
   }
 
-  if (isRegisterMode.value && form.password !== form.confirmPassword) {
+  if (showConfirmPasswordField.value && form.password !== form.confirmPassword) {
     state.errorMessage = '两次输入的密码不一致';
-    state.traceId = '';
     return false;
   }
 
@@ -101,33 +227,126 @@ function validateForm() {
 
 function resolveAuthErrorMessage(message: string | undefined, mode: AuthMode) {
   const normalized = (message ?? '').trim();
-
   if (!normalized) {
-    return mode === 'register' ? '注册失败，请检查输入信息后重试' : '登录失败，请检查用户名和密码';
+    return mode === 'register' ? '注册失败，请检查输入信息后重试' : '操作失败，请稍后重试';
   }
-
   if (AUTH_MESSAGE_MAP[normalized]) {
     return AUTH_MESSAGE_MAP[normalized];
   }
-
-  if (normalized === 'unauthorized') {
-    return mode === 'register' ? REGISTER_UNAVAILABLE_MESSAGE : '登录失败，请检查用户名和密码';
-  }
-
-  if (normalized === 'invalid request parameter' || normalized === 'request body is invalid') {
-    return mode === 'register' ? REGISTER_INVALID_MESSAGE : LOGIN_INVALID_MESSAGE;
-  }
-
   if (/[\u4e00-\u9fa5]/.test(normalized)) {
     return normalized;
   }
+  if (mode === 'register') {
+    return '注册失败，请检查输入信息后重试';
+  }
+  if (mode === 'reset-password') {
+    return '重置密码失败，请稍后重试';
+  }
+  return '登录失败，请检查手机号和密码';
+}
 
-  if (/^[\dA-Za-z_-]+$/.test(normalized)) {
-    return mode === 'register' ? '注册失败，请检查输入信息后重试' : '登录失败，请检查用户名和密码';
+function getDeviceLabel() {
+  if (typeof navigator === 'undefined') {
+    return undefined;
   }
 
-  return mode === 'register' ? '注册失败，请检查输入信息后重试' : '登录失败，请检查用户名和密码';
+  const platform = navigator.platform?.trim() || 'Unknown OS';
+  const userAgent = navigator.userAgent?.trim();
+
+  if (!userAgent) {
+    return platform;
+  }
+
+  const browserMatch = userAgent.match(/(Edg|Chrome|Firefox|Safari)\/[\d.]+/);
+  const browserLabel = browserMatch ? browserMatch[0] : 'Browser';
+
+  return `${browserLabel} on ${platform}`;
 }
+
+async function sendSmsCode() {
+  resetTransientState();
+  if (!state.turnstileConfigLoaded) {
+    await loadAuthPublicConfig();
+  }
+  const normalizedPhone = form.phone.trim();
+  if (!validatePhone() || state.sendingSms || state.smsCountdown > 0) {
+    return;
+  }
+  if (showTurnstile.value && lastTurnstilePhone.value && lastTurnstilePhone.value !== normalizedPhone) {
+    clearTurnstileVerification({ resetWidget: true });
+  }
+  if (showTurnstile.value && !state.turnstileToken) {
+    state.errorMessage = '请完成人机校验后再发送验证码';
+    return;
+  }
+
+  state.sendingSms = true;
+  try {
+    const response = await authApi.sendSmsCode({
+      phone: normalizedPhone,
+      bizType: smsBizType.value,
+      ...(state.turnstileToken ? { turnstileToken: state.turnstileToken } : {}),
+    });
+    state.debugVerifyCode = response.data.data?.debugVerifyCode?.trim?.() ?? '';
+    state.smsOutId = response.data.data?.smsOutId?.trim?.() ?? '';
+    lastTurnstilePhone.value = normalizedPhone;
+    startCountdown();
+  } catch (error) {
+    const payload = getErrorPayload(error);
+    state.errorMessage = resolveAuthErrorMessage(payload.message, state.mode);
+    state.traceId = payload.traceId ?? '';
+    if (state.errorMessage.includes('人机校验')) {
+      clearTurnstileVerification({ resetWidget: true });
+    }
+  } finally {
+    state.sendingSms = false;
+  }
+}
+
+async function loadAuthPublicConfig() {
+  try {
+    const response = await systemApi.getAuthPublicConfig();
+    state.turnstileEnabled = response.data.data?.turnstileEnabled ?? false;
+    state.turnstileSiteKey = response.data.data?.turnstileSiteKey?.trim?.() ?? '';
+  } catch {
+    state.turnstileEnabled = false;
+    state.turnstileSiteKey = '';
+  } finally {
+    state.turnstileConfigLoaded = true;
+  }
+}
+
+function handleTurnstileVerified(token: string) {
+  state.turnstileToken = token.trim();
+  lastTurnstilePhone.value = form.phone.trim();
+}
+
+function handleTurnstileExpired() {
+  clearTurnstileVerification();
+}
+
+function handleTurnstileError() {
+  clearTurnstileVerification();
+}
+
+watch(() => form.phone.trim(), (nextPhone, previousPhone) => {
+  if (!showTurnstile.value) {
+    return;
+  }
+  if (!previousPhone || nextPhone === previousPhone) {
+    return;
+  }
+  if (!lastTurnstilePhone.value) {
+    return;
+  }
+  if (nextPhone !== lastTurnstilePhone.value) {
+    clearTurnstileVerification({ resetWidget: true });
+  }
+});
+
+onMounted(() => {
+  void loadAuthPublicConfig();
+});
 
 async function handleSubmit() {
   if (!validateForm()) {
@@ -135,21 +354,58 @@ async function handleSubmit() {
   }
 
   state.submitting = true;
-  state.errorMessage = '';
-  state.traceId = '';
 
   try {
-    const payload = {
-      username: form.username.trim(),
-      password: form.password,
-    };
-    const response = isRegisterMode.value
-      ? await authApi.register(payload)
-      : await authApi.login(payload);
+    if (isPasswordLoginMode.value) {
+      const response = await authApi.login({
+        phone: form.phone.trim(),
+        password: form.password,
+        deviceLabel: getDeviceLabel(),
+      });
+      authStore.applyTokenResponse(response.data.data);
+      triggerLoginBootstrap();
+      await router.push(HOME_ROUTE);
+      return;
+    }
 
-    authStore.applyTokenResponse(response.data.data);
-    triggerLoginBootstrap();
-    await router.push(HOME_ROUTE);
+    if (isSmsLoginMode.value) {
+      const response = await authApi.loginWithSms({
+        phone: form.phone.trim(),
+        smsCode: form.smsCode.trim(),
+        smsOutId: state.smsOutId || undefined,
+        deviceLabel: getDeviceLabel(),
+      });
+      authStore.applyTokenResponse(response.data.data);
+      triggerLoginBootstrap();
+      await router.push(HOME_ROUTE);
+      return;
+    }
+
+    if (isRegisterMode.value) {
+      const response = await authApi.register({
+        phone: form.phone.trim(),
+        smsCode: form.smsCode.trim(),
+        smsOutId: state.smsOutId || undefined,
+        password: form.password,
+      });
+      authStore.applyTokenResponse(response.data.data);
+      triggerLoginBootstrap();
+      await router.push(HOME_ROUTE);
+      return;
+    }
+
+    await authApi.resetPassword({
+      phone: form.phone.trim(),
+      smsCode: form.smsCode.trim(),
+      smsOutId: state.smsOutId || undefined,
+      newPassword: form.password,
+    });
+    state.mode = 'password-login';
+    resetTransientState();
+    form.password = '';
+    form.smsCode = '';
+    form.confirmPassword = '';
+    form.phone = '';
   } catch (error) {
     const payload = getErrorPayload(error);
     state.errorMessage = resolveAuthErrorMessage(payload.message, state.mode);
@@ -191,10 +447,10 @@ async function handleSubmit() {
         <div class="login-card__mode">
           <button
             class="login-card__mode-item"
-            :class="{ 'is-active': !isRegisterMode }"
+            :class="{ 'is-active': isPasswordLoginMode }"
             type="button"
             data-test="auth-mode-login"
-            @click="switchMode('login')"
+            @click="switchMode('password-login')"
           >
             登录
           </button>
@@ -210,11 +466,29 @@ async function handleSubmit() {
         </div>
 
         <div class="login-card__heading">
-          <p class="login-card__eyebrow">{{ isRegisterMode ? '快速注册' : '账号登录' }}</p>
-          <h2 class="login-card__title">{{ isRegisterMode ? '创建新账号' : '进入工作台' }}</h2>
-          <p class="login-card__subtitle">
-            {{ isRegisterMode ? '当前为免验证码注册，注册成功后将自动进入系统。' : '使用已有账号直接进入工作台。' }}
-          </p>
+          <p class="login-card__eyebrow">{{ headingLabel }}</p>
+          <h2 class="login-card__title">{{ titleLabel }}</h2>
+        </div>
+
+        <div class="login-card__quick-actions">
+          <button
+            class="login-card__link"
+            type="button"
+            data-test="auth-mode-sms-login"
+            @click="switchMode('sms-login')"
+          >
+            <Iphone class="login-card__link-icon" />
+            手机验证码登录
+          </button>
+          <button
+            class="login-card__link"
+            type="button"
+            data-test="auth-mode-reset"
+            @click="switchMode('reset-password')"
+          >
+            <RefreshRight class="login-card__link-icon" />
+            忘记密码
+          </button>
         </div>
 
         <el-alert
@@ -226,18 +500,63 @@ async function handleSubmit() {
           :closable="false"
         />
 
+        <el-alert
+          v-else-if="state.debugVerifyCode"
+          title="本地调试验证码"
+          :description="state.debugVerifyCode"
+          type="info"
+          show-icon
+          :closable="false"
+          data-test="sms-debug-code"
+        />
+
         <el-form class="login-card__form" @submit.prevent="handleSubmit">
           <el-form-item>
             <el-input
-              v-model="form.username"
-              :placeholder="usernamePlaceholder"
+              v-model="form.phone"
+              :placeholder="phonePlaceholder"
               size="large"
-              :prefix-icon="User"
-              autocomplete="username"
-              data-test="login-username"
+              :prefix-icon="Iphone"
+              autocomplete="tel"
+              data-test="login-phone"
             />
           </el-form-item>
-          <el-form-item>
+
+          <el-form-item v-if="showSmsCodeField">
+            <div class="login-card__sms-row">
+              <el-input
+                v-model="form.smsCode"
+                placeholder="短信验证码"
+                size="large"
+                :prefix-icon="Message"
+                autocomplete="one-time-code"
+                data-test="login-sms-code"
+              />
+              <el-button
+                class="login-card__sms-button"
+                type="primary"
+                plain
+                :loading="state.sendingSms"
+                :disabled="state.smsCountdown > 0"
+                data-test="send-sms-code"
+                @click.prevent="sendSmsCode"
+              >
+                {{ smsButtonLabel }}
+              </el-button>
+            </div>
+          </el-form-item>
+
+          <el-form-item v-if="showTurnstile">
+            <TurnstileWidget
+              ref="turnstileRef"
+              :site-key="state.turnstileSiteKey"
+              @verified="handleTurnstileVerified"
+              @expired="handleTurnstileExpired"
+              @error="handleTurnstileError"
+            />
+          </el-form-item>
+
+          <el-form-item v-if="showPasswordField">
             <el-input
               v-model="form.password"
               :placeholder="passwordPlaceholder"
@@ -245,14 +564,15 @@ async function handleSubmit() {
               size="large"
               :prefix-icon="Lock"
               show-password
-              :autocomplete="isRegisterMode ? 'new-password' : 'current-password'"
+              :autocomplete="isPasswordLoginMode ? 'current-password' : 'new-password'"
               data-test="login-password"
             />
           </el-form-item>
-          <el-form-item v-if="isRegisterMode">
+
+          <el-form-item v-if="showConfirmPasswordField">
             <el-input
               v-model="form.confirmPassword"
-              :placeholder="confirmPasswordPlaceholder"
+              placeholder="再次输入密码，需与上方一致"
               type="password"
               size="large"
               :prefix-icon="Lock"
@@ -261,6 +581,7 @@ async function handleSubmit() {
               data-test="register-confirm-password"
             />
           </el-form-item>
+
           <el-button
             class="login-card__submit"
             type="primary"
@@ -269,7 +590,7 @@ async function handleSubmit() {
             :loading="state.submitting"
             data-test="login-submit"
           >
-            {{ isRegisterMode ? '注册并进入' : '登录' }}
+            {{ submitLabel }}
           </el-button>
         </el-form>
       </div>
@@ -282,9 +603,11 @@ async function handleSubmit() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: clip;
   background:
-    radial-gradient(circle at top left, rgba(199, 146, 92, 0.18), transparent 40%),
-    radial-gradient(circle at bottom right, rgba(36, 61, 54, 0.12), transparent 36%),
+    radial-gradient(circle at top left, rgba(92, 124, 250, 0.22), transparent 40%),
+    radial-gradient(circle at bottom right, rgba(255, 147, 186, 0.18), transparent 36%),
     linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
 }
 
@@ -297,8 +620,9 @@ async function handleSubmit() {
 .login-page__hero {
   padding: 3rem;
   background:
-    radial-gradient(circle at 20% 30%, rgba(199, 146, 92, 0.22), transparent 50%),
-    linear-gradient(160deg, rgba(36, 61, 54, 0.06), transparent);
+    radial-gradient(circle at 20% 30%, rgba(92, 124, 250, 0.18), transparent 50%),
+    radial-gradient(circle at 72% 18%, rgba(255, 147, 186, 0.16), transparent 34%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.12), transparent);
   position: relative;
   overflow: hidden;
 }
@@ -311,7 +635,7 @@ async function handleSubmit() {
   width: 320px;
   height: 320px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(199, 146, 92, 0.15), transparent 70%);
+  background: radial-gradient(circle, rgba(92, 124, 250, 0.18), transparent 70%);
   pointer-events: none;
 }
 
@@ -323,7 +647,7 @@ async function handleSubmit() {
   width: 240px;
   height: 240px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(36, 61, 54, 0.1), transparent 70%);
+  background: radial-gradient(circle, rgba(255, 147, 186, 0.16), transparent 70%);
   pointer-events: none;
 }
 
@@ -384,19 +708,24 @@ async function handleSubmit() {
 
 .login-page__form-wrap {
   padding: 2rem;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--color-glass) 34%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .login-card {
   display: grid;
-  gap: 1.5rem;
+  gap: 1.25rem;
   width: min(100%, 420px);
   padding: 2.25rem;
-  border: 1px solid rgba(35, 65, 58, 0.1);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.5rem;
-  background: rgba(255, 255, 255, 0.95);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 94%, transparent);
   box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(20px) saturate(1.14);
+  -webkit-backdrop-filter: blur(20px) saturate(1.14);
 }
 
 .login-card__mode {
@@ -405,28 +734,32 @@ async function handleSubmit() {
   gap: 0.5rem;
   padding: 0.35rem;
   border-radius: 999px;
-  background: rgba(35, 65, 58, 0.06);
+  background: color-mix(in srgb, var(--color-glass) 72%, transparent);
+  backdrop-filter: blur(14px) saturate(1.12);
+  -webkit-backdrop-filter: blur(14px) saturate(1.12);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  box-shadow: var(--shadow-card);
 }
 
 .login-card__mode-item {
   min-height: 42px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: transparent;
+  background: color-mix(in srgb, var(--color-glass) 38%, transparent);
   color: var(--color-text-muted);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-  transition:
-    background 160ms ease,
-    color 160ms ease,
-    box-shadow 160ms ease;
+  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
 
 .login-card__mode-item.is-active {
-  background: rgba(255, 255, 255, 0.96);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.1)),
+    color-mix(in srgb, var(--color-glass) 92%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
   color: var(--color-primary);
-  box-shadow: 0 8px 20px rgba(35, 65, 58, 0.12);
+  box-shadow: var(--shadow-glow);
 }
 
 .login-card__heading {
@@ -434,12 +767,8 @@ async function handleSubmit() {
   gap: 0.35rem;
 }
 
-.login-card__eyebrow,
-.login-card__subtitle {
-  margin: 0;
-}
-
 .login-card__eyebrow {
+  margin: 0;
   color: var(--color-text-muted);
   font-size: 0.8rem;
   letter-spacing: 0.1em;
@@ -453,15 +782,43 @@ async function handleSubmit() {
   color: var(--color-primary);
 }
 
-.login-card__subtitle {
-  color: var(--color-text-muted);
-  line-height: 1.7;
-  font-size: 0.92rem;
+.login-card__quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.login-card__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  font: inherit;
+}
+
+.login-card__link-icon {
+  width: 1rem;
+  height: 1rem;
 }
 
 .login-card__form {
   display: grid;
   gap: 0.5rem;
+}
+
+.login-card__sms-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.login-card__sms-button {
+  min-width: 118px;
 }
 
 .login-card__submit {
@@ -475,21 +832,22 @@ async function handleSubmit() {
 @media (max-width: 768px) {
   .login-page {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto;
+    min-height: auto;
   }
 
   .login-page__hero {
-    padding: 1.75rem 1.25rem;
+    padding: 1.5rem 1.25rem 0.75rem;
     align-items: flex-start;
   }
 
   .login-page__hero-inner {
-    gap: 0.75rem;
+    gap: 0.55rem;
     max-width: 100%;
   }
 
   .login-page__headline {
-    font-size: 2rem;
+    font-size: 1.8rem;
   }
 
   .login-page__features {
@@ -497,18 +855,23 @@ async function handleSubmit() {
   }
 
   .login-page__description {
-    font-size: 0.9rem;
+    font-size: 0.86rem;
+    line-height: 1.65;
   }
 
   .login-page__form-wrap {
     align-items: flex-start;
-    padding: 1.5rem 1.25rem;
+    padding: 0.75rem 1.25rem 1.5rem;
   }
 
   .login-card {
     width: 100%;
-    padding: 1.5rem;
+    padding: 1.35rem;
     border-radius: 1.25rem;
+  }
+
+  .login-card__sms-row {
+    grid-template-columns: 1fr;
   }
 }
 

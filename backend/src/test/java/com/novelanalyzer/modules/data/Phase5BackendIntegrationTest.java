@@ -1,15 +1,26 @@
 package com.novelanalyzer.modules.data;
 
 import com.jayway.jsonpath.JsonPath;
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -25,6 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
+        "spring.data.redis.database=14",
         "spring.sql.init.mode=never",
         "app.security.rate-limit-per-minute=100"
     }
@@ -44,14 +56,47 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 class Phase5BackendIntegrationTest {
 
+    private static final HttpServer MOCK_LANGGRAPH_SERVER = startMockLangGraphServer();
+
+    @DynamicPropertySource
+    static void registerAiProperties(DynamicPropertyRegistry registry) {
+        registry.add("app.ai.langgraph-worker.base-url", () -> "http://127.0.0.1:" + MOCK_LANGGRAPH_SERVER.getAddress().getPort());
+        registry.add("app.ai.langgraph-worker.internal-api-key", () -> "phase5-langgraph-key");
+    }
+
+    @AfterAll
+    static void shutdownMockServer() {
+        MOCK_LANGGRAPH_SERVER.stop(0);
+    }
+
     @Autowired
     private MockMvc mockMvc;
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    @BeforeEach
+    void clearRedisCache() {
+        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
+        try {
+            connection.serverCommands().flushDb();
+        } finally {
+            connection.close();
+        }
+    }
 
     @Test
     void shouldManageSystemConfig() throws Exception {
         String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .param("configKey", "analysis.runtime.mode"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configKey").value("analysis.runtime.mode"))
+            .andExpect(jsonPath("$.data.configValue").value("langgraph"));
 
         mockMvc.perform(get("/api/config/system")
                 .header("Authorization", "Bearer " + token)
@@ -70,6 +115,129 @@ class Phase5BackendIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.configValue").value("20000"));
+    }
+
+    @Test
+    void shouldManageAiModelRegistryAndExposeModelOptions() throws Exception {
+        String adminToken = loginAndGetToken("admin", "admin123");
+        String writerToken = loginAndGetToken("writer", "writer123");
+
+        mockMvc.perform(get("/api/config/system/model-registry")
+                .header("Authorization", "Bearer " + adminToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.defaultModelKey").isNotEmpty())
+            .andExpect(jsonPath("$.data.models.length()").value(1))
+            .andExpect(jsonPath("$.data.models[0].modelKey").value("deepseek-chat"));
+
+        mockMvc.perform(put("/api/config/system/model-registry")
+                .header("Authorization", "Bearer " + adminToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "defaultModelKey":"deepseek-chat",
+                      "models":[
+                        {
+                          "modelKey":"deepseek-chat",
+                          "displayName":"DeepSeek Chat",
+                          "providerType":"openai-compatible",
+                          "modelName":"deepseek-chat",
+                          "baseUrl":"https://api.deepseek.com/v1",
+                          "apiKey":"registry-key-1",
+                          "enabled":true,
+                          "isDefault":true,
+                          "defaultTemperature":1.0,
+                          "maxTokens":8192,
+                          "temperatureSpecJson":"{\\"min\\":0.0,\\"max\\":2.0,\\"step\\":0.1,\\"default\\":1.0}"
+                        },
+                        {
+                          "modelKey":"deepseek-reasoner",
+                          "displayName":"DeepSeek Reasoner",
+                          "providerType":"openai-compatible",
+                          "modelName":"deepseek-reasoner",
+                          "baseUrl":"https://api.deepseek.com/v1",
+                          "apiKey":"registry-key-2",
+                          "enabled":true,
+                          "isDefault":false,
+                          "defaultTemperature":0.7,
+                          "maxTokens":16384,
+                          "temperatureSpecJson":"{\\"min\\":0.0,\\"max\\":1.5,\\"step\\":0.1,\\"default\\":0.7}"
+                        }
+                      ]
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.models.length()").value(2))
+            .andExpect(jsonPath("$.data.models[1].modelKey").value("deepseek-reasoner"))
+            .andExpect(jsonPath("$.data.models[1].temperatureSpecJson").value("{\"min\":0.0,\"max\":1.5,\"step\":0.1,\"default\":0.7}"))
+            .andExpect(jsonPath("$.data.models[0].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[0].apiKeyMasked").value("已配置"))
+            .andExpect(jsonPath("$.data.models[1].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[1].apiKeyMasked").value("已配置"));
+
+        mockMvc.perform(get("/api/config/system/model-registry")
+                .header("Authorization", "Bearer " + adminToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.models[0].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[0].apiKeyMasked").value("已配置"))
+            .andExpect(jsonPath("$.data.models[0].apiKey").isEmpty())
+            .andExpect(jsonPath("$.data.models[1].apiKeyConfigured").value(true))
+            .andExpect(jsonPath("$.data.models[1].apiKeyMasked").value("已配置"))
+            .andExpect(jsonPath("$.data.models[1].apiKey").isEmpty());
+
+        String storedRegistryJson = jdbcTemplate.queryForObject(
+            "SELECT config_value FROM system_config WHERE config_key = 'ai.model-registry.json' AND deleted = 0",
+            String.class
+        );
+        assertTrue(storedRegistryJson != null && !storedRegistryJson.contains("registry-key-1"));
+        assertTrue(storedRegistryJson != null && !storedRegistryJson.contains("registry-key-2"));
+
+        mockMvc.perform(get("/api/config/system/model-options")
+                .header("Authorization", "Bearer " + writerToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0].modelKey").value("deepseek-chat"))
+            .andExpect(jsonPath("$.data[0].displayName").value("DeepSeek Chat"))
+            .andExpect(jsonPath("$.data[1].modelKey").value("deepseek-reasoner"));
+
+        mockMvc.perform(get("/api/config/system/available-models")
+                .header("Authorization", "Bearer " + writerToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0]").value("deepseek-chat"))
+            .andExpect(jsonPath("$.data[1]").value("deepseek-reasoner"));
+    }
+
+    @Test
+    void shouldMaskAndEncryptSecretSystemConfigValue() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(put("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"configKey":"ai.langgraph-worker.internal-api-key","configValue":"langgraph-internal-secret-123456","description":"Updated internal key"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configValue").value("已配置"));
+
+        mockMvc.perform(get("/api/config/system")
+                .header("Authorization", "Bearer " + token)
+                .param("configKey", "ai.langgraph-worker.internal-api-key"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.configValue").value("已配置"));
+
+        String storedValue = jdbcTemplate.queryForObject(
+            "SELECT config_value FROM system_config WHERE config_key = 'ai.langgraph-worker.internal-api-key' AND deleted = 0",
+            String.class
+        );
+        assertTrue(storedValue != null && !storedValue.contains("langgraph-internal-secret-123456"));
     }
 
     @Test
@@ -158,12 +326,241 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
             .andExpect(jsonPath("$.data.historyAnalysisCount").value(3))
             .andExpect(jsonPath("$.data.latestSnapshots.length()").value(3))
+            .andExpect(jsonPath("$.data.boardSummary").isNotEmpty())
             .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(2))
             .andExpect(jsonPath("$.data.themeTable.length()").value(2))
+            .andExpect(jsonPath("$.data.themeTable[0].ratio").value(50.0))
+            .andExpect(jsonPath("$.data.themeTable[0].representativeBooks.length()").value(1))
             .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
+            .andExpect(jsonPath("$.data.hotBooks[0].rankNo").value(1))
             .andExpect(jsonPath("$.data.insightCards.length()").value(2))
             .andExpect(jsonPath("$.data.comparisonSummary").isNotEmpty())
-            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3));
+            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3))
+            .andExpect(jsonPath("$.data.snapshotComparisons[0].leadBookName").isNotEmpty());
+    }
+
+    @Test
+    void shouldRecoverStructuredTrendFieldsFromRawJsonStoredInDetailContent() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        String nestedThemeJson = """
+            {
+              "analysisType":"theme",
+              "summary":"Urban-brain remains the clearest direction across the latest board snapshots.",
+              "boardSummary":"This board keeps concentrating on urban-brain and system-flow hybrids, with the top title staying highly stable.",
+              "trendPreview":"Urban-brain continues to dominate this board.",
+              "detailContent":"Detailed board trend analysis for the last three snapshots.",
+              "historicalWordCloud":[
+                {"name":"urban-brain","value":24},
+                {"name":"system-flow","value":15}
+              ],
+              "themeDistribution":[
+                {"theme":"urban-brain","count":3,"ratio":50.0},
+                {"theme":"system-flow","count":2,"ratio":33.3}
+              ],
+              "themeTable":[
+                {
+                  "theme":"urban-brain",
+                  "count":3,
+                  "ratio":50.0,
+                  "trend":"rising",
+                  "representativeBooks":[
+                    {"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"Keeps leading the board"}
+                  ]
+                }
+              ],
+              "hotBooks":[
+                {"theme":"urban-brain","bookName":"Brain City King","author":"Author One","rankNo":1,"reason":"Keeps leading the board"}
+              ],
+              "insightCards":[
+                {"label":"Lead lane","value":"urban-brain","note":"Dominates the board history"},
+                {"label":"Lead title","value":"Brain City King","note":"Most representative latest book"}
+              ],
+              "snapshotComparisons":[
+                {"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","topThemeRatio":50.0,"leadBookName":"Brain City King","change":"holding"}
+              ],
+              "comparisonSummary":"Urban-brain has become the clearest board-level direction across the last three snapshots.",
+              "historyAnalysisCount":3
+            }
+            """;
+        String degradedStoredJson = """
+            {
+              "analysisType":"theme",
+              "summary":"",
+              "boardSummary":"",
+              "trendPreview":%s,
+              "detailContent":%s,
+              "historicalWordCloud":[],
+              "themeDistribution":[],
+              "themeTable":[],
+              "hotBooks":[],
+              "insightCards":[],
+              "snapshotComparisons":[],
+              "comparisonSummary":"",
+              "historyAnalysisCount":3
+            }
+            """.formatted(jsonStringLiteral(nestedThemeJson), jsonStringLiteral(nestedThemeJson));
+
+        jdbcTemplate.update(
+            "UPDATE analysis_result SET result_json = ?, result_content = ? WHERE id = ?",
+            degradedStoredJson,
+            nestedThemeJson,
+            3004L
+        );
+
+        mockMvc.perform(get("/api/data/visual")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.boardSummary").isNotEmpty())
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(2))
+            .andExpect(jsonPath("$.data.themeTable.length()").value(1))
+            .andExpect(jsonPath("$.data.themeTable[0].representativeBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.hotBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.insightCards[0].label").value("Lead lane"))
+            .andExpect(jsonPath("$.data.snapshotComparisons[0].leadBookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.trendPreview").value("Urban-brain continues to dominate this board."))
+            .andExpect(jsonPath("$.data.detailContent").value("Detailed board trend analysis for the last three snapshots."));
+    }
+
+    @Test
+    void shouldSkipLatestBrokenTrendVisualResultAndUsePreviousStructuredVersion() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        jdbcTemplate.update("""
+            INSERT INTO analysis_result
+                (id, user_id, platform, book_id, channel_code, board_code, snapshot_id, analysis_type, chapter_count,
+                 prompt_config_id, model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TIMESTAMP '2026-03-20 13:30:00', TIMESTAMP '2026-03-20 13:30:00', ?)
+            """,
+            3999L,
+            1L,
+            "fanqie",
+            1001L,
+            "male-new",
+            "urban-brain",
+            6001L,
+            "theme",
+            0,
+            4L,
+            "dify",
+            "{\"summary\":\"broken",
+            """
+                {
+                  "analysisType":"theme",
+                  "summary":"",
+                  "boardSummary":"",
+                  "trendPreview":"{\\"summary\\":\\"broken",
+                  "detailContent":"{\\"summary\\":\\"broken",
+                  "historicalWordCloud":[],
+                  "themeDistribution":[],
+                  "themeTable":[],
+                  "hotBooks":[],
+                  "insightCards":[],
+                  "snapshotComparisons":[],
+                  "comparisonSummary":"",
+                  "historyAnalysisCount":3
+                }
+                """,
+            33,
+            120L,
+            0
+        );
+
+        mockMvc.perform(get("/api/data/visual")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.boardSummary").isNotEmpty())
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(2))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(2))
+            .andExpect(jsonPath("$.data.themeTable.length()").value(2))
+            .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
+            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3))
+            .andExpect(jsonPath("$.data.detailContent").value("Detailed board trend analysis for the last three snapshots."));
+    }
+
+    @Test
+    void shouldNormalizeLegacyTrendFieldNamesFromEmbeddedJson() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+        String legacyThemeJson = """
+            {
+              "summary": {
+                "platform": "fanqie",
+                "channel": "male-new",
+                "board": "urban-brain",
+                "coreTrend": "This board is shifting toward urban-brain hybrid hooks."
+              },
+              "historicalWordCloud": [
+                {"word": "urban-brain", "count": 18, "percentage": "75.0%"}
+              ],
+              "themeTable": [
+                {
+                  "theme": "urban-brain hybrid",
+                  "count": 3,
+                  "percentage": "50.0%",
+                  "top3Examples": ["Brain City King (stable #1)"],
+                  "trend": "rising"
+                }
+              ],
+              "hotBooks": [
+                {
+                  "title": "Brain City King",
+                  "rankTrend": ["S3#1", "S2#1"],
+                  "coreEmotion": "Rule-breaking payoff"
+                }
+              ]
+            }
+            """;
+        String degradedStoredJson = """
+            {
+              "analysisType":"theme",
+              "summary":"",
+              "boardSummary":"",
+              "trendPreview":%s,
+              "detailContent":%s,
+              "historicalWordCloud":[],
+              "themeDistribution":[],
+              "themeTable":[],
+              "hotBooks":[],
+              "insightCards":[],
+              "snapshotComparisons":[],
+              "comparisonSummary":"",
+              "historyAnalysisCount":3
+            }
+            """.formatted(jsonStringLiteral(legacyThemeJson), jsonStringLiteral(legacyThemeJson));
+
+        jdbcTemplate.update(
+            "UPDATE analysis_result SET result_json = ?, result_content = ? WHERE id = ?",
+            degradedStoredJson,
+            legacyThemeJson,
+            3004L
+        );
+
+        mockMvc.perform(get("/api/data/visual")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.boardSummary").value("This board is shifting toward urban-brain hybrid hooks."))
+            .andExpect(jsonPath("$.data.historicalWordCloud[0].name").value("urban-brain"))
+            .andExpect(jsonPath("$.data.historicalWordCloud[0].value").value(18))
+            .andExpect(jsonPath("$.data.themeDistribution[0].theme").value("urban-brain hybrid"))
+            .andExpect(jsonPath("$.data.themeDistribution[0].ratio").value(50.0))
+            .andExpect(jsonPath("$.data.themeTable[0].representativeBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.hotBooks[0].bookName").value("Brain City King"))
+            .andExpect(jsonPath("$.data.hotBooks[0].reason").value("Rule-breaking payoff"))
+            .andExpect(jsonPath("$.data.trendPreview").value("This board is shifting toward urban-brain hybrid hooks."));
     }
 
     @Test
@@ -206,17 +603,20 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(1))
             .andExpect(jsonPath("$.data.historyAnalysisCount").value(1))
             .andExpect(jsonPath("$.data.latestSnapshots.length()").value(1))
-            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(1))
-            .andExpect(jsonPath("$.data.themeTable.length()").value(1))
-            .andExpect(jsonPath("$.data.hotBooks.length()").value(1))
-            .andExpect(jsonPath("$.data.insightCards.length()").value(2))
-            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(1))
-            .andExpect(jsonPath("$.data.comparisonSummary").isNotEmpty())
-            .andExpect(jsonPath("$.data.trendPreview").isNotEmpty());
+            .andExpect(jsonPath("$.data.boardSummary").isEmpty())
+            .andExpect(jsonPath("$.data.historicalWordCloud.length()").value(0))
+            .andExpect(jsonPath("$.data.themeDistribution.length()").value(0))
+            .andExpect(jsonPath("$.data.themeTable.length()").value(0))
+            .andExpect(jsonPath("$.data.hotBooks.length()").value(0))
+            .andExpect(jsonPath("$.data.insightCards.length()").value(0))
+            .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(0))
+            .andExpect(jsonPath("$.data.comparisonSummary").isEmpty())
+            .andExpect(jsonPath("$.data.trendPreview").isEmpty());
     }
 
     @Test
     void shouldReturnBoardScopedTrendAnalysis() throws Exception {
+        setSystemConfig("analysis.runtime.mode", "legacy");
         String token = loginAndGetToken("admin", "admin123");
 
         mockMvc.perform(get("/api/analysis/trend")
@@ -233,8 +633,13 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.boardName").isNotEmpty())
             .andExpect(jsonPath("$.data.sourceSnapshotCount").value(3))
             .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"))
+            .andExpect(jsonPath("$.data.resultJson.boardSummary").isNotEmpty())
             .andExpect(jsonPath("$.data.resultJson.historicalWordCloud").isArray())
             .andExpect(jsonPath("$.data.resultJson.historicalWordCloud").isNotEmpty())
+            .andExpect(jsonPath("$.data.resultJson.themeDistribution").isArray())
+            .andExpect(jsonPath("$.data.resultJson.themeDistribution").isNotEmpty())
+            .andExpect(jsonPath("$.data.resultJson.themeTable[0].representativeBooks").isArray())
+            .andExpect(jsonPath("$.data.resultJson.hotBooks[0].rankNo").value(1))
             .andExpect(jsonPath("$.data.resultJson.summary").isNotEmpty())
             .andExpect(jsonPath("$.data.resultContent").isNotEmpty());
     }
@@ -288,13 +693,79 @@ class Phase5BackendIntegrationTest {
         assertEquals(1, promptConfigContractCount);
     }
 
+    private static HttpServer startMockLangGraphServer() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+            server.createContext("/internal/analysis/run", exchange -> {
+                exchange.getRequestBody().readAllBytes();
+                byte[] response = """
+                    {
+                      "taskId": "phase5-langgraph-task",
+                      "modelName": "langgraph-worker:deepseek-chat",
+                      "content": "phase5 langgraph trend content",
+                      "tokenUsed": 156,
+                      "resultJson": {
+                        "analysisType": "theme",
+                        "summary": "phase5 langgraph trend summary",
+                        "boardSummary": "phase5 board summary",
+                        "trendPreview": "phase5 trend preview",
+                        "detailContent": "phase5 langgraph trend content",
+                        "historicalWordCloud": [{"name":"urban-brain","value":24}],
+                        "themeDistribution": [{"theme":"urban-brain","count":3,"ratio":50.0}],
+                        "themeTable": [{"theme":"urban-brain","count":3,"ratio":50.0,"representativeBooks":[{"bookName":"Brain City King","rankNo":1}]}],
+                        "hotBooks": [{"bookName":"Brain City King","rankNo":1,"reason":"stable lead"}],
+                        "insightCards": [{"label":"Lead lane","value":"urban-brain","note":"dominates"}],
+                        "snapshotComparisons": [{"snapshotTime":"2026-03-20 11:30:00","topTheme":"urban-brain","topThemeRatio":50.0,"leadBookName":"Brain City King","change":"holding"}],
+                        "comparisonSummary": "phase5 comparison summary"
+                      }
+                    }
+                    """.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+                exchange.close();
+            });
+            server.start();
+            return server;
+        } catch (IOException ex) {
+            throw new IllegalStateException("failed to start mock LangGraph server", ex);
+        }
+    }
+
     private String loginAndGetToken(String username, String password) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/auth/login")
+        String phone = switch (username) {
+            case "admin" -> "13800138000";
+            case "writer" -> "13800138001";
+            default -> username;
+        };
+        MvcResult result = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
+    }
+
+    private void setSystemConfig(String configKey, String configValue) {
+        jdbcTemplate.update(
+            "DELETE FROM system_config WHERE config_key = ?",
+            configKey
+        );
+        jdbcTemplate.update(
+            "INSERT INTO system_config (config_key, config_value, config_type, description, is_editable, deleted) VALUES (?, ?, ?, ?, 1, 0)",
+            configKey,
+            configValue,
+            "test",
+            "test override"
+        );
+    }
+
+    private String jsonStringLiteral(String value) {
+        return "\"" + value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\r", "\\r")
+            .replace("\n", "\\n") + "\"";
     }
 }

@@ -24,6 +24,24 @@ class TestableConfuseFontDecoder(ConfuseFontDecoder):
         return self.single_results.get(char, "")
 
 
+class BundledMappingOnlyDecoder(ConfuseFontDecoder):
+    def __init__(self, cache_dir: str | None = None) -> None:
+        super().__init__(cache_dir=cache_dir)
+        self.batch_calls = 0
+        self.single_calls = 0
+
+    def _ensure_font_path(self, css: str) -> tuple[str, str]:
+        return "dc027189e0ba4cd", "fake-font.otf"
+
+    def _recognize_batch(self, batch: list[str], font_path: str) -> str | None:
+        self.batch_calls += 1
+        return None
+
+    def _recognize_single(self, char: str, font_path: str) -> str:
+        self.single_calls += 1
+        return ""
+
+
 class ConfuseFontDecoderTest(unittest.TestCase):
 
     def test_should_decode_batch_and_fallback_single(self) -> None:
@@ -109,3 +127,31 @@ class ConfuseFontDecoderTest(unittest.TestCase):
             )
 
             self.assertEqual("光望再", decoded)
+
+    def test_should_use_bundled_mapping_before_ocr_when_cache_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            decoder = BundledMappingOnlyDecoder(cache_dir=temp_dir)
+
+            decoded = decoder.decode(
+                "\ue3e9\ue3ea\ue3eb\ue3ec",
+                "@font-face{font-family:test;}",
+            )
+
+        self.assertEqual("\u5728\u4e3b\u7279\u5bb6", decoded)
+        self.assertEqual(0, decoder.batch_calls)
+        self.assertEqual(0, decoder.single_calls)
+
+    def test_should_apply_manual_ascii_overrides_for_remaining_fanqie_glyphs(self) -> None:
+        decoder = TestableConfuseFontDecoder()
+
+        decoded = decoder.decode(
+            "\ue3fa\ue408\ue448\ue45f\ue4a3",
+            "@font-face{font-family:test;}",
+        )
+
+        self.assertEqual("golIj", decoded)
+
+    def test_font_url_pattern_accepts_browser_font_face_css(self) -> None:
+        css = '@font-face { font-family: TestFont; src: url("https://example.test/font.woff2") format("woff2"); }'
+
+        self.assertIsNotNone(ConfuseFontDecoder.FONT_URL_PATTERN.search(css))

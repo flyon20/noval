@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus';
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { promptConfigApi, systemConfigApi } from '@/api/config';
-import type { PromptConfig, PromptType } from '@/types/config';
+import { getErrorPayload } from '@/lib/http-error';
+import type { AiModelOption, PromptConfig, PromptTemplateOption, PromptType } from '@/types/config';
 
 const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
   { label: '拆文分析', value: 'deconstruct' },
@@ -12,10 +13,14 @@ const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
 ];
 
 const activeType = ref<PromptType>('deconstruct');
+const activeTemplateName = ref('');
 const loading = ref(false);
 const saving = ref(false);
+const deleting = ref(false);
 const traceId = ref('');
 const errorMessage = ref('');
+const contractUnlocked = ref(false);
+const templateOptions = ref<PromptTemplateOption[]>([]);
 
 const formState = reactive({
   promptName: '',
@@ -23,38 +28,90 @@ const formState = reactive({
   modelName: '',
   temperature: '',
   maxTokens: '',
+  inputJsonSchema: '',
+  inputExampleJson: '',
   outputJsonSchema: '',
   outputExampleJson: '',
   postProcessType: '',
   parseConfigJson: '',
 });
 
+const contractFieldCount = computed(() => [
+  formState.inputJsonSchema,
+  formState.inputExampleJson,
+  formState.outputJsonSchema,
+  formState.outputExampleJson,
+  formState.postProcessType,
+  formState.parseConfigJson,
+].filter((item) => item.trim().length > 0).length);
+
+const hasLoadedContract = computed(() => contractFieldCount.value > 0);
+const isDefaultTemplate = computed(() => currentPromptIsDefault.value || formState.promptName.trim() === 'default');
+const currentPromptIsDefault = ref(false);
+const contractStatusDescription = computed(() => (
+  hasLoadedContract.value
+    ? `当前已加载 ${contractFieldCount.value} 项系统结构约束，运行时会以这些字段作为框架侧的输入 / 输出合同基础。`
+    : '当前还没有读取到系统结构约束，请检查后端回填逻辑或数据库里的 prompt_config 数据。'
+));
+
 function applyPromptConfig(config: PromptConfig) {
+  activeTemplateName.value = config.promptName;
+  currentPromptIsDefault.value = Boolean(config.isDefault);
   formState.promptName = config.promptName;
   formState.promptContent = config.promptContent;
   formState.modelName = config.modelName;
   formState.temperature = config.temperature == null ? '' : String(config.temperature);
   formState.maxTokens = config.maxTokens == null ? '' : String(config.maxTokens);
+  formState.inputJsonSchema = config.inputJsonSchema ?? '';
+  formState.inputExampleJson = config.inputExampleJson ?? '';
   formState.outputJsonSchema = config.outputJsonSchema ?? '';
   formState.outputExampleJson = config.outputExampleJson ?? '';
   formState.postProcessType = config.postProcessType ?? '';
   formState.parseConfigJson = config.parseConfigJson ?? '';
+  contractUnlocked.value = false;
 }
 
 async function loadPromptConfig(promptType = activeType.value) {
+  return loadPromptConfigByName(promptType);
+}
+
+async function loadPromptConfigByName(promptType = activeType.value, promptName?: string) {
   loading.value = true;
   errorMessage.value = '';
+  traceId.value = '';
 
   try {
-    const response = await promptConfigApi.getByType(promptType);
+    const [templatesResponse, response] = await Promise.all([
+      promptConfigApi.listTemplates(promptType),
+      promptConfigApi.getByType(promptType, promptName),
+    ]);
     activeType.value = promptType;
+    templateOptions.value = templatesResponse.data.data ?? [];
     traceId.value = response.data.traceId;
     applyPromptConfig(response.data.data);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '提示词配置加载失败。';
+    const payload = getErrorPayload(error);
+    errorMessage.value = payload.message ?? '提示词配置加载失败。';
+    traceId.value = payload.traceId ?? '';
   } finally {
     loading.value = false;
   }
+}
+
+async function handleTemplateChange(promptName: string) {
+  if (!promptName) {
+    return;
+  }
+  if (!templateOptions.value.some((item) => item.promptName === promptName)) {
+    activeTemplateName.value = promptName;
+    currentPromptIsDefault.value = false;
+    formState.promptName = promptName;
+    return;
+  }
+  if (promptName === formState.promptName) {
+    return;
+  }
+  await loadPromptConfigByName(activeType.value, promptName);
 }
 
 function buildUpdatePayload() {
@@ -65,6 +122,8 @@ function buildUpdatePayload() {
     modelName: formState.modelName.trim(),
     ...(formState.temperature !== '' ? { temperature: Number(formState.temperature) } : {}),
     ...(formState.maxTokens !== '' ? { maxTokens: Number(formState.maxTokens) } : {}),
+    ...(formState.inputJsonSchema.trim() ? { inputJsonSchema: formState.inputJsonSchema.trim() } : {}),
+    ...(formState.inputExampleJson.trim() ? { inputExampleJson: formState.inputExampleJson.trim() } : {}),
     ...(formState.outputJsonSchema.trim() ? { outputJsonSchema: formState.outputJsonSchema.trim() } : {}),
     ...(formState.outputExampleJson.trim() ? { outputExampleJson: formState.outputExampleJson.trim() } : {}),
     ...(formState.postProcessType.trim() ? { postProcessType: formState.postProcessType.trim() } : {}),
@@ -102,21 +161,42 @@ async function handleSave() {
     applyPromptConfig(response.data.data);
     ElMessage.success('提示词配置已保存');
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '提示词配置保存失败');
+    const payload = getErrorPayload(error);
+    traceId.value = payload.traceId ?? traceId.value;
+    ElMessage.error(payload.message ?? '提示词配置保存失败');
   } finally {
     saving.value = false;
   }
 }
 
-const availableModels = ref<string[]>([]);
+async function handleDeleteTemplate() {
+  if (isDefaultTemplate.value) {
+    ElMessage.warning('默认模板不能删除');
+    return;
+  }
+
+  deleting.value = true;
+  try {
+    await promptConfigApi.remove(activeType.value, formState.promptName.trim());
+    ElMessage.success('模板已删除');
+    await loadPromptConfigByName(activeType.value, 'default');
+  } catch (error) {
+    const payload = getErrorPayload(error);
+    traceId.value = payload.traceId ?? traceId.value;
+    ElMessage.error(payload.message ?? '模板删除失败');
+  } finally {
+    deleting.value = false;
+  }
+}
+
+const modelOptions = ref<AiModelOption[]>([]);
 
 onMounted(() => {
   void loadPromptConfig();
-  void systemConfigApi.getAvailableModels().then((res) => {
-    const models = res.data.data ?? [];
-    availableModels.value = models.includes('dify') ? models : ['dify', ...models];
+  void systemConfigApi.getModelOptions().then((res) => {
+    modelOptions.value = res.data.data ?? [];
   }).catch(() => {
-    availableModels.value = ['dify'];
+    modelOptions.value = [];
   });
 });
 </script>
@@ -127,7 +207,6 @@ onMounted(() => {
       <div>
         <p class="prompt-config-page__eyebrow">Current Page</p>
         <h2 class="prompt-config-page__title">提示词配置</h2>
-        <p class="prompt-config-page__subtitle">管理提示词内容与模型参数。</p>
       </div>
       <div class="prompt-config-page__meta">
         <span>当前类型：{{ activeType }}</span>
@@ -164,29 +243,50 @@ onMounted(() => {
       label-position="top"
     >
       <div class="prompt-config-page__grid">
+        <el-form-item label="模板选择">
+          <el-select
+            v-model="activeTemplateName"
+            allow-create
+            filterable
+            default-first-option
+            data-test="prompt-template-select"
+            placeholder="选择模板名称"
+            style="width: 100%"
+            @change="handleTemplateChange"
+          >
+            <el-option
+              v-for="template in templateOptions"
+              :key="`${template.promptType}-${template.promptName}`"
+              :label="`${template.promptName} (${template.modelName})`"
+              :value="template.promptName"
+            />
+          </el-select>
+        </el-form-item>
+
         <el-form-item label="提示词名称">
           <el-input
             v-model="formState.promptName"
+            :disabled="isDefaultTemplate"
             data-test="prompt-name-input"
             placeholder="请输入提示词名称"
           />
         </el-form-item>
 
-        <el-form-item label="模型名称">
+        <el-form-item label="运行模型">
           <el-select
             v-model="formState.modelName"
             allow-create
             filterable
             default-first-option
             data-test="prompt-model-input"
-            placeholder="选择或输入模型名称"
+            placeholder="选择模型 Key"
             style="width: 100%"
           >
             <el-option
-              v-for="model in availableModels"
-              :key="model"
-              :label="model"
-              :value="model"
+              v-for="model in modelOptions"
+              :key="model.modelKey"
+              :label="`${model.displayName} (${model.modelKey})`"
+              :value="model.modelKey"
             />
           </el-select>
         </el-form-item>
@@ -225,50 +325,112 @@ onMounted(() => {
       </el-form-item>
 
       <div class="prompt-config-page__hint">
-        保存前必须保留 <code v-pre>{{content}}</code> 占位符。
+        保存前必须保留 <code v-pre>{{content}}</code> 占位符。提示词写法保持业务专业性，JSON 契约则放到下方锁定区单独维护。
       </div>
 
-      <div class="prompt-config-page__grid">
-        <el-form-item label="Output JSON Schema">
-          <el-input
-            v-model="formState.outputJsonSchema"
-            :autosize="{ minRows: 6, maxRows: 10 }"
-            data-test="prompt-output-json-schema-input"
-            type="textarea"
-            placeholder='例如 {"type":"object","properties":{"summary":{"type":"string"}}}'
-          />
-        </el-form-item>
-
-        <el-form-item label="Output Example JSON">
-          <el-input
-            v-model="formState.outputExampleJson"
-            :autosize="{ minRows: 6, maxRows: 10 }"
-            data-test="prompt-output-example-json-input"
-            type="textarea"
-            placeholder='例如 {"summary":"example"}'
-          />
-        </el-form-item>
+      <div
+        v-if="isDefaultTemplate"
+        class="prompt-config-page__hint"
+        data-test="prompt-default-template-hint"
+      >
+        默认模板名称不可修改，只能修改内容和参数。
       </div>
 
-      <div class="prompt-config-page__grid">
-        <el-form-item label="Post Process Type">
-          <el-input
-            v-model="formState.postProcessType"
-            data-test="prompt-post-process-type-input"
-            placeholder="例如 json_extract"
-          />
-        </el-form-item>
+      <section class="prompt-config-page__contract">
+        <div class="prompt-config-page__contract-head">
+          <div>
+            <p class="prompt-config-page__contract-eyebrow">JSON Contract</p>
+            <h3 class="prompt-config-page__contract-title">输入 / 输出结构约束</h3>
+            <p class="prompt-config-page__contract-copy">默认锁定，点击“启用编辑”后才能改动这些高权限字段。</p>
+          </div>
+          <el-button
+            plain
+            data-test="prompt-contract-unlock"
+            @click="contractUnlocked = !contractUnlocked"
+          >
+            {{ contractUnlocked ? '锁定 JSON 契约' : '启用 JSON 契约编辑' }}
+          </el-button>
+        </div>
 
-        <el-form-item label="Parse Config JSON">
-          <el-input
-            v-model="formState.parseConfigJson"
-            :autosize="{ minRows: 6, maxRows: 10 }"
-            data-test="prompt-parse-config-json-input"
-            type="textarea"
-            placeholder='例如 {"parser":"json","trimMarkdownFence":true}'
-          />
-        </el-form-item>
-      </div>
+        <el-alert
+          :closable="false"
+          :data-test="'prompt-contract-status'"
+          :title="hasLoadedContract ? '系统预置结构约束已加载' : '系统预置结构约束未加载'"
+          :description="contractStatusDescription"
+          :type="hasLoadedContract ? 'success' : 'warning'"
+          show-icon
+        />
+
+        <div class="prompt-config-page__grid">
+          <el-form-item label="Input JSON Schema">
+            <el-input
+              v-model="formState.inputJsonSchema"
+              :autosize="{ minRows: 6, maxRows: 10 }"
+              :disabled="!contractUnlocked"
+              data-test="prompt-input-json-schema-input"
+              type="textarea"
+              placeholder='例如 {"type":"object","properties":{"content":{"type":"string"}}}'
+            />
+          </el-form-item>
+
+          <el-form-item label="Input Example JSON">
+            <el-input
+              v-model="formState.inputExampleJson"
+              :autosize="{ minRows: 6, maxRows: 10 }"
+              :disabled="!contractUnlocked"
+              data-test="prompt-input-example-json-input"
+              type="textarea"
+              placeholder='例如 {"content":"example-input"}'
+            />
+          </el-form-item>
+        </div>
+
+        <div class="prompt-config-page__grid">
+          <el-form-item label="Output JSON Schema">
+            <el-input
+              v-model="formState.outputJsonSchema"
+              :autosize="{ minRows: 6, maxRows: 10 }"
+              :disabled="!contractUnlocked"
+              data-test="prompt-output-json-schema-input"
+              type="textarea"
+              placeholder='例如 {"type":"object","properties":{"summary":{"type":"string"}}}'
+            />
+          </el-form-item>
+
+          <el-form-item label="Output Example JSON">
+            <el-input
+              v-model="formState.outputExampleJson"
+              :autosize="{ minRows: 6, maxRows: 10 }"
+              :disabled="!contractUnlocked"
+              data-test="prompt-output-example-json-input"
+              type="textarea"
+              placeholder='例如 {"summary":"example"}'
+            />
+          </el-form-item>
+        </div>
+
+        <div class="prompt-config-page__grid">
+          <el-form-item label="Post Process Type">
+            <el-input
+              v-model="formState.postProcessType"
+              :disabled="!contractUnlocked"
+              data-test="prompt-post-process-type-input"
+              placeholder="例如 json_extract"
+            />
+          </el-form-item>
+
+          <el-form-item label="Parse Config JSON">
+            <el-input
+              v-model="formState.parseConfigJson"
+              :autosize="{ minRows: 6, maxRows: 10 }"
+              :disabled="!contractUnlocked"
+              data-test="prompt-parse-config-json-input"
+              type="textarea"
+              placeholder='例如 {"parser":"json","trimMarkdownFence":true}'
+            />
+          </el-form-item>
+        </div>
+      </section>
 
       <div class="prompt-config-page__preview">
         <p class="prompt-config-page__preview-title">当前模板预览</p>
@@ -276,6 +438,16 @@ onMounted(() => {
       </div>
 
       <div class="prompt-config-page__actions">
+        <el-button
+          v-if="!isDefaultTemplate"
+          plain
+          type="danger"
+          :loading="deleting"
+          data-test="prompt-delete-button"
+          @click="handleDeleteTemplate"
+        >
+          删除模板
+        </el-button>
         <el-button
           type="primary"
           :loading="saving"
@@ -298,10 +470,14 @@ onMounted(() => {
 .prompt-config-page__hero,
 .prompt-config-page__types,
 .prompt-config-page__form {
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: var(--shadow-soft);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-surface) 90%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
 }
 
 .prompt-config-page__hero {
@@ -367,6 +543,8 @@ onMounted(() => {
 }
 
 .prompt-config-page__form {
+  display: grid;
+  gap: 1rem;
   padding: 1rem;
 }
 
@@ -376,10 +554,54 @@ onMounted(() => {
   gap: 1rem;
 }
 
-.prompt-config-page__hint {
-  padding: 0.85rem 1rem;
+.prompt-config-page__hint,
+.prompt-config-page__contract,
+.prompt-config-page__preview {
+  padding: 1rem;
   border-radius: 1rem;
   background: rgba(35, 65, 58, 0.05);
+}
+
+.prompt-config-page__hint {
+  color: var(--color-text-muted);
+  line-height: 1.7;
+}
+
+.prompt-config-page__contract {
+  display: grid;
+  gap: 1rem;
+}
+
+.prompt-config-page__contract-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.prompt-config-page__contract-eyebrow,
+.prompt-config-page__contract-title,
+.prompt-config-page__contract-copy,
+.prompt-config-page__preview-title,
+.prompt-config-page__preview-body {
+  margin: 0;
+}
+
+.prompt-config-page__contract-eyebrow {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.prompt-config-page__contract-title {
+  margin-top: 0.2rem;
+  font-size: 1.1rem;
+}
+
+.prompt-config-page__contract-copy {
+  margin-top: 0.3rem;
   color: var(--color-text-muted);
   line-height: 1.7;
 }
@@ -387,19 +609,6 @@ onMounted(() => {
 .prompt-config-page__actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 1rem;
-}
-
-.prompt-config-page__preview {
-  margin-top: 1rem;
-  padding: 1rem;
-  border-radius: 1rem;
-  background: rgba(35, 65, 58, 0.05);
-}
-
-.prompt-config-page__preview-title,
-.prompt-config-page__preview-body {
-  margin: 0;
 }
 
 .prompt-config-page__preview-title {
@@ -415,7 +624,8 @@ onMounted(() => {
 }
 
 @media (max-width: 760px) {
-  .prompt-config-page__hero {
+  .prompt-config-page__hero,
+  .prompt-config-page__contract-head {
     display: grid;
   }
 

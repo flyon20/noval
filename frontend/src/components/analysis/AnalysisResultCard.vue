@@ -20,7 +20,13 @@ const contentRef = ref<HTMLElement | null>(null);
 const cursorVisible = computed(() => props.phase === 'streaming');
 const finalHtml = computed(() => (props.resultContent ? renderAnalysisMarkdown(props.resultContent) : ''));
 const showError = computed(() => props.phase === 'error' && props.errorMessage);
-const partialVisible = computed(() => Boolean(props.streamingText) && (props.phase === 'error' || props.phase === 'aborted'));
+const sanitizedPartialText = computed(() => (
+  (props.streamingText ?? '')
+    .replace(/\[analysis[- ]progress\][^\n\r]*/giu, ' ')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim()
+));
+const partialVisible = computed(() => Boolean(sanitizedPartialText.value) && (props.phase === 'error' || props.phase === 'aborted'));
 const displayText = computed(() => {
   if (props.phase === 'done' && props.resultContent) {
     return props.resultContent;
@@ -81,7 +87,7 @@ watch(
 
     <div v-if="partialVisible" ref="contentRef" class="analysis-result__partial">
       <p class="analysis-result__partial-title">已保留的片段</p>
-      <p>{{ displayText }}</p>
+      <p>{{ sanitizedPartialText }}</p>
     </div>
   </div>
 </template>
@@ -91,16 +97,22 @@ watch(
   border: 1px solid var(--color-border);
   border-radius: 1.25rem;
   padding: 1.25rem;
-  background: rgba(255, 255, 255, 0.9);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.12)),
+    color-mix(in srgb, var(--color-surface) 92%, transparent);
+  backdrop-filter: blur(18px) saturate(1.18);
+  -webkit-backdrop-filter: blur(18px) saturate(1.18);
   min-height: 240px;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  transition: box-shadow 0.2s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  box-shadow: var(--shadow-card);
 }
 
 .analysis-result-card:hover {
-  box-shadow: 0 12px 35px rgba(46, 66, 55, 0.15);
+  box-shadow: var(--shadow-glow);
+  border-color: color-mix(in srgb, var(--color-accent) 26%, var(--color-border));
 }
 
 .analysis-result__status {
@@ -114,6 +126,7 @@ watch(
   line-height: 1.7;
   white-space: pre-line;
   font-family: var(--font-body);
+  color: var(--color-text);
 }
 
 .analysis-result__cursor {
@@ -128,6 +141,7 @@ watch(
 .analysis-result__done {
   overflow: auto;
   line-height: 1.8;
+  color: var(--color-text);
 }
 
 .analysis-result__meta {
@@ -163,6 +177,66 @@ watch(
 
 .analysis-result__empty {
   color: var(--color-text-muted);
+}
+
+.analysis-result__done :deep(.analysis-result__markdown) {
+  color: var(--color-text);
+}
+
+.analysis-result__done :deep(.analysis-result__markdown > *:first-child) {
+  margin-top: 0;
+}
+
+.analysis-result__done :deep(.analysis-result__markdown > *:last-child) {
+  margin-bottom: 0;
+}
+
+.analysis-result__done :deep(.analysis-result__markdown h1),
+.analysis-result__done :deep(.analysis-result__markdown h2),
+.analysis-result__done :deep(.analysis-result__markdown h3),
+.analysis-result__done :deep(.analysis-result__markdown h4) {
+  color: var(--color-text);
+  line-height: 1.35;
+}
+
+.analysis-result__done :deep(.analysis-result__markdown p),
+.analysis-result__done :deep(.analysis-result__markdown li),
+.analysis-result__done :deep(.analysis-result__markdown blockquote) {
+  color: color-mix(in srgb, var(--color-text) 94%, transparent);
+}
+
+.analysis-result__done :deep(.analysis-result__markdown ul),
+.analysis-result__done :deep(.analysis-result__markdown ol) {
+  padding-left: 1.2rem;
+}
+
+.analysis-result__done :deep(.analysis-result__markdown blockquote) {
+  margin: 1rem 0;
+  padding: 0.85rem 1rem;
+  border-left: 3px solid color-mix(in srgb, var(--color-accent) 72%, transparent);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--color-glass) 72%, transparent);
+}
+
+.analysis-result__done :deep(.analysis-result__markdown code) {
+  padding: 0.16rem 0.42rem;
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--color-primary-soft) 88%, transparent);
+  color: var(--color-text);
+}
+
+.analysis-result__done :deep(.analysis-result__markdown pre) {
+  overflow: auto;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 85%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 86%, var(--color-bg-secondary));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.analysis-result__done :deep(.analysis-result__markdown pre code) {
+  padding: 0;
+  background: transparent;
 }
 
 @media (max-width: 768px) {

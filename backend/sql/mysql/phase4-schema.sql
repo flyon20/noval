@@ -6,10 +6,13 @@ CREATE TABLE IF NOT EXISTS prompt_config (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'prompt config id',
     prompt_type VARCHAR(50) NOT NULL COMMENT 'prompt type',
     prompt_name VARCHAR(100) NOT NULL COMMENT 'prompt name',
+    scope_type VARCHAR(20) NOT NULL DEFAULT 'SYSTEM' COMMENT 'SYSTEM / USER_COPY',
+    owner_user_id BIGINT COMMENT 'owner user id for USER_COPY',
+    source_prompt_config_id BIGINT COMMENT 'source prompt config id',
     prompt_content TEXT NOT NULL COMMENT 'prompt content',
     model_name VARCHAR(50) DEFAULT 'dify' COMMENT 'model name',
     temperature DECIMAL(3,2) DEFAULT 0.70 COMMENT 'temperature',
-    max_tokens INT DEFAULT 2000 COMMENT 'max tokens',
+    max_tokens INT DEFAULT 6000 COMMENT 'max tokens',
     status TINYINT DEFAULT 1 COMMENT '0 disabled 1 enabled',
     is_default TINYINT DEFAULT 0 COMMENT '0 no 1 yes',
     dify_workflow_id VARCHAR(100) COMMENT 'dify workflow id',
@@ -18,9 +21,26 @@ CREATE TABLE IF NOT EXISTS prompt_config (
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
     deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
     UNIQUE KEY uk_prompt_type_name (prompt_type, prompt_name),
+    INDEX idx_scope_type (scope_type),
+    INDEX idx_owner_user_id (owner_user_id),
+    INDEX idx_source_prompt_config_id (source_prompt_config_id),
     INDEX idx_prompt_type (prompt_type),
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='prompt config';
+
+CREATE TABLE IF NOT EXISTS system_config (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'system config id',
+    config_key VARCHAR(100) NOT NULL COMMENT 'config key',
+    config_value TEXT COMMENT 'config value',
+    config_type VARCHAR(50) COMMENT 'config type',
+    description VARCHAR(200) COMMENT 'config description',
+    is_editable TINYINT DEFAULT 1 COMMENT '0 readonly 1 editable',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    UNIQUE KEY uk_config_key (config_key),
+    INDEX idx_config_type (config_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='system config';
 
 CREATE TABLE IF NOT EXISTS analysis_result (
     id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'analysis result id',

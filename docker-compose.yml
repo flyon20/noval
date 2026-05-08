@@ -2,17 +2,50 @@ version: "3.8"
 
 # Copy .env.example to .env and replace every CHANGE_ME value before first start.
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
+  nginx:
+    build:
+      context: .
+      dockerfile: ./docker/nginx/Dockerfile
+    depends_on:
+      - backend
+    environment:
+      TZ: Asia/Shanghai
+      APP_DOMAIN: ${APP_DOMAIN:-www.panch.fun}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-panch.fun}
+      BACKEND_UPSTREAM_HOST: backend
+      BACKEND_UPSTREAM_PORT: 8080
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${NGINX_SSL_DIR:-/etc/nginx/ssl}:/etc/nginx/ssl:ro
+    cpus: 0.20
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 128
+    logging: *default-logging
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     depends_on:
       - mysql
       - redis
       - crawler
+      - langgraph-worker
+      - qdrant
     environment:
+      TZ: Asia/Shanghai
       SERVER_PORT: 8080
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -25,15 +58,91 @@ services:
       CRAWLER_BASE_URL: http://crawler:5000
       CRAWLER_INTERNAL_API_KEY: ${CRAWLER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_INTERNAL_API_KEY}
       JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_WITH_A_RANDOM_SECRET_AT_LEAST_32_CHARS}
+      CONFIG_SECRET_MASTER_KEY: ${CONFIG_SECRET_MASTER_KEY:-CHANGE_ME_WITH_ANOTHER_RANDOM_SECRET}
+      CLOUDFLARE_TURNSTILE_ENABLED: ${CLOUDFLARE_TURNSTILE_ENABLED:-true}
+      CLOUDFLARE_TURNSTILE_SITE_KEY: ${CLOUDFLARE_TURNSTILE_SITE_KEY:-}
+      CLOUDFLARE_TURNSTILE_SECRET_KEY: ${CLOUDFLARE_TURNSTILE_SECRET_KEY:-}
+      CLOUDFLARE_TURNSTILE_EXPECT_HOSTNAME: ${CLOUDFLARE_TURNSTILE_EXPECT_HOSTNAME:-www.panch.fun}
+      ALIYUN_DYPNS_ENABLED: ${ALIYUN_DYPNS_ENABLED:-false}
+      ALIYUN_DYPNS_ACCESS_KEY_ID: ${ALIYUN_DYPNS_ACCESS_KEY_ID:-}
+      ALIYUN_DYPNS_ACCESS_KEY_SECRET: ${ALIYUN_DYPNS_ACCESS_KEY_SECRET:-}
+      ALIYUN_DYPNS_SIGN_NAME: ${ALIYUN_DYPNS_SIGN_NAME:-}
+      ALIYUN_DYPNS_TEMPLATE_CODE_REGISTER: ${ALIYUN_DYPNS_TEMPLATE_CODE_REGISTER:-}
+      ALIYUN_DYPNS_TEMPLATE_CODE_LOGIN: ${ALIYUN_DYPNS_TEMPLATE_CODE_LOGIN:-}
+      ALIYUN_DYPNS_TEMPLATE_CODE_RESET_PASSWORD: ${ALIYUN_DYPNS_TEMPLATE_CODE_RESET_PASSWORD:-}
       DIFY_BASE_URL: ${DIFY_BASE_URL:-https://api.dify.ai/v1}
       DIFY_API_KEY_REF: ${DIFY_API_KEY_REF:-DIFY_API_KEY}
+      DIFY_API_KEY: ${DIFY_API_KEY:-}
+      AI_OPENAI_COMPATIBLE_BASE_URL: ${AI_OPENAI_COMPATIBLE_BASE_URL:-https://api.deepseek.com/v1}
+      AI_OPENAI_COMPATIBLE_API_KEY_REF: ${AI_OPENAI_COMPATIBLE_API_KEY_REF:-DEEPSEEK_API_KEY}
+      AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-chat}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AI_LANGGRAPH_WORKER_BASE_URL: http://langgraph-worker:8001
+      AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
+      AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
+      KNOWLEDGE_QDRANT_BASE_URL: ${KNOWLEDGE_QDRANT_BASE_URL:-http://qdrant:6333}
+      KNOWLEDGE_QDRANT_COLLECTION: ${KNOWLEDGE_QDRANT_COLLECTION:-novel_knowledge_chunks}
+      KNOWLEDGE_EMBEDDING_PROVIDER: ${KNOWLEDGE_EMBEDDING_PROVIDER:-dashscope}
+      KNOWLEDGE_EMBEDDING_BASE_URL: ${KNOWLEDGE_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-text-embedding-v4}
+      KNOWLEDGE_EMBEDDING_DIMENSION: ${KNOWLEDGE_EMBEDDING_DIMENSION:-1024}
+      KNOWLEDGE_EMBEDDING_API_KEY: ${KNOWLEDGE_EMBEDDING_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      KNOWLEDGE_INDEX_MAX_CHAPTERS: ${KNOWLEDGE_INDEX_MAX_CHAPTERS:-10}
+      KNOWLEDGE_INDEX_MAX_ACTIVE_JOBS: ${KNOWLEDGE_INDEX_MAX_ACTIVE_JOBS:-1}
+      ALIYUN_DYPNS_SCHEME_NAME: ${ALIYUN_DYPNS_SCHEME_NAME:-noval-web}
+      ALIYUN_DYPNS_COUNTRY_CODE: ${ALIYUN_DYPNS_COUNTRY_CODE:-86}
+      ALIYUN_DYPNS_VALID_TIME_MINUTES: ${ALIYUN_DYPNS_VALID_TIME_MINUTES:-5}
+      ALIYUN_DYPNS_INTERVAL_SECONDS: ${ALIYUN_DYPNS_INTERVAL_SECONDS:-60}
+      SECURITY_PASSWORD_LOGIN_PHONE_WINDOW_SECONDS: ${SECURITY_PASSWORD_LOGIN_PHONE_WINDOW_SECONDS:-600}
+      SECURITY_PASSWORD_LOGIN_PHONE_MAX_FAILURES: ${SECURITY_PASSWORD_LOGIN_PHONE_MAX_FAILURES:-6}
+      SECURITY_PASSWORD_LOGIN_IP_WINDOW_SECONDS: ${SECURITY_PASSWORD_LOGIN_IP_WINDOW_SECONDS:-600}
+      SECURITY_PASSWORD_LOGIN_IP_MAX_FAILURES: ${SECURITY_PASSWORD_LOGIN_IP_MAX_FAILURES:-20}
+      SECURITY_PASSWORD_LOGIN_PHONE_IP_WINDOW_SECONDS: ${SECURITY_PASSWORD_LOGIN_PHONE_IP_WINDOW_SECONDS:-600}
+      SECURITY_PASSWORD_LOGIN_PHONE_IP_MAX_FAILURES: ${SECURITY_PASSWORD_LOGIN_PHONE_IP_MAX_FAILURES:-4}
+      SECURITY_PASSWORD_LOGIN_COOLDOWN_SECONDS: ${SECURITY_PASSWORD_LOGIN_COOLDOWN_SECONDS:-900}
+      SECURITY_TRUSTED_PROXY_IPS: ${SECURITY_TRUSTED_PROXY_IPS:-172.16.0.0/12,127.0.0.1,::1}
+      JAVA_TOOL_OPTIONS: -Xms256m -Xmx640m -XX:+UseG1GC
+    cpus: 0.80
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 256
+    logging: *default-logging
     restart: unless-stopped
 
   crawler:
     build:
       context: ./crawler
     environment:
+      TZ: Asia/Shanghai
       CRAWLER_INTERNAL_API_KEY: ${CRAWLER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_INTERNAL_API_KEY}
+    cpus: 0.50
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 128
+    logging: *default-logging
+    restart: unless-stopped
+
+  langgraph-worker:
+    build:
+      context: ./langgraph-worker
+    environment:
+      TZ: Asia/Shanghai
+      AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
+      AI_OPENAI_COMPATIBLE_BASE_URL: ${AI_OPENAI_COMPATIBLE_BASE_URL:-https://api.deepseek.com/v1}
+      AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-chat}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
+      AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS: ${AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS:-4}
+      AI_BACKEND_BASE_URL: http://backend:8080
+      AI_BACKEND_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
+      AI_BACKEND_TOOL_TIMEOUT_MILLIS: ${AI_BACKEND_TOOL_TIMEOUT_MILLIS:-90000}
+      PYTHONUNBUFFERED: "1"
+    cpus: 0.40
+    mem_limit: 384m
+    memswap_limit: 384m
+    pids_limit: 128
+    logging: *default-logging
     restart: unless-stopped
 
   mysql:
@@ -42,30 +151,60 @@ services:
       - --default-authentication-plugin=mysql_native_password
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=256M
+      - --max-connections=80
     environment:
+      TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_WITH_A_STRONG_ROOT_PASSWORD}
       MYSQL_DATABASE: novel_analyzer
       MYSQL_USER: ${MYSQL_USER:-novel}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-CHANGE_ME_WITH_A_STRONG_APP_PASSWORD}
-    ports:
-      - "3306:3306"
+    expose:
+      - "3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/sql/mysql:/docker-entrypoint-initdb.d
+    cpus: 0.45
+    mem_limit: 640m
+    memswap_limit: 640m
+    pids_limit: 256
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     command: ["sh", "-c", "redis-server /usr/local/etc/redis/redis.conf --requirepass \"$${REDIS_PASSWORD}\""]
     environment:
+      TZ: Asia/Shanghai
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_WITH_A_STRONG_REDIS_PASSWORD}
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    cpus: 0.10
+    mem_limit: 96m
+    memswap_limit: 96m
+    pids_limit: 64
+    logging: *default-logging
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.7
+    environment:
+      TZ: Asia/Shanghai
+    expose:
+      - "6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    cpus: 0.30
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 128
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:
   mysql_data:
   redis_data:
+  qdrant_data:

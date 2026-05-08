@@ -46,6 +46,7 @@ CREATE TABLE user_rank_preference (
     platform VARCHAR(20) NOT NULL,
     channel_code VARCHAR(50) NOT NULL,
     board_code VARCHAR(50) NOT NULL,
+    rank_fetch_count INT DEFAULT 30,
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0
@@ -65,3 +66,31 @@ ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS output_json_schema CLOB;
 ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS output_example_json CLOB;
 ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS post_process_type VARCHAR(50);
 ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS parse_config_json CLOB;
+ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS input_json_schema CLOB;
+ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS input_example_json CLOB;
+
+DROP TABLE IF EXISTS async_job;
+
+CREATE TABLE async_job (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    job_type VARCHAR(50) NOT NULL,
+    job_key VARCHAR(255) NOT NULL,
+    resource_key VARCHAR(255),
+    request_json CLOB,
+    status VARCHAR(20) NOT NULL,
+    trigger_user_id BIGINT,
+    result_ref_type VARCHAR(50),
+    result_ref_id BIGINT,
+    result_summary VARCHAR(255),
+    error_message VARCHAR(500),
+    retry_count INT DEFAULT 0,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted TINYINT DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_async_job_type_key_time ON async_job(job_type, job_key, create_time);
+CREATE INDEX IF NOT EXISTS idx_async_job_resource_key ON async_job(resource_key);
+CREATE INDEX IF NOT EXISTS idx_async_job_status_time ON async_job(status, create_time);
+CREATE INDEX IF NOT EXISTS idx_async_job_trigger_user_time ON async_job(trigger_user_id, create_time);

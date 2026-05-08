@@ -27,6 +27,21 @@ public class AuthConfigValidator {
         if (authProperties.getAccessTokenExpireSeconds() <= 0) {
             throw new IllegalStateException("JWT access token expiration must be greater than 0.");
         }
+        if (authProperties.getRefreshTokenExpireSeconds() <= 0) {
+            throw new IllegalStateException("Refresh token expiration must be greater than 0.");
+        }
+        if (authProperties.getSessionMaxDevices() <= 0) {
+            throw new IllegalStateException("Session max devices must be greater than 0.");
+        }
+        if (isBlank(authProperties.getRefreshCookieName())) {
+            throw new IllegalStateException("Refresh cookie name must not be blank.");
+        }
+        if (isBlank(authProperties.getRefreshCookiePath())) {
+            throw new IllegalStateException("Refresh cookie path must not be blank.");
+        }
+        if (isBlank(authProperties.getRefreshCookieSameSite())) {
+            throw new IllegalStateException("Refresh cookie same-site must not be blank.");
+        }
         if (!authProperties.isDemoEnabled()) {
             return;
         }

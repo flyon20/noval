@@ -23,11 +23,11 @@ function closeDrawer() {
 }
 
 const uiText = {
-  heading: '书籍详情',
+  heading: '简介',
   loadingTitle: '加载中...',
-  authorLabel: '作者：',
-  sourceLinkLabel: '原始链接',
-  introLabel: '完整简介',
+  authorLabel: '作者',
+  sourceLinkLabel: '链接',
+  introLabel: '简介',
   closeLabel: '关闭',
 };
 </script>
@@ -35,15 +35,14 @@ const uiText = {
 <template>
   <el-drawer
     v-model="visible"
-    :append-to-body="false"
+    :append-to-body="true"
     :destroy-on-close="false"
     :with-header="false"
     size="440px"
   >
-    <div class="rank-drawer">
+    <div class="rank-drawer" data-testid="rank-detail-surface">
       <div class="rank-drawer__topbar">
         <div class="rank-drawer__heading" data-testid="rank-detail-heading">
-          <p>{{ uiText.heading }}</p>
           <h3 data-testid="rank-detail-title">{{ detail?.bookName ?? uiText.loadingTitle }}</h3>
         </div>
         <el-button
@@ -65,12 +64,9 @@ const uiText = {
           <a :href="detail.bookUrl" rel="noreferrer" target="_blank">{{ uiText.sourceLinkLabel }}</a>
         </div>
         <section class="rank-drawer__section">
-          <p class="rank-drawer__label">{{ uiText.introLabel }}</p>
           <p class="rank-drawer__body" data-testid="rank-detail-intro">{{ detail.intro }}</p>
         </section>
       </template>
-
-      <p v-if="traceId" class="rank-drawer__trace">traceId: {{ traceId }}</p>
     </div>
   </el-drawer>
 </template>
@@ -80,6 +76,7 @@ const uiText = {
   display: grid;
   gap: 1rem;
   min-width: 0;
+  color: var(--color-text);
 }
 
 .rank-drawer__topbar {
@@ -87,6 +84,8 @@ const uiText = {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
 }
 
 .rank-drawer__heading {
@@ -96,19 +95,9 @@ const uiText = {
   flex: 1;
 }
 
-.rank-drawer__heading p,
 .rank-drawer__heading h3,
-.rank-drawer__body,
-.rank-drawer__trace,
-.rank-drawer__label {
+.rank-drawer__body {
   margin: 0;
-}
-
-.rank-drawer__heading p,
-.rank-drawer__label,
-.rank-drawer__trace {
-  color: var(--color-text-muted);
-  font-size: 0.84rem;
 }
 
 .rank-drawer__heading h3 {
@@ -127,6 +116,7 @@ const uiText = {
   gap: 1rem;
   color: var(--color-text-muted);
   font-size: 0.92rem;
+  padding: 0.25rem 0.1rem 0;
 }
 
 .rank-drawer__meta a,
@@ -139,15 +129,26 @@ const uiText = {
   flex-shrink: 0;
   min-height: 2.5rem;
   padding-inline: 0.95rem;
+  border-color: color-mix(in srgb, var(--color-border-strong) 70%, transparent);
+  background: color-mix(in srgb, var(--color-surface-strong) 92%, transparent);
+  backdrop-filter: blur(14px);
 }
 
 .rank-drawer__section {
   display: grid;
   gap: 0.6rem;
   padding: 1rem 1.1rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   border-radius: 1.1rem;
-  background: rgba(255, 255, 255, 0.74);
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  box-shadow: var(--shadow-card);
 }
 
 .rank-drawer__body {

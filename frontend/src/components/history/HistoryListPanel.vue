@@ -50,8 +50,14 @@ function handleSelect(item: AnalysisHistoryItem) {
 .history-list__item {
   border: 1px solid var(--color-border);
   border-radius: 1.1rem;
-  background: rgba(255, 255, 255, 0.9);
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
+      color-mix(in srgb, var(--color-surface) 94%, transparent)
+    );
   box-shadow: var(--shadow-soft);
+  color: var(--color-text);
 }
 
 .history-list__trigger {
@@ -70,7 +76,7 @@ function handleSelect(item: AnalysisHistoryItem) {
 }
 
 .history-list__trigger:hover {
-  background: rgba(35, 65, 58, 0.04);
+  background: color-mix(in srgb, var(--color-primary-soft) 76%, transparent);
 }
 
 .history-list__header {

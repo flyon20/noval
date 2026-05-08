@@ -7,7 +7,9 @@ import type {
   CrawlerChapterRequest,
   CrawlerRankRequest,
   Platform,
+  RankFetchCount,
   RankBoardCatalog,
+  RankBoardStatus,
   RankBookItem,
   RankPageRequest,
   RankPageResult,
@@ -29,7 +31,7 @@ export const crawlerApi = {
       params,
     });
   },
-  savePreference(payload: { platform: Platform; channelCode: string; boardCode: string }) {
+  savePreference(payload: { platform: Platform; channelCode: string; boardCode: string; rankFetchCount: RankFetchCount }) {
     return httpClient.post<ApiResponse<UserRankPreference>>('/api/crawler/preference', payload);
   },
   refreshRankBoard(payload: CrawlerRankRequest) {
@@ -37,6 +39,11 @@ export const crawlerApi = {
   },
   getRankPage(params: RankPageRequest) {
     return httpClient.get<ApiResponse<RankPageResult>>('/api/crawler/rank/page', {
+      params,
+    });
+  },
+  getRankStatus(params: { platform: Platform; channelCode: string; boardCode: string }) {
+    return httpClient.get<ApiResponse<RankBoardStatus>>('/api/crawler/rank/status', {
       params,
     });
   },

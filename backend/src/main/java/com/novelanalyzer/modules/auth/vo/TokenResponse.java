@@ -4,7 +4,7 @@ public class TokenResponse {
 
     private String accessToken;
     private String tokenType;
-    private long expiresIn;
+    private Long expiresIn;
 
     public String getAccessToken() {
         return accessToken;
@@ -22,11 +22,11 @@ public class TokenResponse {
         this.tokenType = tokenType;
     }
 
-    public long getExpiresIn() {
+    public Long getExpiresIn() {
         return expiresIn;
     }
 
-    public void setExpiresIn(long expiresIn) {
+    public void setExpiresIn(Long expiresIn) {
         this.expiresIn = expiresIn;
     }
 }

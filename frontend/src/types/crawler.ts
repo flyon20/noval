@@ -3,6 +3,7 @@ export type Platform = 'fanqie';
 export type RefreshMode = 'AUTO' | 'FORCE';
 
 export type UiChapterCount = 1 | 3 | 5 | 10;
+export type RankFetchCount = 10 | 20 | 30 | 40 | 50 | 60 | 70 | 80 | 90 | 100;
 
 export interface RankBoardOption {
   boardCode: string;
@@ -20,6 +21,7 @@ export interface UserRankPreference {
   platform: Platform;
   channelCode: string;
   boardCode: string;
+  rankFetchCount: RankFetchCount;
 }
 
 export interface CrawlerRankRequest {
@@ -29,6 +31,7 @@ export interface CrawlerRankRequest {
   boardCode?: string;
   refreshMode?: RefreshMode;
   forceReason?: string;
+  rankFetchCount?: RankFetchCount;
 }
 
 export interface RankBookItem {
@@ -68,6 +71,12 @@ export interface RankPageResult {
   page: number;
   pageSize: number;
   items: RankBookItem[];
+}
+
+export interface RankBoardStatus {
+  snapshotId: number;
+  snapshotTime?: string;
+  total: number;
 }
 
 export interface BookDetail {
