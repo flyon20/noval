@@ -16,6 +16,7 @@ services:
     depends_on:
       - backend
     environment:
+      TZ: Asia/Shanghai
       APP_DOMAIN: ${APP_DOMAIN:-www.panch.fun}
       ROOT_DOMAIN: ${ROOT_DOMAIN:-panch.fun}
       BACKEND_UPSTREAM_HOST: backend
@@ -42,7 +43,9 @@ services:
       - redis
       - crawler
       - langgraph-worker
+      - qdrant
     environment:
+      TZ: Asia/Shanghai
       SERVER_PORT: 8080
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -77,6 +80,16 @@ services:
       AI_LANGGRAPH_WORKER_BASE_URL: http://langgraph-worker:8001
       AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
       AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
+      KNOWLEDGE_QDRANT_BASE_URL: ${KNOWLEDGE_QDRANT_BASE_URL:-http://qdrant:6333}
+      KNOWLEDGE_QDRANT_COLLECTION: ${KNOWLEDGE_QDRANT_COLLECTION:-novel_knowledge_chunks}
+      KNOWLEDGE_EMBEDDING_PROVIDER: ${KNOWLEDGE_EMBEDDING_PROVIDER:-dashscope}
+      KNOWLEDGE_EMBEDDING_BASE_URL: ${KNOWLEDGE_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-text-embedding-v4}
+      KNOWLEDGE_EMBEDDING_DIMENSION: ${KNOWLEDGE_EMBEDDING_DIMENSION:-1024}
+      KNOWLEDGE_EMBEDDING_API_KEY: ${KNOWLEDGE_EMBEDDING_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      KNOWLEDGE_INDEX_MAX_CHAPTERS: ${KNOWLEDGE_INDEX_MAX_CHAPTERS:-10}
+      KNOWLEDGE_INDEX_MAX_ACTIVE_JOBS: ${KNOWLEDGE_INDEX_MAX_ACTIVE_JOBS:-1}
       ALIYUN_DYPNS_SCHEME_NAME: ${ALIYUN_DYPNS_SCHEME_NAME:-noval-web}
       ALIYUN_DYPNS_COUNTRY_CODE: ${ALIYUN_DYPNS_COUNTRY_CODE:-86}
       ALIYUN_DYPNS_VALID_TIME_MINUTES: ${ALIYUN_DYPNS_VALID_TIME_MINUTES:-5}
@@ -101,10 +114,11 @@ services:
     build:
       context: ./crawler
     environment:
+      TZ: Asia/Shanghai
       CRAWLER_INTERNAL_API_KEY: ${CRAWLER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_INTERNAL_API_KEY}
-    cpus: 0.25
-    mem_limit: 256m
-    memswap_limit: 256m
+    cpus: 0.50
+    mem_limit: 768m
+    memswap_limit: 768m
     pids_limit: 128
     logging: *default-logging
     restart: unless-stopped
@@ -113,12 +127,16 @@ services:
     build:
       context: ./langgraph-worker
     environment:
+      TZ: Asia/Shanghai
       AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
       AI_OPENAI_COMPATIBLE_BASE_URL: ${AI_OPENAI_COMPATIBLE_BASE_URL:-https://api.deepseek.com/v1}
       AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-chat}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
       AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS: ${AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS:-4}
+      AI_BACKEND_BASE_URL: http://backend:8080
+      AI_BACKEND_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
+      AI_BACKEND_TOOL_TIMEOUT_MILLIS: ${AI_BACKEND_TOOL_TIMEOUT_MILLIS:-90000}
       PYTHONUNBUFFERED: "1"
     cpus: 0.40
     mem_limit: 384m
@@ -136,6 +154,7 @@ services:
       - --innodb-buffer-pool-size=256M
       - --max-connections=80
     environment:
+      TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_WITH_A_STRONG_ROOT_PASSWORD}
       MYSQL_DATABASE: novel_analyzer
       MYSQL_USER: ${MYSQL_USER:-novel}
@@ -156,6 +175,7 @@ services:
     image: redis:7-alpine
     command: ["sh", "-c", "redis-server /usr/local/etc/redis/redis.conf --requirepass \"$${REDIS_PASSWORD}\""]
     environment:
+      TZ: Asia/Shanghai
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_WITH_A_STRONG_REDIS_PASSWORD}
     expose:
       - "6379"
@@ -169,6 +189,22 @@ services:
     logging: *default-logging
     restart: unless-stopped
 
+  qdrant:
+    image: qdrant/qdrant:v1.9.7
+    environment:
+      TZ: Asia/Shanghai
+    expose:
+      - "6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    cpus: 0.30
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 128
+    logging: *default-logging
+    restart: unless-stopped
+
 volumes:
   mysql_data:
   redis_data:
+  qdrant_data:

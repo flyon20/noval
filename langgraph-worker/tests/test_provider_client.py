@@ -9,6 +9,9 @@ from app.models.analysis import PromptConfigPayload, RunRequest
 from app.services.provider_client import OpenAICompatibleProviderClient
 
 
+CHINESE_PROMPT = "\u8bf7\u53ea\u56de\u590dok"
+
+
 class FakeResponse:
     def __init__(self, payload: dict) -> None:
         self._payload = payload
@@ -106,7 +109,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
         client = OpenAICompatibleProviderClient()
 
         result = await client.invoke(
-            messages=[{"role": "user", "content": "璇峰彧鍥炲ok"}],
+            messages=[{"role": "user", "content": CHINESE_PROMPT}],
             model="deepseek-chat",
             temperature=0.3,
             max_tokens=16,
@@ -114,6 +117,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual("retry success", result["content"])
+        self.assertEqual(CHINESE_PROMPT, factory.post_calls[-1]["kwargs"]["json"]["messages"][0]["content"])
         self.assertEqual(2, len(factory.constructor_calls))
         self.assertEqual(1, sleep_mock.await_count)
 
@@ -130,7 +134,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(httpx.ConnectError):
             await client.invoke(
-                messages=[{"role": "user", "content": "璇峰彧鍥炲ok"}],
+                messages=[{"role": "user", "content": CHINESE_PROMPT}],
                 model="deepseek-chat",
                 temperature=0.3,
                 max_tokens=16,
@@ -156,7 +160,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
 
         events = [
             event async for event in client.stream(
-                messages=[{"role": "user", "content": "璇峰彧鍥炲ok"}],
+                messages=[{"role": "user", "content": CHINESE_PROMPT}],
                 model="deepseek-chat",
                 temperature=0.3,
                 max_tokens=16,

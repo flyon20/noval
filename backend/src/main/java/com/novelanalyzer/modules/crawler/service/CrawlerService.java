@@ -8,9 +8,11 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.asyncjob.service.AsyncJobLockService;
 import com.novelanalyzer.modules.crawler.client.PythonCrawlerClient;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookDetail;
+import com.novelanalyzer.modules.crawler.client.model.ExternalBookSearchItem;
 import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankBoard;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
+import com.novelanalyzer.modules.crawler.dto.CrawlerBookSearchRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerRankRequest;
 import com.novelanalyzer.modules.crawler.dto.UserRankPreferenceRequest;
@@ -21,6 +23,7 @@ import com.novelanalyzer.modules.crawler.model.RankSnapshotEntity;
 import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.crawler.vo.BookDetailVO;
+import com.novelanalyzer.modules.crawler.vo.BookSearchCandidateVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterRefreshResultVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import com.novelanalyzer.modules.crawler.vo.RankBoardCatalogVO;
@@ -120,6 +123,68 @@ public class CrawlerService {
             LOGGER.warn("rank.boardCatalog fallback-db platform={} reason={}", platform, ex.getMessage());
         }
         return toBoardCatalogVosFromEntities(persistedBoards);
+    }
+
+    public List<BookSearchCandidateVO> searchBooks(CrawlerBookSearchRequest request) {
+        String keyword = request.getKeyword() == null ? "" : request.getKeyword().trim();
+        if (keyword.isEmpty()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "keyword is required");
+        }
+        int limit = request.getLimit() == null ? 10 : Math.min(Math.max(request.getLimit(), 1), 20);
+        Map<String, BookSearchCandidateVO> candidates = new LinkedHashMap<>();
+        List<CrawlBookEntity> localBooks = crawlerRepository.searchBooks(request.getPlatform(), keyword, limit);
+        for (CrawlBookEntity book : localBooks) {
+            putCandidate(candidates, toSearchCandidate(book));
+        }
+        if (candidates.size() >= limit) {
+            return candidates.values().stream().limit(limit).toList();
+        }
+
+        List<ExternalBookSearchItem> externalBooks = pythonCrawlerClient.searchBooks(request.getPlatform(), keyword, limit);
+        for (ExternalBookSearchItem item : externalBooks) {
+            putCandidate(candidates, toSearchCandidate(request.getPlatform(), item));
+            if (candidates.size() >= limit) {
+                break;
+            }
+        }
+        return candidates.values().stream().limit(limit).toList();
+    }
+
+    public Long completeExternalBookCandidate(String platform,
+                                              String platformBookId,
+                                              String bookName,
+                                              String author,
+                                              String intro,
+                                              String bookUrl,
+                                              int chapterCount) {
+        if (platform == null || platform.isBlank()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "platform is required");
+        }
+        if (bookUrl == null || bookUrl.isBlank()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "bookUrl is required");
+        }
+        String normalizedPlatform = platform.trim();
+        String normalizedBookUrl = bookUrl.trim();
+        ExternalBookDetail detail = pythonCrawlerClient.fetchBook(
+            normalizedPlatform,
+            normalizedBookUrl,
+            resolveCrawlerHttpTimeoutSeconds()
+        );
+        Long bookId = crawlerRepository.saveOrUpdateBook(
+            normalizedPlatform,
+            firstNonBlank(detail.getPlatformBookId(), platformBookId),
+            firstNonBlank(detail.getBookName(), bookName),
+            firstNonBlank(detail.getAuthor(), author),
+            firstNonBlank(detail.getIntro(), intro),
+            firstNonBlank(detail.getBookUrl(), normalizedBookUrl)
+        );
+
+        CrawlerChapterRequest chapterRequest = new CrawlerChapterRequest();
+        chapterRequest.setPlatform(normalizedPlatform);
+        chapterRequest.setBookId(bookId);
+        chapterRequest.setChapterCount(Math.min(Math.max(chapterCount, 1), 10));
+        getChapters(chapterRequest);
+        return bookId;
     }
 
     public UserRankPreferenceVO getUserRankPreference(String platform) {
@@ -734,6 +799,48 @@ public class CrawlerService {
         return new ArrayList<>(channels.values());
     }
 
+    private void putCandidate(Map<String, BookSearchCandidateVO> candidates, BookSearchCandidateVO candidate) {
+        if (candidate == null || candidate.getBookName() == null || candidate.getBookName().isBlank()) {
+            return;
+        }
+        candidates.putIfAbsent(candidateKey(candidate), candidate);
+    }
+
+    private String candidateKey(BookSearchCandidateVO candidate) {
+        if (candidate.getPlatformBookId() != null && !candidate.getPlatformBookId().isBlank()) {
+            return "platformBookId:" + candidate.getPlatformBookId();
+        }
+        if (candidate.getBookUrl() != null && !candidate.getBookUrl().isBlank()) {
+            return "bookUrl:" + candidate.getBookUrl();
+        }
+        return "name:" + candidate.getBookName() + ":" + Objects.toString(candidate.getAuthor(), "");
+    }
+
+    private BookSearchCandidateVO toSearchCandidate(CrawlBookEntity book) {
+        BookSearchCandidateVO vo = new BookSearchCandidateVO();
+        vo.setBookId(book.getId());
+        vo.setPlatform(book.getPlatform());
+        vo.setPlatformBookId(book.getPlatformBookId());
+        vo.setBookName(book.getBookName());
+        vo.setAuthor(book.getAuthor());
+        vo.setIntro(book.getIntro());
+        vo.setBookUrl(book.getBookUrl());
+        vo.setLocal(true);
+        return vo;
+    }
+
+    private BookSearchCandidateVO toSearchCandidate(String platform, ExternalBookSearchItem item) {
+        BookSearchCandidateVO vo = new BookSearchCandidateVO();
+        vo.setPlatform(platform);
+        vo.setPlatformBookId(item.getPlatformBookId());
+        vo.setBookName(item.getBookName());
+        vo.setAuthor(item.getAuthor());
+        vo.setIntro(item.getIntro());
+        vo.setBookUrl(item.getBookUrl());
+        vo.setLocal(false);
+        return vo;
+    }
+
     private BookDetailVO toBookDetailVO(CrawlBookEntity book) {
         BookDetailVO vo = new BookDetailVO();
         vo.setBookId(book.getId());
@@ -948,5 +1055,9 @@ public class CrawlerService {
 
     private String defaultIfBlank(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private String firstNonBlank(String preferred, String fallback) {
+        return preferred == null || preferred.isBlank() ? fallback : preferred;
     }
 }

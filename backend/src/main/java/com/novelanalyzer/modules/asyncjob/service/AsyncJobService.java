@@ -18,6 +18,7 @@ public class AsyncJobService {
     public static final String STATUS_SUCCESS = "SUCCESS";
     public static final String STATUS_FAILED = "FAILED";
     public static final String STATUS_CANCELLED = "CANCELLED";
+    private static final int MAX_ERROR_MESSAGE_LENGTH = 500;
 
     private final AsyncJobRepository asyncJobRepository;
     private final AsyncJobLockService asyncJobLockService;
@@ -84,7 +85,7 @@ public class AsyncJobService {
     public void markFailed(Long jobId, String errorMessage) {
         AsyncJobEntity entity = asyncJobRepository.findById(jobId).orElseThrow();
         entity.setStatus(STATUS_FAILED);
-        entity.setErrorMessage(errorMessage);
+        entity.setErrorMessage(truncate(errorMessage, MAX_ERROR_MESSAGE_LENGTH));
         entity.setFinishedAt(LocalDateTime.now());
         asyncJobRepository.updateById(entity);
     }
@@ -102,6 +103,13 @@ public class AsyncJobService {
 
     private boolean isActiveStatus(String status) {
         return STATUS_PENDING.equals(status) || STATUS_RUNNING.equals(status);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private AsyncJobSubmitResponse toSubmitResponse(AsyncJobEntity entity,

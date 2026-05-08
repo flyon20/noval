@@ -228,41 +228,26 @@ public class DefaultPromptContractCatalog {
         defaults.put("deconstruct", new PromptContractDefaults(
             normalizeJson(GENERIC_ANALYSIS_INPUT_SCHEMA),
             normalizeJson(GENERIC_ANALYSIS_INPUT_EXAMPLE),
-            normalizeJson(DECONSTRUCT_OUTPUT_SCHEMA),
-            normalizeJson(DECONSTRUCT_OUTPUT_EXAMPLE),
-            "json_extract",
-            normalizeJson("""
-                {
-                  "parser": "json",
-                  "trimMarkdownFence": true
-                }
-                """)
+            null,
+            null,
+            null,
+            null
         ));
         defaults.put("structure", new PromptContractDefaults(
             normalizeJson(GENERIC_ANALYSIS_INPUT_SCHEMA),
             normalizeJson(GENERIC_ANALYSIS_INPUT_EXAMPLE),
-            normalizeJson(STRUCTURE_OUTPUT_SCHEMA),
-            normalizeJson(STRUCTURE_OUTPUT_EXAMPLE),
-            "json_extract",
-            normalizeJson("""
-                {
-                  "parser": "json",
-                  "trimMarkdownFence": true
-                }
-                """)
+            null,
+            null,
+            null,
+            null
         ));
         defaults.put("plot", new PromptContractDefaults(
             normalizeJson(GENERIC_ANALYSIS_INPUT_SCHEMA),
             normalizeJson(GENERIC_ANALYSIS_INPUT_EXAMPLE),
-            normalizeJson(PLOT_OUTPUT_SCHEMA),
-            normalizeJson(PLOT_OUTPUT_EXAMPLE),
-            "json_extract",
-            normalizeJson("""
-                {
-                  "parser": "json",
-                  "trimMarkdownFence": true
-                }
-                """)
+            null,
+            null,
+            null,
+            null
         ));
         defaults.put("theme", new PromptContractDefaults(
             normalizeJson("""

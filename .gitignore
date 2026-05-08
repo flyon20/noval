@@ -22,6 +22,9 @@ __pycache__/
 *.err.log
 logs/
 *.pid
+backups/
+.release/
+.playwright-mcp/
 
 # Local env
 .env
@@ -50,6 +53,8 @@ backend/Dump*.java
 backend/ReadSmsLog.java
 .tmp-v4-restore/
 noval-deploy-*.tgz
+noval-release-*.tar.gz
+*.sql.gz
 dump.rdb
 
 # Local runtime outputs

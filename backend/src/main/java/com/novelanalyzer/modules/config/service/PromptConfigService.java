@@ -69,16 +69,24 @@ public class PromptConfigService {
     }
 
     public PromptConfigVO saveSystemTemplate(AdminPromptConfigUpdateRequest request) {
+        return saveSystemTemplate(request, null, null);
+    }
+
+    private PromptConfigVO saveSystemTemplate(AdminPromptConfigUpdateRequest request,
+                                             String resolvedDefaultPromptName,
+                                             Optional<PromptConfigEntity> resolvedDefaultTemplate) {
         validatePromptContent(request.getPromptContent());
 
-        String effectivePromptName = isDefaultTemplateAlias(request.getPromptType(), request.getPromptName())
-            ? resolveDefaultTemplateName(request.getPromptType())
+        String effectivePromptName = resolvedDefaultPromptName != null
+            ? resolvedDefaultPromptName
+            : isDefaultTemplateAlias(request.getPromptType(), request.getPromptName())
+            ? resolveDefaultTemplateNameForSave(request.getPromptType())
             : normalizePromptName(request.getPromptName());
         boolean defaultTemplate = isDefaultTemplateAlias(request.getPromptType(), effectivePromptName);
 
         PromptConfigEntity entity = defaultTemplate
-            ? resolveDefaultTemplate(request.getPromptType()).orElseGet(PromptConfigEntity::new)
-            : promptConfigRepository.findByTypeAndName(request.getPromptType(), effectivePromptName)
+            ? resolvedDefaultTemplate(resolvedDefaultTemplate, request.getPromptType()).orElseGet(PromptConfigEntity::new)
+            : findByTypeAndName(request.getPromptType(), effectivePromptName)
                 .orElseGet(PromptConfigEntity::new);
 
         entity.setPromptType(request.getPromptType());
@@ -116,7 +124,11 @@ public class PromptConfigService {
         entity.setIsDefault(defaultTemplate ? 1 : 0);
 
         Long id = promptConfigRepository.saveOrUpdate(entity);
-        PromptConfigEntity saved = promptConfigRepository.findByTypeAndName(request.getPromptType(), effectivePromptName)
+        if (defaultTemplate && resolvedDefaultTemplate != null) {
+            entity.setId(id);
+            return toVO(backfillMissingContractFields(entity));
+        }
+        PromptConfigEntity saved = findByTypeAndName(request.getPromptType(), effectivePromptName)
             .orElseThrow(() -> new BusinessException(ResultCode.INTERNAL_ERROR, "prompt config save failed"));
         saved.setId(id);
         return toVO(backfillMissingContractFields(saved));
@@ -126,9 +138,17 @@ public class PromptConfigService {
         if (!isDefaultTemplateAlias(promptType, request.getPromptName())) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "default template name cannot be changed");
         }
+        Optional<PromptConfigEntity> canonicalDefault = findByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME);
+        String effectivePromptName = canonicalDefault.isPresent()
+            ? DEFAULT_TEMPLATE_NAME
+            : resolveDefaultTemplateName(promptType);
+        Optional<PromptConfigEntity> existingDefault = canonicalDefault.isPresent()
+            ? canonicalDefault
+            : findByTypeAndName(promptType, effectivePromptName);
+
         AdminPromptConfigUpdateRequest adminRequest = new AdminPromptConfigUpdateRequest();
         adminRequest.setPromptType(promptType);
-        adminRequest.setPromptName(resolveDefaultTemplateName(promptType));
+        adminRequest.setPromptName(effectivePromptName);
         adminRequest.setPromptContent(request.getPromptContent());
         adminRequest.setModelName(request.getModelName());
         adminRequest.setTemperature(request.getTemperature());
@@ -139,7 +159,7 @@ public class PromptConfigService {
         adminRequest.setOutputExampleJson(request.getOutputExampleJson());
         adminRequest.setPostProcessType(request.getPostProcessType());
         adminRequest.setParseConfigJson(request.getParseConfigJson());
-        return saveSystemTemplate(adminRequest);
+        return saveSystemTemplate(adminRequest, effectivePromptName, existingDefault);
     }
 
     public void deleteTemplate(String promptType, String promptName, List<AiModelRegistryModelVO> models) {
@@ -224,7 +244,7 @@ public class PromptConfigService {
         if (governancePrompt.getPromptName() == null || !"default".equalsIgnoreCase(governancePrompt.getPromptName().trim())) {
             return governancePrompt;
         }
-        PromptConfigEntity legacyDefault = promptConfigRepository.findActiveByTypeAndName(promptType, resolveDefaultTemplateName(promptType))
+        PromptConfigEntity legacyDefault = findActiveByTypeAndName(promptType, resolveDefaultTemplateName(promptType))
             .orElse(null);
         if (legacyDefault == null) {
             return governancePrompt;
@@ -252,14 +272,32 @@ public class PromptConfigService {
         if (normalizedPromptName == null || isDefaultTemplateAlias(promptType, normalizedPromptName)) {
             return resolveDefaultTemplate(promptType);
         }
-        return promptConfigRepository.findActiveByTypeAndName(promptType, normalizedPromptName);
+        return findActiveByTypeAndName(promptType, normalizedPromptName);
     }
 
     private Optional<PromptConfigEntity> resolveDefaultTemplate(String promptType) {
         String legacyDefaultName = resolveDefaultTemplateName(promptType);
-        return promptConfigRepository.findActiveByTypeAndName(promptType, legacyDefaultName)
-            .or(() -> promptConfigRepository.findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME))
-            .or(() -> promptConfigRepository.findDefaultByType(promptType));
+        return findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME)
+            .or(() -> findActiveByTypeAndName(promptType, legacyDefaultName))
+            .or(() -> findDefaultByType(promptType));
+    }
+
+    private Optional<PromptConfigEntity> resolveDefaultTemplateForSave(String promptType) {
+        String legacyDefaultName = resolveDefaultTemplateName(promptType);
+        return findByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME)
+            .or(() -> findByTypeAndName(promptType, legacyDefaultName))
+            .or(() -> findDefaultByType(promptType));
+    }
+
+    private Optional<PromptConfigEntity> resolvedDefaultTemplate(Optional<PromptConfigEntity> preResolved,
+                                                                 String promptType) {
+        return preResolved == null ? resolveDefaultTemplateForSave(promptType) : preResolved;
+    }
+
+    private String resolveDefaultTemplateNameForSave(String promptType) {
+        return findByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME).isPresent()
+            ? DEFAULT_TEMPLATE_NAME
+            : resolveDefaultTemplateName(promptType);
     }
 
     public String resolveDefaultTemplateName(String promptType) {
@@ -280,6 +318,21 @@ public class PromptConfigService {
 
     private String normalizePromptName(String promptName) {
         return promptName == null ? null : promptName.trim();
+    }
+
+    private Optional<PromptConfigEntity> findByTypeAndName(String promptType, String promptName) {
+        Optional<PromptConfigEntity> result = promptConfigRepository.findByTypeAndName(promptType, promptName);
+        return result == null ? Optional.empty() : result;
+    }
+
+    private Optional<PromptConfigEntity> findActiveByTypeAndName(String promptType, String promptName) {
+        Optional<PromptConfigEntity> result = promptConfigRepository.findActiveByTypeAndName(promptType, promptName);
+        return result == null ? Optional.empty() : result;
+    }
+
+    private Optional<PromptConfigEntity> findDefaultByType(String promptType) {
+        Optional<PromptConfigEntity> result = promptConfigRepository.findDefaultByType(promptType);
+        return result == null ? Optional.empty() : result;
     }
 
     private void validatePromptContent(String promptContent) {

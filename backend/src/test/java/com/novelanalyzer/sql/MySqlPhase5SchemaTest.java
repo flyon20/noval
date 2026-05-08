@@ -20,4 +20,30 @@ class MySqlPhase5SchemaTest {
         assertThat(script).doesNotContain("ADD COLUMN IF NOT EXISTS");
         assertThat(script).contains("INFORMATION_SCHEMA.COLUMNS");
     }
+
+    @Test
+    void phase5PromptGovernanceRepairPublishesAllDefaultPromptTypesDynamically() throws Exception {
+        String repairScript = Files.readString(
+            Path.of("..", "sql", "mysql", "phase5-prompt-governance-repair.sql"),
+            StandardCharsets.UTF_8
+        );
+        String seedScript = Files.readString(
+            Path.of("..", "sql", "mysql", "phase5-seed.sql"),
+            StandardCharsets.UTF_8
+        );
+
+        assertThat(repairScript)
+            .contains("prompt_publish_version")
+            .contains("prompt_publish_item")
+            .contains("prompt_type IN ('deconstruct', 'structure', 'plot', 'theme')")
+            .contains("prompt_name = 'default'")
+            .contains("prompt_name = CONCAT('default-', prompt_type)")
+            .doesNotContain("'theme', 4");
+
+        assertThat(seedScript)
+            .contains("prompt_type IN ('deconstruct', 'structure', 'plot', 'theme')")
+            .contains("prompt_name = CONCAT('default-', prompt_type)")
+            .contains("effective_prompt_config_id")
+            .doesNotContain("'theme', 4");
+    }
 }

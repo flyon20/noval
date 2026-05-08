@@ -3,17 +3,14 @@
 --   mysql -h127.0.0.1 -uroot -p novel_analyzer < backend/sql/mysql/phase5-seed.sql
 
 INSERT INTO prompt_config
-    (prompt_type, prompt_name, scope_type, scope_key, owner_type, owner_key, source_type, source_ref, prompt_content, model_name, status, is_default, dify_workflow_id, dify_api_key_ref, input_json_schema, input_example_json, output_json_schema, output_example_json, post_process_type, parse_config_json, deleted)
+    (prompt_type, prompt_name, scope_type, owner_user_id, source_prompt_config_id, prompt_content, model_name, status, is_default, dify_workflow_id, dify_api_key_ref, input_json_schema, input_example_json, output_json_schema, output_example_json, post_process_type, parse_config_json, deleted)
 VALUES
     (
         'theme',
         'default-theme',
-        'global',
-        'default',
-        'system',
-        'system',
-        'seed',
-        'phase5-seed',
+        'SYSTEM',
+        NULL,
+        NULL,
         'Analyze the exact selected rank board for the last three snapshots and return valid JSON only. The JSON must include boardSummary, themeDistribution, themeTable.representativeBooks, hotBooks, insightCards, and snapshotComparisons: {{content}}',
         'dify',
         1,
@@ -43,56 +40,119 @@ ON DUPLICATE KEY UPDATE
     update_time = CURRENT_TIMESTAMP;
 
 INSERT INTO prompt_publish_version
-    (id, publish_type, scope_type, scope_key, operator_user_id, publish_note, deleted)
+    (id, version_no, published_by, publish_note, deleted)
 VALUES
-    (1, 'manual', 'global', 'default', 1, 'seed publish for prompt governance', 0)
+    (1, 1, 1, 'seed publish for prompt governance', 0)
 ON DUPLICATE KEY UPDATE
+    version_no = VALUES(version_no),
+    published_by = VALUES(published_by),
     publish_note = VALUES(publish_note),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
 
 INSERT INTO prompt_publish_item
-    (id, publish_version_id, prompt_type, prompt_config_id, prompt_name, scope_type, scope_key, version_no, source_type, source_ref, deleted)
-VALUES
-    (1, 1, 'theme', 4, 'default-theme', 'global', 'default', 1, 'prompt_config', 'prompt_config:4', 0)
+    (publish_version_id, prompt_type, prompt_config_id, prompt_name, deleted)
+SELECT
+    1,
+    selected.prompt_type,
+    selected.id,
+    selected.prompt_name,
+    0
+FROM (
+    SELECT pc.prompt_type, pc.id, pc.prompt_name
+    FROM prompt_config pc
+    JOIN (
+        SELECT prompt_type, MIN(id) AS id
+        FROM prompt_config
+        WHERE scope_type = 'SYSTEM'
+          AND status = 1
+          AND deleted = 0
+          AND prompt_type IN ('deconstruct', 'structure', 'plot', 'theme')
+          AND (
+              prompt_name = 'default'
+              OR prompt_name = CONCAT('default-', prompt_type)
+          )
+        GROUP BY prompt_type
+    ) default_prompt ON default_prompt.id = pc.id
+) selected
 ON DUPLICATE KEY UPDATE
     publish_version_id = VALUES(publish_version_id),
     prompt_config_id = VALUES(prompt_config_id),
     prompt_name = VALUES(prompt_name),
-    version_no = VALUES(version_no),
-    source_type = VALUES(source_type),
-    source_ref = VALUES(source_ref),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
 
 INSERT INTO user_prompt_binding
-    (id, user_id, prompt_type, scope_type, scope_key, publish_version_id, prompt_config_id, version_no, source_type, source_ref, start_time, end_time, status, deleted)
-VALUES
-    (1, 1, 'theme', 'global', 'default', 1, 4, 1, 'publish_item', 'prompt_publish_item:1', '2026-03-20 00:00:00', '2026-12-31 23:59:59', 1, 0)
+    (id, user_id, prompt_type, binding_mode, bound_prompt_config_id, last_selected_prompt_config_id, effective_prompt_config_id, publish_version_id, fallback_warning, status, deleted)
+SELECT
+    1,
+    1,
+    'theme',
+    'GLOBAL',
+    NULL,
+    NULL,
+    selected.id,
+    1,
+    NULL,
+    1,
+    0
+FROM (
+    SELECT id
+    FROM prompt_config
+    WHERE scope_type = 'SYSTEM'
+      AND status = 1
+      AND deleted = 0
+      AND prompt_type = 'theme'
+      AND (prompt_name = 'default' OR prompt_name = 'default-theme')
+    ORDER BY id
+    LIMIT 1
+) selected
 ON DUPLICATE KEY UPDATE
+    binding_mode = VALUES(binding_mode),
+    bound_prompt_config_id = VALUES(bound_prompt_config_id),
+    last_selected_prompt_config_id = VALUES(last_selected_prompt_config_id),
+    effective_prompt_config_id = VALUES(effective_prompt_config_id),
     publish_version_id = VALUES(publish_version_id),
-    prompt_config_id = VALUES(prompt_config_id),
-    version_no = VALUES(version_no),
-    source_type = VALUES(source_type),
-    source_ref = VALUES(source_ref),
-    start_time = VALUES(start_time),
-    end_time = VALUES(end_time),
+    fallback_warning = VALUES(fallback_warning),
     status = VALUES(status),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
 
 INSERT INTO user_prompt_effective_history
-    (id, user_id, prompt_type, scope_type, scope_key, publish_version_id, prompt_config_id, version_no, source_type, source_ref, effective_reason, effective_at, deleted)
-VALUES
-    (1, 1, 'theme', 'global', 'default', 1, 4, 1, 'binding', 'user_prompt_binding:1', 'seed_binding_applied', '2026-03-20 12:30:00', 0)
+    (id, user_id, prompt_type, publish_version_id, binding_mode, bound_prompt_config_id, effective_prompt_config_id, effective_source, previous_effective_prompt_config_id, selected_model_key, fallback, deleted)
+SELECT
+    1,
+    1,
+    'theme',
+    1,
+    'GLOBAL',
+    NULL,
+    selected.id,
+    'GLOBAL_PUBLISHED',
+    NULL,
+    'deepseek-chat',
+    0,
+    0
+FROM (
+    SELECT id
+    FROM prompt_config
+    WHERE scope_type = 'SYSTEM'
+      AND status = 1
+      AND deleted = 0
+      AND prompt_type = 'theme'
+      AND (prompt_name = 'default' OR prompt_name = 'default-theme')
+    ORDER BY id
+    LIMIT 1
+) selected
 ON DUPLICATE KEY UPDATE
     publish_version_id = VALUES(publish_version_id),
-    prompt_config_id = VALUES(prompt_config_id),
-    version_no = VALUES(version_no),
-    source_type = VALUES(source_type),
-    source_ref = VALUES(source_ref),
-    effective_reason = VALUES(effective_reason),
-    effective_at = VALUES(effective_at),
+    binding_mode = VALUES(binding_mode),
+    bound_prompt_config_id = VALUES(bound_prompt_config_id),
+    effective_prompt_config_id = VALUES(effective_prompt_config_id),
+    effective_source = VALUES(effective_source),
+    previous_effective_prompt_config_id = VALUES(previous_effective_prompt_config_id),
+    selected_model_key = VALUES(selected_model_key),
+    fallback = VALUES(fallback),
     deleted = VALUES(deleted),
     update_time = CURRENT_TIMESTAMP;
 

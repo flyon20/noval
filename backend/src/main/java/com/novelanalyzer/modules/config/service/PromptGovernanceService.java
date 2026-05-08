@@ -41,6 +41,7 @@ public class PromptGovernanceService {
     public static final String EFFECTIVE_SOURCE_USER_COPY = "USER_COPY";
     public static final String EFFECTIVE_SOURCE_USER_COPY_FALLBACK_TO_GLOBAL = "USER_COPY_FALLBACK_TO_GLOBAL";
     public static final String EFFECTIVE_SOURCE_SYSTEM_DEFAULT_FALLBACK = "SYSTEM_DEFAULT_FALLBACK";
+    private static final String DEFAULT_TEMPLATE_NAME = "default";
 
     private final PromptConfigRepository promptConfigRepository;
     private final PromptPublishRepository promptPublishRepository;
@@ -85,7 +86,7 @@ public class PromptGovernanceService {
     public PromptConfigVO saveSystemTemplate(AdminPromptConfigUpdateRequest request) {
         validatePromptContent(request.getPromptContent());
         String effectivePromptName = isDefaultTemplateAlias(request.getPromptType(), request.getPromptName())
-            ? resolveDefaultTemplateName(request.getPromptType())
+            ? DEFAULT_TEMPLATE_NAME
             : normalizePromptName(request.getPromptName());
         boolean defaultTemplate = isDefaultTemplateAlias(request.getPromptType(), effectivePromptName);
 
@@ -377,9 +378,9 @@ public class PromptGovernanceService {
     private Optional<PromptConfigEntity> resolveSystemTemplate(String promptType, String promptName) {
         String normalizedPromptName = normalizePromptName(promptName);
         if (normalizedPromptName == null || isDefaultTemplateAlias(promptType, normalizedPromptName)) {
-            return promptConfigRepository.findActiveByTypeAndName(promptType, resolveDefaultTemplateName(promptType))
+            return promptConfigRepository.findActiveByTypeAndName(promptType, DEFAULT_TEMPLATE_NAME)
                 .filter(item -> SCOPE_SYSTEM.equals(item.getScopeType()))
-                .or(() -> promptConfigRepository.findActiveByTypeAndName(promptType, "default")
+                .or(() -> promptConfigRepository.findActiveByTypeAndName(promptType, resolveDefaultTemplateName(promptType))
                     .filter(item -> SCOPE_SYSTEM.equals(item.getScopeType())));
         }
         return promptConfigRepository.findActiveByTypeAndName(promptType, normalizedPromptName)
@@ -388,9 +389,9 @@ public class PromptGovernanceService {
 
     private String resolveDefaultTemplateName(String promptType) {
         if (promptType == null || promptType.isBlank()) {
-            return "default";
+            return DEFAULT_TEMPLATE_NAME;
         }
-        return "default-" + promptType.trim().toLowerCase(Locale.ROOT);
+        return DEFAULT_TEMPLATE_NAME + "-" + promptType.trim().toLowerCase(Locale.ROOT);
     }
 
     private boolean isDefaultTemplateAlias(String promptType, String promptName) {
@@ -398,7 +399,7 @@ public class PromptGovernanceService {
             return false;
         }
         String normalized = promptName.trim();
-        return "default".equalsIgnoreCase(normalized)
+        return DEFAULT_TEMPLATE_NAME.equalsIgnoreCase(normalized)
             || resolveDefaultTemplateName(promptType).equalsIgnoreCase(normalized);
     }
 

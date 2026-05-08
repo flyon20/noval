@@ -5,6 +5,7 @@ from typing import List
 from app.models.book import BookDetail
 from app.models.chapter import ChapterItem
 from app.models.rank import RankItem
+from app.models.search import BookSearchItem
 
 
 class BaseCrawler:
@@ -14,6 +15,9 @@ class BaseCrawler:
         board_code: str | None = None,
         rank_fetch_count: int | None = None,
     ) -> List[RankItem]:
+        raise NotImplementedError
+
+    def search_books(self, keyword: str, limit: int = 10) -> List[BookSearchItem]:
         raise NotImplementedError
 
     def fetch_book(self, book_url: str) -> BookDetail:

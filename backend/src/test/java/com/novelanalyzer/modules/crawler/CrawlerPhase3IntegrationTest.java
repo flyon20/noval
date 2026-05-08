@@ -61,6 +61,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 class CrawlerPhase3IntegrationTest {
 
+    private static final String ADMIN_PHONE = "15599316908";
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -74,7 +76,8 @@ class CrawlerPhase3IntegrationTest {
     private PythonCrawlerClient pythonCrawlerClient;
 
     @BeforeEach
-    void clearRedisCache() {
+    void prepareState() {
+        jdbcTemplate.update("UPDATE sys_user SET phone = ? WHERE id = 1", ADMIN_PHONE);
         RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
         try {
             connection.serverCommands().flushDb();
@@ -730,12 +733,12 @@ class CrawlerPhase3IntegrationTest {
 
     private String loginAndGetToken(String username, String password) throws Exception {
         String phone = switch (username) {
-            case "admin" -> "13800138000";
+            case "admin" -> ADMIN_PHONE;
             case "writer" -> "13800138001";
             case "15599316908" -> "15599316908";
             default -> username;
         };
-        MvcResult result = mockMvc.perform(post("/api/auth/login")
+        MvcResult result = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())

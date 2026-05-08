@@ -7,6 +7,7 @@ import AppBottomNav from '../AppBottomNav.vue';
 const routes = [
   { path: '/rank', component: { template: '<div />' } },
   { path: '/analysis', component: { template: '<div />' } },
+  { path: '/knowledge', component: { template: '<div />' } },
   { path: '/trend', component: { template: '<div />' } },
   { path: '/history', component: { template: '<div />' } },
 ];
@@ -25,7 +26,7 @@ describe('AppBottomNav', () => {
     expect(source).not.toContain('0 20px 44px');
   });
 
-  test('renders four nav items and highlights active path', async () => {
+  test('renders five primary nav items with the AI entry centered and emphasized', async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes,
@@ -38,8 +39,15 @@ describe('AppBottomNav', () => {
     });
 
     const links = wrapper.findAll('.app-bottom-nav__link');
-    expect(links).toHaveLength(4);
-    expect(links[2].text()).toBe('趋势分析');
-    expect(links[2].classes()).toContain('is-active');
+    expect(links).toHaveLength(5);
+    expect(links[2].text()).toBe('AI 问答');
+    expect(links[2].classes()).toContain('is-primary');
+    expect(links[3].classes()).toContain('is-active');
+  });
+
+  test('uses five nav columns so history remains visible on mobile', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppBottomNav.vue'), 'utf-8');
+
+    expect(source).toContain('repeat(5, minmax(0, 1fr))');
   });
 });

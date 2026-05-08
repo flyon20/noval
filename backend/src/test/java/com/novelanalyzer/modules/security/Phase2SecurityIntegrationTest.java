@@ -33,6 +33,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Sql(
     scripts = {"classpath:sql/phase2-schema-h2.sql", "classpath:sql/phase2-data-h2.sql"},
+    statements = {
+        "CREATE TABLE IF NOT EXISTS system_config (id BIGINT PRIMARY KEY AUTO_INCREMENT, config_key VARCHAR(100) NOT NULL, config_value CLOB, config_type VARCHAR(50), description VARCHAR(200), is_editable TINYINT DEFAULT 1, create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, deleted TINYINT DEFAULT 0)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uk_phase2_config_key ON system_config(config_key)"
+    },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
 class Phase2SecurityIntegrationTest {
@@ -97,7 +101,7 @@ class Phase2SecurityIntegrationTest {
     void shouldSetRefreshCookieWhenLoginSucceeds() throws Exception {
         MvcResult result = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
@@ -127,7 +131,7 @@ class Phase2SecurityIntegrationTest {
     void shouldRejectProtectedRequestWhenSessionKicked() throws Exception {
         MvcResult firstLogin = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\",\"deviceLabel\":\"Device-1\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\",\"deviceLabel\":\"Device-1\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
@@ -136,7 +140,7 @@ class Phase2SecurityIntegrationTest {
         for (int i = 2; i <= 4; i++) {
             mockMvc.perform(post("/api/auth/login")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content("{\"username\":\"admin\",\"password\":\"admin123\",\"deviceLabel\":\"Device-" + i + "\"}"))
+                    .content("{\"phone\":\"13800138000\",\"password\":\"admin123\",\"deviceLabel\":\"Device-" + i + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
         }
@@ -152,7 +156,7 @@ class Phase2SecurityIntegrationTest {
     void shouldRehydrateSessionFromMysqlWhenRedisSessionStateMissing() throws Exception {
         MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"admin\",\"password\":\"admin123\"}"))
+                .content("{\"phone\":\"13800138000\",\"password\":\"admin123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
@@ -178,9 +182,14 @@ class Phase2SecurityIntegrationTest {
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {
+        String phone = switch (username) {
+            case "admin" -> "13800138000";
+            case "writer" -> "13800138001";
+            default -> username;
+        };
         MvcResult result = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .content("{\"phone\":\"" + phone + "\",\"password\":\"" + password + "\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();

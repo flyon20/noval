@@ -7,6 +7,7 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
+import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -57,6 +58,75 @@ public class LangGraphWorkerClient {
         } catch (Exception ex) {
             LOGGER.warn("langgraph worker blocking call failed: {}", ex.getMessage());
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker call failed");
+        }
+    }
+
+    public KnowledgeChatResponseVO runKnowledgeChat(Map<String, Object> requestPayload) {
+        try {
+            HttpRequest request = buildRequest("/internal/knowledge/chat", requestPayload);
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            ensureSuccess(response.statusCode(), response.body());
+            return objectMapper.readValue(response.body(), KnowledgeChatResponseVO.class);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            LOGGER.warn("langgraph worker knowledge chat call failed: {}", ex.getMessage());
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker knowledge chat failed");
+        }
+    }
+
+    public KnowledgeChatResponseVO streamKnowledgeChat(Map<String, Object> requestPayload,
+                                                        Consumer<String> onDelta,
+                                                        BooleanSupplier cancelledSupplier) {
+        try {
+            HttpRequest request = buildRequest("/internal/knowledge/chat/stream", requestPayload);
+            HttpResponse<java.io.InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            ensureSuccess(response.statusCode(), "");
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+                StringBuilder accumulatedContent = new StringBuilder();
+                String currentEvent = null;
+                StringBuilder currentData = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (cancelledSupplier != null && cancelledSupplier.getAsBoolean()) {
+                        return null;
+                    }
+                    if (line.isBlank()) {
+                        KnowledgeChatResponseVO done = processKnowledgeEvent(
+                            currentEvent,
+                            currentData.toString(),
+                            accumulatedContent,
+                            onDelta
+                        );
+                        if (done != null) {
+                            if ((done.getAnswer() == null || done.getAnswer().isBlank()) && !accumulatedContent.isEmpty()) {
+                                done.setAnswer(accumulatedContent.toString());
+                            }
+                            return done;
+                        }
+                        currentEvent = null;
+                        currentData.setLength(0);
+                        continue;
+                    }
+                    if (line.startsWith("event:")) {
+                        currentEvent = line.substring("event:".length()).trim();
+                        continue;
+                    }
+                    if (line.startsWith("data:")) {
+                        if (!currentData.isEmpty()) {
+                            currentData.append('\n');
+                        }
+                        currentData.append(line.substring("data:".length()).trim());
+                    }
+                }
+            }
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker knowledge stream ended without result");
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            LOGGER.warn("langgraph worker knowledge streaming call failed: {}", ex.getMessage());
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker knowledge chat stream failed");
         }
     }
 
@@ -165,6 +235,45 @@ public class LangGraphWorkerClient {
                 : objectMapper.convertValue(data, new TypeReference<Map<String, Object>>() {});
             mergeRuntimeMetrics(result, runtimeMetrics);
             return toAiInvokeResult(result);
+        }
+        return null;
+    }
+
+    private KnowledgeChatResponseVO processKnowledgeEvent(String eventName,
+                                                          String rawData,
+                                                          StringBuilder accumulatedContent,
+                                                          Consumer<String> onDelta) throws Exception {
+        if (rawData == null || rawData.isBlank()) {
+            return null;
+        }
+        Map<String, Object> payload = objectMapper.readValue(rawData, new TypeReference<Map<String, Object>>() {});
+        String effectiveEvent = firstNonBlank(asString(payload.get("event")), eventName);
+        if ("start".equalsIgnoreCase(effectiveEvent)) {
+            return null;
+        }
+        if ("delta".equalsIgnoreCase(effectiveEvent)) {
+            String delta = asString(payload.get("delta"));
+            if (delta != null && !delta.isBlank()) {
+                accumulatedContent.append(delta);
+                if (onDelta != null) {
+                    onDelta.accept(delta);
+                }
+            }
+            return null;
+        }
+        if ("done".equalsIgnoreCase(effectiveEvent)) {
+            Object data = payload.get("data");
+            Map<String, Object> result = data == null
+                ? payload
+                : objectMapper.convertValue(data, new TypeReference<Map<String, Object>>() {});
+            KnowledgeChatResponseVO response = objectMapper.convertValue(result, KnowledgeChatResponseVO.class);
+            if ((response.getAnswer() == null || response.getAnswer().isBlank()) && !accumulatedContent.isEmpty()) {
+                response.setAnswer(accumulatedContent.toString());
+            }
+            return response;
+        }
+        if ("error".equalsIgnoreCase(effectiveEvent)) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, firstNonBlank(asString(payload.get("message")), "langgraph worker returned error"));
         }
         return null;
     }

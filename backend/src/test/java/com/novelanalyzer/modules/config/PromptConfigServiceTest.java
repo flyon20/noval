@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -225,6 +226,69 @@ class PromptConfigServiceTest {
             .hasMessageContaining("template is bound to model");
 
         verify(repository, never()).softDeleteById(any());
+    }
+
+    @Test
+    void shouldPreferCanonicalDefaultWhenPromptNameMissing() {
+        PromptConfigRepository repository = mock(PromptConfigRepository.class);
+        PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
+
+        PromptConfigEntity canonicalDefault = buildEntity(
+            10L,
+            "theme",
+            "default",
+            "Canonical default {{content}}"
+        );
+        canonicalDefault.setIsDefault(1);
+        when(repository.findActiveByTypeAndName("theme", "default")).thenReturn(Optional.of(canonicalDefault));
+
+        PromptConfigEntity legacyAlias = buildEntity(
+            2L,
+            "theme",
+            "default-theme",
+            "Legacy default {{content}}"
+        );
+        legacyAlias.setIsDefault(1);
+        when(repository.findDefaultByType("theme")).thenReturn(Optional.of(legacyAlias));
+
+        PromptConfigVO actual = service.getByType("theme", null);
+
+        assertThat(actual.getId()).isEqualTo(10L);
+        assertThat(actual.getPromptName()).isEqualTo("default");
+        verify(repository, times(1)).findActiveByTypeAndName("theme", "default");
+    }
+
+    @Test
+    void shouldNormalizeLegacyDefaultAliasWhenSavingSystemTemplate() {
+        PromptConfigRepository repository = mock(PromptConfigRepository.class);
+        PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
+
+        when(repository.findByTypeAndName("deconstruct", "default")).thenReturn(Optional.of(buildEntity(
+            1L,
+            "deconstruct",
+            "default",
+            "Default {{content}}"
+        )));
+        when(repository.saveOrUpdate(any(PromptConfigEntity.class))).thenReturn(1L);
+        when(repository.findByTypeAndName("deconstruct", "default")).thenReturn(Optional.of(buildEntity(
+            1L,
+            "deconstruct",
+            "default",
+            "Updated default {{content}}"
+        )));
+
+        PromptConfigUpdateRequest request = new PromptConfigUpdateRequest();
+        request.setPromptType("deconstruct");
+        request.setPromptName("default-deconstruct");
+        request.setPromptContent("Updated default {{content}}");
+        request.setModelName("deepseek-chat");
+
+        PromptConfigVO saved = service.save(request);
+
+        assertThat(saved.getId()).isEqualTo(1L);
+        assertThat(saved.getPromptName()).isEqualTo("default");
+        verify(repository, times(1)).findByTypeAndName("deconstruct", "default");
+        verify(repository, never()).findByTypeAndName("deconstruct", "default-deconstruct");
     }
 
     private PromptConfigEntity buildEntity(Long id, String promptType, String promptName, String promptContent) {

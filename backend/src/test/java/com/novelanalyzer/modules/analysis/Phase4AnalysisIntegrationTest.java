@@ -238,19 +238,30 @@ class Phase4AnalysisIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.inputJsonSchema").value(org.hamcrest.Matchers.containsString("\"chapters\"")))
-            .andExpect(jsonPath("$.data.outputJsonSchema").value(org.hamcrest.Matchers.containsString("\"sellingPoints\"")))
-            .andExpect(jsonPath("$.data.outputExampleJson").value(org.hamcrest.Matchers.containsString("\"analysisType\": \"deconstruct\"")));
+            .andExpect(jsonPath("$.data.outputJsonSchema").doesNotExist())
+            .andExpect(jsonPath("$.data.outputExampleJson").doesNotExist())
+            .andExpect(jsonPath("$.data.postProcessType").doesNotExist())
+            .andExpect(jsonPath("$.data.parseConfigJson").doesNotExist());
 
         String inputJsonSchema = jdbcTemplate.queryForObject(
             "SELECT input_json_schema FROM prompt_config WHERE prompt_type = 'deconstruct' AND deleted = 0 LIMIT 1",
             String.class
         );
-        String outputJsonSchema = jdbcTemplate.queryForObject(
-            "SELECT output_json_schema FROM prompt_config WHERE prompt_type = 'deconstruct' AND deleted = 0 LIMIT 1",
-            String.class
-        );
         assertThat(inputJsonSchema).contains("\"chapters\"");
-        assertThat(outputJsonSchema).contains("\"sellingPoints\"");
+        Integer outputContractCount = jdbcTemplate.queryForObject(
+            """
+            SELECT COUNT(1)
+            FROM prompt_config
+            WHERE prompt_type = 'deconstruct'
+              AND deleted = 0
+              AND output_json_schema IS NULL
+              AND output_example_json IS NULL
+              AND post_process_type IS NULL
+              AND parse_config_json IS NULL
+            """,
+            Integer.class
+        );
+        assertThat(outputContractCount).isEqualTo(1);
     }
 
     @Test

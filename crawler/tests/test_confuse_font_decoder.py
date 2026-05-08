@@ -150,3 +150,8 @@ class ConfuseFontDecoderTest(unittest.TestCase):
         )
 
         self.assertEqual("golIj", decoded)
+
+    def test_font_url_pattern_accepts_browser_font_face_css(self) -> None:
+        css = '@font-face { font-family: TestFont; src: url("https://example.test/font.woff2") format("woff2"); }'
+
+        self.assertIsNotNone(ConfuseFontDecoder.FONT_URL_PATTERN.search(css))

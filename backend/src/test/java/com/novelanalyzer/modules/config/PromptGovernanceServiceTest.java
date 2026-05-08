@@ -179,11 +179,11 @@ class PromptGovernanceServiceTest {
     }
 
     @Test
-    void shouldResolveLegacyNamedSystemDefaultTemplate() {
+    void shouldPreferCanonicalSystemDefaultTemplate() {
         var resolved = promptGovernanceService.resolveSystemDefault("deconstruct");
 
         assertThat(resolved.getId()).isEqualTo(1L);
-        assertThat(resolved.getPromptName()).isEqualTo("default-deconstruct");
+        assertThat(resolved.getPromptName()).isEqualTo("default");
     }
 
     private PromptPublishRequest.PromptPublishSelectionItem selection(String promptType, String promptName, Long promptConfigId) {

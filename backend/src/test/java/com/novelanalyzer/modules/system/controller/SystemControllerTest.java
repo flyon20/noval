@@ -18,6 +18,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -91,7 +92,7 @@ class SystemControllerTest {
         when(pythonCrawlerClient.fetchBoardCatalog(eq("fanqie"), any(Integer.class))).thenReturn(List.of(
             boardItem("fanqie", "male-new", "男频新书榜", "urban-brain", "都市脑洞")
         ));
-        when(pythonCrawlerClient.fetchRank(eq("fanqie"), eq("male-new"), eq("urban-brain"), any(Integer.class))).thenReturn(List.of(
+        when(pythonCrawlerClient.fetchRank(eq("fanqie"), eq("male-new"), eq("urban-brain"), eq(30), any(Integer.class))).thenReturn(List.of(
             rankItem(1, "Bootstrap Book 01", "Author 01", "https://fanqienovel.com/page/bootstrap-01"),
             rankItem(2, "Bootstrap Book 02", "Author 02", "https://fanqienovel.com/page/bootstrap-02")
         ));
@@ -106,6 +107,8 @@ class SystemControllerTest {
             .andExpect(jsonPath("$.data.results[0].channelCode").value("male-new"))
             .andExpect(jsonPath("$.data.results[0].boardCode").value("urban-brain"))
             .andExpect(jsonPath("$.data.results[0].total").value(2));
+
+        verify(pythonCrawlerClient).fetchRank(eq("fanqie"), eq("male-new"), eq("urban-brain"), eq(30), any(Integer.class));
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {

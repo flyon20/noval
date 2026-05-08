@@ -19,7 +19,7 @@ function getIcon(name: string) {
       :key="item.to"
       class="app-bottom-nav__link"
       :to="item.to"
-      :class="{ 'is-active': currentPath.startsWith(item.to) }"
+      :class="{ 'is-active': currentPath.startsWith(item.to), 'is-primary': item.primary }"
     >
       <span class="app-bottom-nav__icon">
         <el-icon :size="22"><component :is="getIcon(item.icon)" /></el-icon>
@@ -32,7 +32,7 @@ function getIcon(name: string) {
 <style scoped lang="scss">
 .app-bottom-nav {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   position: fixed;
   bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
   left: 12px;
@@ -64,6 +64,8 @@ function getIcon(name: string) {
   font-size: 0;
   transition: color 150ms ease;
   position: relative;
+  min-width: 0;
+  min-height: 44px;
 }
 
 .app-bottom-nav__link::after {
@@ -91,6 +93,27 @@ function getIcon(name: string) {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.app-bottom-nav__link.is-primary {
+  transform: translateY(-7px);
+}
+
+.app-bottom-nav__link.is-primary .app-bottom-nav__icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  color: white;
+  background: var(--color-primary);
+  box-shadow: 0 8px 18px rgba(36, 61, 54, 0.24);
+}
+
+.app-bottom-nav__link.is-primary::after {
+  display: none;
+}
+
+.app-bottom-nav__link.is-primary.is-active .app-bottom-nav__icon {
+  background: var(--color-accent);
 }
 
 .app-bottom-nav__label {

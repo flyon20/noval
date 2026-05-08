@@ -48,6 +48,7 @@ function getIcon(name: string) {
         :key="item.to"
         class="app-sidebar__link"
         :to="item.to"
+        :class="{ 'app-sidebar__link--primary': item.primary }"
         active-class="is-active"
       >
         <el-icon :size="18" class="app-sidebar__link-icon"><component :is="getIcon(item.icon)" /></el-icon>
@@ -164,6 +165,12 @@ function getIcon(name: string) {
 .app-sidebar__link--secondary {
   font-size: 0.875rem;
   min-height: 40px;
+}
+
+.app-sidebar__link--primary {
+  color: var(--color-primary);
+  border-color: rgba(199, 146, 92, 0.2);
+  background: rgba(255, 255, 255, 0.55);
 }
 
 .app-sidebar__link:hover {

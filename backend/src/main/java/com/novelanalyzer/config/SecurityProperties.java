@@ -25,6 +25,7 @@ public class SecurityProperties {
         "/api/system",
         "/api/crawler",
         "/api/analysis",
+        "/api/knowledge",
         "/api/config",
         "/api/data"
     ));

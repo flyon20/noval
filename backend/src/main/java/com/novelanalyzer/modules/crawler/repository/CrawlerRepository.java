@@ -494,6 +494,22 @@ public class CrawlerRepository {
         );
     }
 
+    public List<CrawlBookEntity> searchBooks(String platform, String keyword, int limit) {
+        String normalizedKeyword = keyword == null ? "" : keyword.trim();
+        if (normalizedKeyword.isEmpty()) {
+            return List.of();
+        }
+        return crawlBookMapper.selectList(
+            new LambdaQueryWrapper<CrawlBookEntity>()
+                .eq(CrawlBookEntity::getPlatform, platform)
+                .eq(CrawlBookEntity::getDeleted, 0)
+                .and(wrapper -> wrapper.like(CrawlBookEntity::getBookName, normalizedKeyword)
+                    .or().like(CrawlBookEntity::getAuthor, normalizedKeyword))
+                .orderByDesc(CrawlBookEntity::getUpdateTime)
+                .last("LIMIT " + Math.max(limit, 1))
+        );
+    }
+
     public List<CrawlBookEntity> findBooksByIds(List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
             return List.of();

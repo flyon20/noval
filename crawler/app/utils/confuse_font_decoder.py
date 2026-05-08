@@ -20,7 +20,7 @@ class ConfuseFontDecoder:
     CELL_SIZE = 180
     ROW_HEIGHT = 180
     SINGLE_CANVAS = 520
-    FONT_URL_PATTERN = re.compile(r"src:url\((https://[^)]+?\.woff2)\)")
+    FONT_URL_PATTERN = re.compile(r"url\([\"']?(https://[^)\"']+?\.woff2)[\"']?\)")
     KNOWN_OVERRIDES = {
         "dc027189e0ba4cd": {
             0xE403: "3",

@@ -6,6 +6,7 @@ import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.config.CrawlerProperties;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookDetail;
+import com.novelanalyzer.modules.crawler.client.model.ExternalBookSearchItem;
 import com.novelanalyzer.modules.crawler.client.model.ExternalChapterItem;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankBoard;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
@@ -157,6 +158,27 @@ public class PythonCrawlerClient {
             return objectMapper.convertValue(result.getData(), ExternalBookDetail.class);
         } catch (Exception ex) {
             throw propagateCrawlerFailure("crawler book call failed", ex);
+        }
+    }
+
+    public List<ExternalBookSearchItem> searchBooks(String platform, String keyword, Integer limit) {
+        try {
+            Map<String, Object> request = new HashMap<>();
+            request.put("platform", platform);
+            request.put("keyword", keyword);
+            putIfPositive(request, "limit", limit);
+            PythonResult result = crawlerRestTemplate.postForEntity(
+                crawlerProperties.getBaseUrl() + "/internal/books/search",
+                buildRequestEntity(request),
+                PythonResult.class
+            ).getBody();
+            if (result == null || result.getCode() == null || result.getCode() != 200) {
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "crawler book search call failed");
+            }
+            return objectMapper.convertValue(result.getData(), new TypeReference<List<ExternalBookSearchItem>>() {
+            });
+        } catch (Exception ex) {
+            throw propagateCrawlerFailure("crawler book search call failed", ex);
         }
     }
 

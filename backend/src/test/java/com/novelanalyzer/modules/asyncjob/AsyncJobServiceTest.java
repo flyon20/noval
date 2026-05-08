@@ -105,6 +105,23 @@ class AsyncJobServiceTest {
     }
 
     @Test
+    void shouldTruncateFailureMessageToFitDatabaseColumn() {
+        AsyncJobRepository repository = mock(AsyncJobRepository.class);
+        AsyncJobLockService lockService = mock(AsyncJobLockService.class);
+        AsyncJobService service = new AsyncJobService(repository, lockService);
+
+        AsyncJobEntity job = new AsyncJobEntity();
+        job.setId(31L);
+        job.setStatus(AsyncJobService.STATUS_RUNNING);
+        when(repository.findById(31L)).thenReturn(Optional.of(job));
+
+        service.markFailed(31L, "x".repeat(800));
+
+        assertThat(job.getStatus()).isEqualTo(AsyncJobService.STATUS_FAILED);
+        assertThat(job.getErrorMessage()).hasSize(500);
+    }
+
+    @Test
     void shouldReleaseLockOnlyWhenSubmitActuallyAcquiredIt() {
         AsyncJobRepository repository = mock(AsyncJobRepository.class);
         AsyncJobLockService lockService = mock(AsyncJobLockService.class);

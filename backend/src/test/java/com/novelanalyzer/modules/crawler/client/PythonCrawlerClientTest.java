@@ -124,6 +124,49 @@ class PythonCrawlerClientTest {
     }
 
     @Test
+    void shouldSendBookSearchRequestToCrawlerService() {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        CrawlerProperties properties = new CrawlerProperties();
+        properties.setBaseUrl("http://crawler:5000");
+        properties.setConnectTimeoutMillis(5000);
+        properties.setReadTimeoutMillis(15000);
+        properties.setInternalApiKey("crawler-internal-api-key-with-enough-length-1234567890");
+        PythonCrawlerClient client = new PythonCrawlerClient(restTemplate, properties, new ObjectMapper());
+
+        server.expect(requestTo("http://crawler:5000/internal/books/search"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(header("X-Internal-Service-Token", properties.getInternalApiKey()))
+            .andExpect(content().json("""
+                {
+                  "platform": "fanqie",
+                  "keyword": "Book",
+                  "limit": 3
+                }
+                """))
+            .andRespond(withSuccess("""
+                {
+                  "code": 200,
+                  "message": "success",
+                  "data": [
+                    {
+                      "bookName": "Book A",
+                      "author": "Author A",
+                      "intro": "Intro A",
+                      "bookUrl": "https://fanqienovel.com/page/101",
+                      "platformBookId": "101"
+                    }
+                  ]
+                }
+                """, MediaType.APPLICATION_JSON));
+
+        assertThat(client.searchBooks("fanqie", "Book", 3))
+            .extracting("platformBookId", "bookName")
+            .containsExactly(org.assertj.core.groups.Tuple.tuple("101", "Book A"));
+        server.verify();
+    }
+
+    @Test
     void shouldSendRuntimeCrawlerOptionsWhenFetchingChapters() {
         RestTemplate restTemplate = new RestTemplate();
         MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();

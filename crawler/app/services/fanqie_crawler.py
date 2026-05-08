@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 from app.config import settings
 from app.models.book import BookDetail
 from app.models.chapter import ChapterItem
 from app.models.rank import BoardCatalogBoard, BoardCatalogChannel, RankItem
+from app.models.search import BookSearchItem
 from app.services.base_crawler import BaseCrawler
 from app.utils.confuse_font_decoder import ConfuseFontDecoder
 from app.utils.http_client import HttpClient
@@ -16,6 +17,9 @@ from app.utils.parsers import extract_initial_state, html_to_text
 
 class FanqieCrawler(BaseCrawler):
     RANK_API_URL = f"{settings.fanqie_base_url}/api/rank/category/list"
+    SEARCH_API_URL = f"{settings.fanqie_base_url}/api/author/search/search_book/v1"
+    MOBILE_SEARCH_API_URL = "https://novel.snssdk.com/api/novel/channel/homepage/search/search/v1/"
+    MOBILE_SEARCH_MAX_ATTEMPTS = 2
     RANK_API_PAGE_SIZE = 10
     RANK_API_BASE_PARAMS = {
         "app_id": "2503",
@@ -46,10 +50,12 @@ class FanqieCrawler(BaseCrawler):
                  http_client: HttpClient | None = None,
                  decoder: ConfuseFontDecoder | None = None,
                  timeout_seconds: int | None = None,
-                 chapter_fetch_workers: int | None = None) -> None:
+                 chapter_fetch_workers: int | None = None,
+                 browser_search_client: Any | None = None) -> None:
         self._http_client = http_client or HttpClient(timeout_seconds=timeout_seconds)
         self._decoder = decoder or ConfuseFontDecoder()
         self._chapter_fetch_workers = max(1, chapter_fetch_workers or settings.chapter_fetch_workers)
+        self._browser_search_client = browser_search_client
 
     def fetch_board_catalog(self) -> List[BoardCatalogChannel]:
         state = self._fetch_state(settings.fanqie_rank_url)
@@ -166,6 +172,164 @@ class FanqieCrawler(BaseCrawler):
             if not chapters:
                 raise ValueError("chapter content parse failed")
             return chapters
+
+    def search_books(self, keyword: str, limit: int = 10) -> List[BookSearchItem]:
+        normalized_keyword = (keyword or "").strip()
+        if not normalized_keyword:
+            raise ValueError("keyword is required")
+        safe_limit = max(1, min(limit or 10, 20))
+        search_url = f"{settings.fanqie_base_url}/search/{quote(normalized_keyword)}"
+        state = self._fetch_state(search_url)
+        css = str(state.get("common", {}).get("css") or "")
+        raw_books = self._extract_search_books(state)
+        web_api_blocked = False
+        if not raw_books:
+            try:
+                raw_books = self._fetch_search_books_via_api(normalized_keyword, safe_limit)
+            except ValueError as ex:
+                if "anti-bot verification" not in str(ex):
+                    raise
+                web_api_blocked = True
+        if not raw_books:
+            raw_books = self._fetch_search_books_via_mobile_api(normalized_keyword, safe_limit)
+        if not raw_books:
+            raw_books, browser_css = self._fetch_search_books_via_browser(normalized_keyword, safe_limit)
+            css = browser_css or css
+        if not raw_books:
+            if web_api_blocked:
+                raise ValueError("fanqie search blocked by anti-bot verification and fallback returned empty")
+            raise ValueError("book search result is empty")
+
+        return self._normalize_search_items(raw_books, css, safe_limit)
+
+    def _normalize_search_items(
+        self,
+        raw_books: list[dict[str, Any]],
+        css: str,
+        safe_limit: int,
+    ) -> List[BookSearchItem]:
+        items: List[BookSearchItem] = []
+        seen_book_ids: set[str] = set()
+        for item in raw_books:
+            if not isinstance(item, dict):
+                continue
+            book_id = str(item.get("bookId") or item.get("book_id") or item.get("id") or "").strip()
+            if not book_id or book_id in seen_book_ids:
+                continue
+            book_name = self._decode_text_if_needed(
+                str(item.get("bookName") or item.get("book_name") or item.get("title") or ""), css
+            )
+            if not book_name:
+                continue
+            seen_book_ids.add(book_id)
+            author = self._decode_text_if_needed(
+                str(item.get("author") or item.get("authorName") or item.get("author_name") or ""), css
+            )
+            intro = self._decode_text_if_needed(
+                str(
+                    item.get("abstract")
+                    or item.get("book_abstract")
+                    or item.get("description")
+                    or item.get("intro")
+                    or ""
+                ),
+                css,
+            )
+            items.append(
+                BookSearchItem(
+                    bookName=book_name,
+                    author=author,
+                    intro=intro,
+                    bookUrl=f"{settings.fanqie_base_url}/page/{book_id}",
+                    platformBookId=book_id,
+                )
+            )
+            if len(items) >= safe_limit:
+                break
+        if not items:
+            raise ValueError("book search result parse failed")
+        return items
+
+    def _fetch_search_books_via_api(self, keyword: str, limit: int) -> list[dict[str, Any]]:
+        try:
+            payload = self._http_client.get_json(
+                self.SEARCH_API_URL,
+                params={
+                    "filter": "127,127,127,127",
+                    "page_count": str(limit),
+                    "page_index": "0",
+                    "query_type": "0",
+                    "query_word": keyword,
+                },
+            )
+        except ValueError as ex:
+            if "anti-bot verification" in str(ex):
+                raise
+            return []
+        except Exception:
+            return []
+
+        if not isinstance(payload, dict):
+            return []
+        response_code = payload.get("code")
+        if response_code not in (None, 0, "0"):
+            return []
+        data = payload.get("data") or {}
+        if not isinstance(data, dict):
+            return []
+        books = data.get("search_book_data_list") or data.get("searchBookDataList") or []
+        return books if isinstance(books, list) else []
+
+    def _fetch_search_books_via_mobile_api(self, keyword: str, limit: int) -> list[dict[str, Any]]:
+        for _ in range(self.MOBILE_SEARCH_MAX_ATTEMPTS):
+            try:
+                payload = self._http_client.get_json(
+                    self.MOBILE_SEARCH_API_URL,
+                    params={
+                        "device_platform": "android",
+                        "parent_enterfrom": "novel_channel_search.tab.",
+                        "offset": "0",
+                        "aid": "1967",
+                        "q": keyword,
+                    },
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Linux; Android 10; TAS-AN00 Build/HUAWEITAS-AN00; wv) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+                            "Chrome/114.0.5735.61 Mobile Safari/537.36 Super 4.6.5"
+                        ),
+                        "Referer": "https://fanqienovel.com/",
+                    },
+                )
+            except Exception:
+                continue
+
+            if not isinstance(payload, dict):
+                continue
+            response_code = payload.get("code")
+            if response_code not in (None, 0, "0"):
+                continue
+            data = payload.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            books = data.get("ret_data") or data.get("search_book_data_list") or data.get("searchBookDataList") or []
+            if isinstance(books, list) and books:
+                return books[:limit]
+        return []
+
+    def _fetch_search_books_via_browser(self, keyword: str, limit: int) -> tuple[list[dict[str, Any]], str]:
+        if self._browser_search_client is None:
+            return [], ""
+        browser_search_client = self._browser_search_client
+        try:
+            return browser_search_client.search(keyword, limit, self._http_client.timeout_seconds)
+        except ValueError as ex:
+            if "browser search" in str(ex):
+                raise ValueError(
+                    "fanqie search blocked by anti-bot verification; "
+                    f"browser fallback failed: {ex}"
+                ) from ex
+            raise
 
     def _resolve_rank_url(self, category_or_channel_code: str, board_code: str | None = None) -> str:
         normalized_value = (category_or_channel_code or "").strip()
@@ -295,6 +459,42 @@ class FanqieCrawler(BaseCrawler):
     def _fetch_state(self, url: str) -> dict[str, Any]:
         html = self._http_client.get_text(url)
         return extract_initial_state(html)
+
+    def _extract_search_books(self, state: dict[str, Any]) -> list[dict[str, Any]]:
+        for container_key in ("search", "searchResult", "bookSearch", "page"):
+            container = state.get(container_key)
+            books = self._find_book_list(container)
+            if books:
+                return books
+        return self._find_book_list(state)
+
+    def _find_book_list(self, value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, list):
+            dict_items = [item for item in value if isinstance(item, dict)]
+            if dict_items and any(self._looks_like_book(item) for item in dict_items):
+                return dict_items
+            for item in dict_items:
+                nested = self._find_book_list(item)
+                if nested:
+                    return nested
+            return []
+        if not isinstance(value, dict):
+            return []
+        for key in ("bookList", "book_list", "books", "data", "items", "list", "searchBookList"):
+            nested = value.get(key)
+            books = self._find_book_list(nested)
+            if books:
+                return books
+        for nested in value.values():
+            books = self._find_book_list(nested)
+            if books:
+                return books
+        return []
+
+    def _looks_like_book(self, item: dict[str, Any]) -> bool:
+        has_id = any(item.get(key) for key in ("bookId", "book_id", "id"))
+        has_name = any(item.get(key) for key in ("bookName", "book_name", "title"))
+        return has_id and has_name
 
     def _extract_rank_books(self, rank_state: dict[str, Any]) -> list[dict[str, Any]]:
         for key in ("bookList", "book_list", "readRankList", "newRankList"):

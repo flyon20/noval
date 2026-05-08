@@ -1,11 +1,13 @@
 package com.novelanalyzer.modules.crawler.controller;
 
 import com.novelanalyzer.common.result.Result;
+import com.novelanalyzer.modules.crawler.dto.CrawlerBookSearchRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerRankRequest;
 import com.novelanalyzer.modules.crawler.dto.UserRankPreferenceRequest;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.crawler.vo.BookDetailVO;
+import com.novelanalyzer.modules.crawler.vo.BookSearchCandidateVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterRefreshResultVO;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
 import com.novelanalyzer.modules.crawler.vo.RankBoardCatalogVO;
@@ -80,6 +82,11 @@ public class CrawlerController {
                                                 @RequestParam("channelCode") @NotBlank String channelCode,
                                                 @RequestParam("boardCode") @NotBlank String boardCode) {
         return Result.success(crawlerService.getRankStatus(platform, channelCode, boardCode));
+    }
+
+    @PostMapping("/books/search")
+    public Result<List<BookSearchCandidateVO>> searchBooks(@Valid @RequestBody CrawlerBookSearchRequest request) {
+        return Result.success(crawlerService.searchBooks(request));
     }
 
     @GetMapping("/book/{id}")

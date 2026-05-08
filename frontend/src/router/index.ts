@@ -33,6 +33,10 @@ const router = createRouter({
           component: () => import('@/views/trend/TrendView.vue'),
         },
         {
+          path: 'knowledge',
+          component: () => import('@/views/knowledge/KnowledgeChatView.vue'),
+        },
+        {
           path: 'history',
           component: () => import('@/views/history/HistoryView.vue'),
         },
