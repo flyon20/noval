@@ -76,10 +76,4 @@ docker/**/*.private.yml
 findings.md
 progress.md
 task_plan.md
-
-# Private planning docs not meant for GitHub
-docs/superpowers/plans/*.md
-docs/superpowers/specs/*.md
-
-# Keep public docs explicitly
-!docs/README.md
+docs/

@@ -1,353 +1,314 @@
 # Noval
 
-一个面向网文选题、拆文和榜单趋势研判的全栈项目，当前 V1 聚焦番茄平台，提供“扫榜 -> 抓书 -> 抓章节 -> AI 分析 -> 趋势可视化 -> 历史回看”的完整链路。
+Noval 是一个面向网文选题、榜单研判、单书拆解和 RAG 问答的全栈系统。当前版本聚焦番茄小说平台，提供从榜单采集、书籍搜索、章节抓取、AI 分析、趋势可视化，到网文知识库问答的完整链路。
 
-## 主要功能
+当前发布标签：`V3`
 
-### 1. 榜单扫描
+## 核心能力
 
-- 支持按平台、频道、榜单进行选择，当前已落地 `fanqie`
-- 支持榜单分页、榜单刷新、用户偏好记忆
-- 支持查看书籍详情、简介、作者、榜单快照信息
+- 采集番茄榜单、书籍信息、简介、详情和章节内容。
+- 支持单书 AI 分析，包括拆文、结构、情节、主题等分析方向。
+- 支持榜单趋势分析，包括主题分布、热书列表、趋势摘要、历史对比和词云。
+- 提供网文 AI 问答页，可用于网文创作建议、题材趋势分析、单书设定/卖点/结构提问。
+- 支持 RAG 检索增强：书籍简介、章节、分析结果会切片后写入 MySQL 和 Qdrant。
+- 支持番茄关键词搜索：数据采集服务返回候选书，用户选择目标书后，后端编排章节采集、入库、向量索引和问答分析。
+- 支持密码登录、刷新 Token、可选短信登录、可选 Cloudflare Turnstile、人机校验和登录风控。
 
-### 2. 单书分析
+## 模块说明
 
-- 支持按 `1 / 3 / 5 / 10` 章抓取正文
-- 支持三类分析：
-  - `deconstruct` 拆文
-  - `structure` 拆结构
-  - `plot` 拆情节
-- 支持 SSE 流式输出，优先边生成边返回
-- 分析结果同时保存长文本与结构化 `result_json`
+| 目录 | 技术栈 | 主要职责 |
+| --- | --- | --- |
+| `frontend/` | Vue 3、Vite、TypeScript、Element Plus、Pinia、ECharts | 登录、榜单、分析、趋势、历史、配置、AI 问答页面 |
+| `backend/` | Java 17、Spring Boot 3.2、MyBatis-Plus、Redis、MySQL | 鉴权、业务编排、数据持久化、调用数据采集服务、调用 LangGraph worker、SSE、RAG 索引和检索 |
+| 数据采集服务 | FastAPI、httpx、BeautifulSoup、lxml、字体解码 | 番茄榜单、书籍、搜索、章节采集 |
+| `langgraph-worker/` | FastAPI、LangGraph、OpenAI-compatible client | AI 执行、RAG 问答路由、意图识别、边界拦截、流式回答 |
+| `docker/` | Nginx Dockerfile 和模板 | 生产环境前端静态资源托管和 API 反向代理 |
+| `backend/sql/mysql/` | SQL 脚本 | MySQL 表结构和初始化数据 |
 
-### 3. 趋势分析
-
-- 基于当前选中的“频道 + 榜单”做趋势分析，不是全站混合分析
-- 图表、词云、摘要、榜单对比都围绕当前榜单上下文展开
-- 历史样本不足 3 次时，先展示已采集到的样本，不强制等满
-- 支持查看分析摘要与详情长文
-
-### 4. 历史与可视化
-
-- 支持查看历史分析记录
-- 支持趋势图、主题分布、历史词云、快照对比、热书列表等数据展示
-- 已兼容桌面端与移动端核心流程
-
-### 5. 登录与安全
-
-- 支持登录、注册、登出、刷新 Token
-- JWT 鉴权 + 角色校验
-- Redis 限流、Token 黑名单、登录日志、操作日志
-- 注册密码规则：至少 8 位，且包含大写字母、小写字母和数字
-
-### 6. 配置能力
-
-- 提示词配置管理
-- 系统配置管理
-- 可用模型列表下发
-- 用户偏好配置持久化
-
-## 当前范围
-
-- 已实现平台：`fanqie`
-- 预留未落地：`qidian`
-- 当前 AI 通道以 `LangChain4j + OpenAI-Compatible` 为主
-- 当前前端页面：
-  - `/login`
-  - `/rank`
-  - `/analysis`
-  - `/trend`
-  - `/history`
-  - `/config/prompt`
-  - `/config/system`
-
-## 架构设计
-
-### 总体架构
+## 总体架构
 
 ```mermaid
 flowchart LR
-    U["用户 / 浏览器"] --> F["Frontend\nVue 3 + Vite + Element Plus + Pinia + ECharts"]
-    F --> B["Backend\nSpring Boot 3 + MyBatis-Plus + JWT + SSE"]
-    B --> M["MySQL 8\n业务数据 / 结果 / 配置 / 日志"]
-    B --> R["Redis\n限流 / 黑名单 / 缓存"]
-    B --> C["Crawler Service\nFastAPI + httpx + BeautifulSoup + OCR"]
-    B --> A["AI Provider\nOpenAI-Compatible / DeepSeek"]
-    C --> P["番茄平台页面"]
+    U["浏览器"] --> N["Nginx"]
+    N --> F["Vue 前端"]
+    N --> B["Spring Boot 后端"]
+    B --> DB["MySQL 8"]
+    B --> R["Redis"]
+    B --> C["数据采集服务"]
+    B --> W["LangGraph Worker"]
+    B --> Q["Qdrant"]
+    W --> B
+    W --> LLM["OpenAI-compatible 大模型"]
+    B --> EMB["Embedding Provider"]
+    C --> Fanqie["番茄小说"]
 ```
 
-### 模块职责
+AI 问答主链路：
 
-| 模块 | 技术栈 | 主要职责 |
-| --- | --- | --- |
-| `frontend/` | Vue 3 + Vite + TypeScript + Element Plus + ECharts | 登录、扫榜、分析、趋势、历史、配置页面，处理 JWT 会话与流式展示 |
-| `backend/` | Spring Boot 3.2 + Java 17 + MyBatis-Plus + Redis | 鉴权、业务编排、SSE 推流、结果入库、配置管理、可视化数据聚合 |
-| `crawler/` | FastAPI + httpx + BeautifulSoup4 + lxml + RapidOCR | 榜单抓取、书籍详情抓取、章节抓取、站点文本清洗 |
-| `backend/sql/mysql/` | MySQL DDL / Seed | 用户权限、榜单快照、分析结果、提示词配置、趋势数据结构 |
-| `docs/` | 设计与计划文档 | 项目总设计、前端接口设计、联调说明、阶段计划 |
+1. 用户在 `/knowledge` 输入网文相关问题。
+2. 后端把请求发送给 `langgraph-worker`。
+3. Worker 判断问题意图，并把回答范围限制在网文创作、网文分析、榜单趋势和知识库问答内。
+4. 趋势/RAG 问题会通过后端内部接口检索知识库。
+5. 后端将用户问题向量化后查询 Qdrant。
+6. Worker 基于检索来源生成带引用的回答。
+7. 前端通过流式输出展示回答，并折叠显示引用来源。
 
-### 关键数据流
+选书问答链路：
 
-1. 前端选择平台、频道、榜单后，请求后端获取榜单目录与榜单分页数据。
-2. 后端优先读取 MySQL/Redis 中的榜单快照；缺失或主动刷新时，再调用爬虫服务抓取。
-3. 用户查看详情或抓章时，后端调爬虫服务获取正文并落库。
-4. 用户触发单书分析或趋势分析时，后端拼装提示词，调用 LangChain4j 对接 OpenAI-Compatible 模型。
-5. 流式分析优先通过 SSE 把增量内容返回前端，同时将完整结果与结构化 JSON 写入数据库。
-6. 趋势页再基于历史快照、历史分析结果与结构化 JSON 聚合出词云、图表、摘要与对比数据。
+1. 数据采集服务根据关键词返回番茄候选书。
+2. 用户选择目标书。
+3. 后端获取书籍详情和指定章节数量。
+4. 后端把简介、章节和分析结果切片，写入 MySQL 与 Qdrant。
+5. Worker 检索对应证据并生成回答。
 
-## 技术栈
+## 功能范围
+
+### 榜单与数据采集
+
+- 番茄榜单采集。
+- 榜单刷新和分页浏览。
+- 书籍详情获取。
+- 章节获取，用户侧默认控制在较小章节数，避免不必要的反爬压力。
+- 番茄关键词搜索和候选书选择。
+
+### 单书分析
+
+- `deconstruct`：拆文。
+- `structure`：结构分析。
+- `plot`：情节分析。
+- `theme`：主题分析。
+- 支持流式输出。
+- 分析结果写入 `analysis_result`。
+- 支持提示词治理和模型绑定提示词配置。
+
+### 趋势分析
+
+- 基于当前榜单上下文做趋势分析。
+- 支持趋势摘要、主题分布、词云、热书列表、历史对比。
+- 前端有结构化展示工具，用于把模型输出转成可视化结果。
+
+### 知识库与 RAG
+
+- `knowledge_document` 和 `knowledge_chunk` 表结构。
+- Qdrant 向量存储。
+- 默认使用 DashScope OpenAI-compatible embedding 链路。
+- 后端提供内部知识检索接口给 worker 调用。
+- LangGraph 网文助手具备：
+  - 网文问题边界拦截。
+  - 前端短期记忆。
+  - 上下文压缩传递。
+  - 流式回答。
+  - Markdown 渲染。
+  - 引用来源折叠。
+  - 引用修复：模型用了 RAG 来源但漏写 `[1]` 引用时，会用已检索来源生成带引用的兜底回答。
+
+### 登录与安全
+
+- 密码登录。
+- Refresh Token 会话。
+- 可选短信注册、短信登录、短信重置密码。
+- 可选 Cloudflare Turnstile。
+- 密码登录风控。
+- 后端、数据采集服务、worker 之间使用内部 API Key 校验。
+
+## 运行依赖
+
+| 组件 | 要求 |
+| --- | --- |
+| Java | 17 |
+| Maven | 推荐 3.9+ |
+| Node.js | 推荐 20+ |
+| npm | 推荐 10+ |
+| Python | 3.11+ |
+| MySQL | 8.0 |
+| Redis | 推荐 7 |
+| Qdrant | `qdrant/qdrant:v1.9.7` |
+| Docker Compose | 生产式部署需要 |
+
+## 环境变量
+
+本地 Docker 可复制 `.env.example` 为 `.env`。生产环境建议把 env 文件放在仓库外，例如 `/etc/opt/noval/` 下。
+
+不要提交真实密钥。
+
+核心变量：
+
+| 变量 | 用途 |
+| --- | --- |
+| `MYSQL_ROOT_PASSWORD` | MySQL root 密码 |
+| `MYSQL_USER` / `MYSQL_PASSWORD` | 应用数据库账号 |
+| `REDIS_PASSWORD` | Redis 密码 |
+| `APP_DOMAIN` / `ROOT_DOMAIN` | Nginx 域名配置 |
+| `NGINX_SSL_DIR` | 宿主机 TLS 证书目录 |
+| `JWT_SECRET` | JWT 签名密钥 |
+| `CONFIG_SECRET_MASTER_KEY` | 配置密钥主密钥 |
+| 数据采集内部密钥 | 后端调用数据采集服务的内部密钥 |
+| `AI_LANGGRAPH_WORKER_INTERNAL_API_KEY` | 后端调用 worker 的内部密钥 |
+| `DEEPSEEK_API_KEY` | 默认 OpenAI-compatible 对话模型密钥 |
+| `DASHSCOPE_API_KEY` | 默认 embedding 密钥 |
+| `CLOUDFLARE_TURNSTILE_*` | 可选 Turnstile 配置 |
+| `ALIYUN_DYPNS_*` | 可选短信服务配置 |
+
+RAG 默认配置：
+
+```env
+KNOWLEDGE_QDRANT_BASE_URL=http://qdrant:6333
+KNOWLEDGE_QDRANT_COLLECTION=novel_knowledge_chunks
+KNOWLEDGE_EMBEDDING_PROVIDER=dashscope
+KNOWLEDGE_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+KNOWLEDGE_EMBEDDING_MODEL=text-embedding-v4
+KNOWLEDGE_EMBEDDING_DIMENSION=1024
+KNOWLEDGE_EMBEDDING_API_KEY_REF=DASHSCOPE_API_KEY
+KNOWLEDGE_INDEX_MAX_CHAPTERS=10
+KNOWLEDGE_INDEX_MAX_ACTIVE_JOBS=1
+```
+
+## Docker 部署
+
+生产式部署由 `docker-compose.yml` 编排。
+
+```bash
+cd /opt/noval
+
+docker compose --env-file /etc/opt/noval/ssl/.env build backend langgraph-worker nginx
+docker compose --env-file /etc/opt/noval/ssl/.env up -d
+docker compose --env-file /etc/opt/noval/ssl/.env ps
+```
+
+健康检查：
+
+```bash
+curl -s https://www.example.com/api/system/health
+
+docker compose --env-file /etc/opt/noval/ssl/.env logs --tail=100 backend
+docker compose --env-file /etc/opt/noval/ssl/.env logs --tail=100 langgraph-worker
+```
+
+在 Docker 网络内检查 Qdrant：
+
+```bash
+docker run --rm --network noval_default curlimages/curl:8.10.1 http://qdrant:6333/healthz
+```
+
+## 数据库初始化与升级
+
+新 MySQL volume 会自动执行：
+
+```text
+backend/sql/mysql/
+```
+
+如果是从旧版本数据库升级，恢复旧库后可以按需执行新增阶段脚本：
+
+```bash
+docker compose --env-file /etc/opt/noval/ssl/.env exec -T mysql \
+  sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" novel_analyzer' \
+  < backend/sql/mysql/phase5-schema.sql
+
+docker compose --env-file /etc/opt/noval/ssl/.env exec -T mysql \
+  sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" novel_analyzer' \
+  < backend/sql/mysql/phase6-schema.sql
+
+docker compose --env-file /etc/opt/noval/ssl/.env exec -T mysql \
+  sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" novel_analyzer' \
+  < backend/sql/mysql/phase7-knowledge-schema.sql
+```
+
+提示词治理修复脚本：
+
+```text
+backend/sql/mysql/phase5-prompt-governance-repair.sql
+```
+
+适用于老库里已有提示词配置，但缺少有效发布版本的场景。
+
+## 本地开发
 
 ### 前端
 
-- Vue 3
-- Vite
-- TypeScript
-- Element Plus
-- Pinia
-- Axios
-- ECharts + vue-echarts
-- vite-plugin-pwa
+```bash
+cd frontend
+npm install
+npm run dev
+npm run type-check
+npm run test
+```
 
 ### 后端
 
-- Java 17
-- Spring Boot 3.2.5
-- MyBatis-Plus 3.5.6
-- Spring Validation
-- Spring Security Crypto
-- Spring Data Redis
-- JJWT 0.12.5
-- LangChain4j 1.12.1
-- MySQL Connector/J
-
-### 爬虫
-
-- Python
-- FastAPI
-- Uvicorn
-- httpx
-- BeautifulSoup4
-- lxml
-- Pillow
-- rapidocr_onnxruntime
-
-### 基础设施
-
-- MySQL 8
-- Redis
-- Docker Compose
-
-## 目录结构
-
-```text
-noval/
-├─ frontend/                # 前端工程
-├─ backend/                 # 后端工程
-│  ├─ src/main/java/        # 业务代码
-│  ├─ src/main/resources/   # 应用配置
-│  └─ sql/mysql/            # MySQL 初始化脚本
-├─ crawler/                 # Python 爬虫服务
-│  └─ app/                  # FastAPI 入口、路由、服务、模型
-├─ redis/                   # Redis 配置
-├─ docs/                    # 设计文档与联调文档
-├─ docker-compose.yml       # 本地 / 联调编排
-└─ .env.example             # 环境变量示例
-```
-
-## 核心数据设计
-
-当前 MySQL 结构大致分为 5 类：
-
-- 安全与权限：
-  - `sys_user`
-  - `sys_role`
-  - `sys_user_role`
-  - `sys_login_log`
-  - `sys_operation_log`
-  - `sys_ip_blacklist`
-- 抓取与内容：
-  - `crawl_book`
-  - `crawl_rank`
-  - `crawl_chapter`
-  - `crawler_task`
-- 榜单快照：
-  - `rank_board`
-  - `rank_snapshot`
-  - `user_rank_preference`
-- AI 与配置：
-  - `prompt_config`
-  - `system_config`
-  - `user_config`
-- 分析结果：
-  - `analysis_result`
-
-其中 `analysis_result.result_json`、`prompt_config.output_json_schema`、`prompt_config.parse_config_json` 是后续做结构化分析、可视化和更快落库的重要基础。
-
-## 配置要求
-
-### 运行环境要求
-
-| 项目 | 要求 |
-| --- | --- |
-| JDK | 17 |
-| Maven | 3.9+ 推荐 |
-| Node.js | 20 LTS |
-| npm | 10+ 推荐 |
-| Python | 3.11+，本地已按 3.12 联调过 |
-| MySQL | 8.0 |
-| Redis | 5+ 或 7 |
-| Docker | 支持 `docker compose` 的版本 |
-
-### 必填环境变量
-
-以下配置属于启动链路的核心要求：
-
-| 变量名 | 是否必填 | 说明 |
-| --- | --- | --- |
-| `JWT_SECRET` | 是 | JWT 密钥，至少 32 个字符 |
-| `CRAWLER_INTERNAL_API_KEY` | 是 | 后端与爬虫服务之间的内部调用密钥，至少 32 个字符 |
-| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_DATABASE` | 是 | MySQL 连接信息 |
-| `MYSQL_USER` / `MYSQL_PASSWORD` | 是 | MySQL 账号密码 |
-| `REDIS_HOST` / `REDIS_PORT` | 是 | Redis 连接信息 |
-| `REDIS_PASSWORD` | 视环境而定 | Redis 若启用密码则必填 |
-| `CRAWLER_BASE_URL` | 是 | 后端访问爬虫服务地址 |
-
-### AI 相关配置
-
-当前代码里，OpenAI-Compatible 模型密钥优先从后端进程环境变量读取，默认引用名为 `DEEPSEEK_API_KEY`。
-
-推荐至少补齐：
-
-| 变量名 | 说明 |
-| --- | --- |
-| `AI_OPENAI_COMPATIBLE_BASE_URL` | OpenAI-Compatible 基础地址，默认可用 `https://api.deepseek.com/v1` |
-| `AI_OPENAI_COMPATIBLE_DEFAULT_MODEL` | 默认模型名，当前默认 `deepseek-chat` |
-| `AI_OPENAI_COMPATIBLE_API_KEY_REF` | 密钥引用名，默认 `DEEPSEEK_API_KEY` |
-| `DEEPSEEK_API_KEY` | 实际模型密钥，不要提交到仓库 |
-
-补充说明：
-
-- `system_config` 里有 AI 相关配置项，但真实密钥仍建议通过运行环境注入。
-- 不要把任何模型 key、数据库密码、Redis 密码直接写入 Git。
-
-### `.env` 使用方式
-
-1. 复制 `.env.example` 为 `.env`
-2. 将所有 `CHANGE_ME_*` 替换成真实值
-3. `.env` 只用于本地或部署环境，不要提交到仓库
-
-## 启动方式
-
-### 方式一：Docker Compose
-
-适合联调或一体化启动。
-
-```powershell
-Copy-Item .env.example .env
-# 编辑 .env，填入真实密钥和密码
-docker compose up -d --build
-```
-
-说明：
-
-- 首次启动时，MySQL 会自动执行 `backend/sql/mysql/` 下的初始化脚本。
-- 若需要 AI 分析能力，请确保后端容器能读取到实际模型密钥。
-- `docker` 与 `docker compose` 需本机自行安装。
-
-### 方式二：本地分服务启动
-
-#### 1. 启动 Redis
-
-准备一个可用的 Redis 实例即可，版本 5+ 或 7 均可。
-
-#### 2. 启动爬虫服务
-
-```powershell
-cd crawler
-pip install -r requirements.txt
-$env:CRAWLER_INTERNAL_API_KEY = "<至少32位的内部调用密钥>"
-python -m uvicorn app.main:app --host 127.0.0.1 --port 5000
-```
-
-#### 3. 启动后端
-
-```powershell
+```bash
 cd backend
-$env:JWT_SECRET = "<至少32位的JWT密钥>"
-$env:CRAWLER_INTERNAL_API_KEY = "<与爬虫服务相同的密钥>"
-$env:CRAWLER_BASE_URL = "http://127.0.0.1:5000"
-$env:MYSQL_HOST = "127.0.0.1"
-$env:MYSQL_PORT = "3306"
-$env:MYSQL_DATABASE = "novel_analyzer"
-$env:MYSQL_USER = "root"
-$env:MYSQL_PASSWORD = "<你的MySQL密码>"
-$env:REDIS_HOST = "127.0.0.1"
-$env:REDIS_PORT = "6379"
-$env:REDIS_PASSWORD = "<你的Redis密码，可为空>"
-$env:DEEPSEEK_API_KEY = "<你的模型密钥>"
 mvn spring-boot:run
+mvn test
 ```
 
-#### 4. 启动前端
+### 数据采集服务
 
-```powershell
+```bash
+cd <data-collector-service-directory>
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 5000
+python -m unittest discover -s tests -v
+```
+
+### LangGraph Worker
+
+```bash
+cd langgraph-worker
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+python -m pytest tests -q
+```
+
+## 常用验证命令
+
+Worker/RAG 相关验证：
+
+```bash
+cd langgraph-worker
+python -m pytest tests/test_novel_research_agent.py tests/test_knowledge_api.py tests/test_knowledge_client.py -q
+```
+
+前端 AI 问答验证：
+
+```bash
 cd frontend
-npm install
-npm run dev -- --host 127.0.0.1 --port 5173
+npm run test -- KnowledgeChatView.spec.ts
+npm run type-check
+npm run build
 ```
 
-### 健康检查
+后端编译：
 
-- 后端健康检查：`GET /api/system/health`
-- 爬虫健康检查：`GET /health`
+```bash
+cd backend
+mvn -q -DskipTests compile
+```
 
-## 插件 / 开发工具要求
+## 主要接口
 
-本项目没有“必须安装某个浏览器插件才能运行”的要求，核心功能全部走前后端服务调用。
+认证：
 
-如果你要做二次开发，建议开发工具具备以下能力：
-
-- Java / Maven 支持
-- Vue 3 / TypeScript 支持
-- Python / FastAPI 支持
-- Docker / Compose 支持
-- MySQL / Redis 连接调试能力
-
-如果使用 IDE：
-
-- IntelliJ IDEA：建议启用 Java、Maven、HTTP Client、Docker、Database 相关支持
-- VS Code：建议安装 Java、Python、Vue、TypeScript、Docker 相关扩展
-
-这部分是开发效率建议，不属于项目运行时强依赖。
-
-## 安全要求
-
-- 不要把真实的模型密钥、数据库密码、Redis 密码、JWT 密钥提交到 Git
-- `JWT_SECRET` 与 `CRAWLER_INTERNAL_API_KEY` 都应至少 32 位
-- 注册密码必须满足大小写字母 + 数字 + 最少 8 位
-- 生产环境建议启用独立数据库账号、Redis 密码和容器网络隔离
-
-## 相关接口概览
-
-### 认证
-
-- `POST /api/auth/login`
-- `POST /api/auth/register`
+- `POST /api/auth/login/password`
 - `POST /api/auth/refresh`
 - `POST /api/auth/logout`
+- `POST /api/auth/sms/send`
+- `POST /api/auth/login/sms`
 
-### 榜单与内容
+数据采集：
 
-- `GET /api/crawler/boards`
-- `GET /api/crawler/preference`
-- `POST /api/crawler/preference`
-- `GET /api/crawler/rank/page`
-- `POST /api/crawler/rank/refresh`
-- `GET /api/crawler/book/{id}`
-- `POST /api/crawler/chapters`
-- `POST /api/crawler/chapters/refresh`
+- 榜单目录查询。
+- 榜单分页查询。
+- 榜单刷新。
+- 书籍关键词搜索。
+- 书籍详情查询。
+- 章节内容查询与刷新。
 
-### 分析与趋势
+分析：
 
 - `POST /api/analysis/deconstruct`
 - `POST /api/analysis/deconstruct/stream`
@@ -355,28 +316,39 @@ npm run dev -- --host 127.0.0.1 --port 5173
 - `POST /api/analysis/structure/stream`
 - `POST /api/analysis/plot`
 - `POST /api/analysis/plot/stream`
-- `GET /api/analysis/trend`
+- `POST /api/analysis/theme`
 - `POST /api/analysis/trend/stream`
 
-### 数据与配置
+知识库/RAG：
 
-- `GET /api/data/history`
-- `GET /api/data/visual`
+- `POST /api/knowledge/chat`
+- `POST /api/knowledge/chat/stream`
+- `POST /api/knowledge/index`
+- `POST /api/knowledge/search`
+
+配置：
+
 - `GET /api/config/prompt`
 - `PUT /api/config/prompt`
 - `GET /api/config/system`
 - `PUT /api/config/system`
-- `GET /api/config/system/available-models`
 
-## 相关文档
+## 安全规则
 
-- [项目总设计 v2](docs/项目总设计-v2.md)
-- [前端接口设计 v1](docs/前端接口设计-v1.md)
-- [本地联调说明](docs/本地联调说明.md)
-- [分步开发计划](docs/分步开发计划.md)
+- 不要提交真实 `.env` 文件。
+- 不要提交 API Key、密码、私钥、证书、Cookie、Token、Session。
+- 不要提交数据库 dump、发布压缩包、日志、Redis dump、本地备份目录。
+- 生产环境 env 文件放在仓库外。
+- 提交前参考 `AGENTS_GIT_NOTE.md`。
 
-## 版本说明
+推送前建议检查：
 
-- 当前主分支：`main`
-- 已推送标签：`v1`
-- 当前仓库远程：`origin -> https://github.com/flyon20/noval.git`
+```bash
+git status --short
+git diff --cached --name-only
+git ls-files | grep -E '(^|/)(\.env|.*\.env|env)$|\.(pem|key|p12|jks|kdbx)$|\.sql\.gz$|dump\.rdb$'
+```
+
+## 相关说明
+
+- `AGENTS_GIT_NOTE.md`

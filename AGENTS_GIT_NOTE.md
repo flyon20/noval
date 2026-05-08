@@ -23,6 +23,7 @@ The following categories must never be committed:
 - local log files
 - local scratch files and debug outputs
 - personal planning notes and private working documents
+- docs directory content unless explicitly approved for public release
 - generated runtime artifacts
 - local service start/stop helper outputs
 
@@ -45,6 +46,7 @@ Examples of files that must not be pushed:
 - `findings.md`
 - `progress.md`
 - `task_plan.md`
+- `docs/`
 - `docs/superpowers/plans/*.md`
 - `docs/superpowers/specs/*.md`
 
@@ -55,7 +57,7 @@ These are allowed:
 - `README.md`
 - `.env.example`
 - `frontend/.env.example`
-- public product or rollout docs that are intentionally meant to live in the repo
+- public product or rollout docs only when explicitly approved before staging
 
 ## Rule For Markdown Files
 
