@@ -57,6 +57,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.auth.jwt-secret=test-jwt-secret-with-enough-length-1234567890",
         "app.crawler.internal-api-key=crawler-internal-api-key-with-enough-length-1234567890",
         "app.ai.langgraph-worker.internal-api-key=langgraph-internal-key-with-enough-length-1234567890",
+        "app.knowledge.index.queue-enabled=false",
+        "app.knowledge.index.rank-incremental-enabled=false",
         "app.knowledge.embedding.api-key=test-embedding-key"
     }
 )
@@ -69,7 +71,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "classpath:sql/phase4-schema-h2.sql",
         "classpath:sql/phase5-schema-h2.sql",
         "classpath:sql/phase2-data-h2.sql",
-        "classpath:sql/phase7-knowledge-schema-h2.sql"
+        "classpath:sql/phase7-knowledge-schema-h2.sql",
+        "classpath:sql/phase8-knowledge-chat-memory-schema-h2.sql"
     },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
@@ -104,11 +107,15 @@ class KnowledgeChatServiceTest {
     @BeforeEach
     void prepareState() {
         jdbcTemplate.update("UPDATE sys_user SET phone = ? WHERE id = 1", ADMIN_PHONE);
-        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
         try {
-            connection.serverCommands().flushDb();
-        } finally {
-            connection.close();
+            RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
+            try {
+                connection.serverCommands().flushDb();
+            } finally {
+                connection.close();
+            }
+        } catch (Exception ignored) {
+            // Local unit runs may not have Redis available; these tests use mocked AI/data services.
         }
     }
 
@@ -159,7 +166,7 @@ class KnowledgeChatServiceTest {
         jobResponse.setJobType("KNOWLEDGE_INDEX_BOOK");
         jobResponse.setJobKey("book:101");
         jobResponse.setStatus("PENDING");
-        when(knowledgeIndexJobExecutor.submitAndExecute(101L, 1L)).thenReturn(jobResponse);
+        when(knowledgeIndexJobExecutor.submitAndExecuteBlocking(101L, 1L)).thenReturn(jobResponse);
 
         KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
         workerResponse.setStatus("insufficient_evidence");
@@ -180,7 +187,43 @@ class KnowledgeChatServiceTest {
             .andExpect(jsonPath("$.data.actions[0]").value("index_book"))
             .andExpect(jsonPath("$.data.resultJson.indexJob.jobId").value(88));
 
-        verify(knowledgeIndexJobExecutor).submitAndExecute(101L, 1L);
+        verify(knowledgeIndexJobExecutor).submitAndExecuteBlocking(101L, 1L);
+    }
+
+    @Test
+    void shouldSubmitIndexJobWhenWorkerResolvedLocalBookId() throws Exception {
+        AsyncJobSubmitResponse jobResponse = new AsyncJobSubmitResponse();
+        jobResponse.setJobId(188L);
+        jobResponse.setJobType("KNOWLEDGE_INDEX_BOOK");
+        jobResponse.setJobKey("book:401");
+        jobResponse.setStatus("PENDING");
+        when(knowledgeIndexJobExecutor.submitAndExecute(401L, 1L)).thenReturn(jobResponse);
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("insufficient_evidence");
+        workerResponse.setAnswer("证据不足：需要先索引章节。");
+        workerResponse.setActions(List.of("index_book"));
+        workerResponse.setResultJson(Map.of(
+            "status", "insufficient_evidence",
+            "bookId", 401,
+            "bookName", "长生两十六亿年，被妹妹首播曝光",
+            "answerStatus", "needs_chapter_evidence"
+        ));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"长生两十六亿年，被妹妹首播曝光，金手指是什么，前三章主要是什么剧情"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.status").value("insufficient_evidence"))
+            .andExpect(jsonPath("$.data.resultJson.localBookId").value(401))
+            .andExpect(jsonPath("$.data.resultJson.indexJob.jobId").value(188));
+
+        verify(knowledgeIndexJobExecutor).submitAndExecute(401L, 1L);
     }
 
     @Test
@@ -363,6 +406,101 @@ class KnowledgeChatServiceTest {
             .andExpect(jsonPath("$.data.answer").value("开篇卖点来自目标和冲突。[1]"))
             .andExpect(jsonPath("$.data.sources.length()").value(1))
             .andExpect(jsonPath("$.data.sources[0].title").value("第一章"));
+    }
+
+    @Test
+    void shouldSubmitChapterMissingIndexWhenAnswerUsedRawChapterFallback() throws Exception {
+        AsyncJobSubmitResponse jobResponse = new AsyncJobSubmitResponse();
+        jobResponse.setJobId(288L);
+        jobResponse.setJobType("KNOWLEDGE_INDEX_BOOK");
+        jobResponse.setJobKey("book:401:CHAPTER_MISSING");
+        jobResponse.setStatus("PENDING");
+        when(knowledgeIndexJobExecutor.submitAndExecute(401L, 1L, "CHAPTER_MISSING")).thenReturn(jobResponse);
+
+        KnowledgeChatResponseVO.SourceVO source = new KnowledgeChatResponseVO.SourceVO();
+        source.setChunkId(null);
+        source.setDocumentId(null);
+        source.setBookId(401L);
+        source.setBookName("长生两十六亿年，被妹妹首播曝光");
+        source.setPlatform("fanqie");
+        source.setSourceType("CHAPTER");
+        source.setSourceRefId(9001L);
+        source.setChapterNo(1);
+        source.setTitle("第一章 直播曝光");
+        source.setPreview("妹妹直播时拍到主角收藏的古物。");
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("前三章围绕直播曝光展开。[1]");
+        workerResponse.setSources(List.of(source));
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of(
+            "status", "answered",
+            "bookId", 401,
+            "answerStatus", "answered_with_evidence"
+        ));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"长生两十六亿年，被妹妹首播曝光，金手指是什么，前三章主要是什么剧情"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.status").value("answered"))
+            .andExpect(jsonPath("$.data.resultJson.chapterIndexJob.jobId").value(288));
+
+        verify(knowledgeIndexJobExecutor).submitAndExecute(401L, 1L, "CHAPTER_MISSING");
+    }
+
+    @Test
+    void shouldPersistKnowledgeChatMemoryForConversationFollowup() throws Exception {
+        KnowledgeChatResponseVO firstWorkerResponse = new KnowledgeChatResponseVO();
+        firstWorkerResponse.setStatus("answered");
+        firstWorkerResponse.setAnswer("第一轮回答");
+        firstWorkerResponse.setActions(List.of());
+        firstWorkerResponse.setResultJson(Map.of(
+            "status", "answered",
+            "memorySummary", "当前作品：星河旧梦\n上一轮结论：旧星门坐标是核心设定",
+            "bookName", "星河旧梦",
+            "intent", "single_book_research"
+        ));
+        KnowledgeChatResponseVO secondWorkerResponse = new KnowledgeChatResponseVO();
+        secondWorkerResponse.setStatus("answered");
+        secondWorkerResponse.setAnswer("第二轮回答");
+        secondWorkerResponse.setActions(List.of());
+        secondWorkerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(firstWorkerResponse, secondWorkerResponse);
+
+        String token = loginAndGetToken();
+        MvcResult first = mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"星河旧梦的设定是什么？\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.resultJson.conversationId").exists())
+            .andReturn();
+
+        String conversationId = JsonPath.read(first.getResponse().getContentAsString(), "$.data.resultJson.conversationId");
+        Integer rows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM knowledge_chat_memory WHERE conversation_id = ? AND summary LIKE ?",
+            Integer.class,
+            conversationId,
+            "%旧星门坐标%"
+        );
+        assertThat(rows).isEqualTo(1);
+
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"那它的卖点呢？\",\"conversationId\":\"" + conversationId + "\"}"))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient, org.mockito.Mockito.times(2)).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getAllValues().get(1).get("contextSummary")).asString().contains("旧星门坐标");
     }
 
     @Test

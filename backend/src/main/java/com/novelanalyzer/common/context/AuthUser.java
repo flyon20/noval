@@ -8,6 +8,7 @@ public class AuthUser {
 
     private Long userId;
     private String username;
+    private String sessionId;
     private Set<String> roles = new HashSet<>();
 
     public static AuthUser of(Long userId, String username, Set<String> roles) {
@@ -15,6 +16,12 @@ public class AuthUser {
         authUser.setUserId(userId);
         authUser.setUsername(username);
         authUser.setRoles(roles);
+        return authUser;
+    }
+
+    public static AuthUser of(Long userId, String username, String sessionId, Set<String> roles) {
+        AuthUser authUser = of(userId, username, roles);
+        authUser.setSessionId(sessionId);
         return authUser;
     }
 
@@ -44,6 +51,14 @@ public class AuthUser {
 
     public void setUsername(String username) {
         this.username = username;
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
     }
 
     public Set<String> getRoles() {

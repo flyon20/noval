@@ -18,6 +18,7 @@ import com.novelanalyzer.modules.analysis.vo.AnalysisResultVO;
 import com.novelanalyzer.modules.analysis.vo.TrendAnalysisVO;
 import com.novelanalyzer.modules.asyncjob.dto.AsyncJobSubmitResponse;
 import com.novelanalyzer.modules.asyncjob.service.AsyncJobService;
+import com.novelanalyzer.modules.asyncjob.vo.AsyncJobVO;
 import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
 import com.novelanalyzer.modules.config.service.PromptConfigService;
@@ -33,6 +34,7 @@ import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
+import com.novelanalyzer.modules.data.service.AnalysisHistorySearchIndexService;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.http.MediaType;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -41,17 +43,21 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
@@ -74,13 +80,14 @@ public class AnalysisService {
     private static final int DEEPSEEK_CHUNK_TARGET_INPUT_TOKENS = 75000;
     private static final int DEFAULT_CHUNK_PARALLELISM = 3;
     private static final int TREND_LANGGRAPH_TIMEOUT_MILLIS = 180000;
-    private static final int LARGE_BOOK_ANALYSIS_TIMEOUT_MILLIS = 60000;
+    private static final int LARGE_BOOK_ANALYSIS_TIMEOUT_MILLIS = 180000;
     private static final int LARGE_BOOK_FORCE_CHUNK_CHAPTER_COUNT = 8;
     private static final int LARGE_BOOK_FORCE_CHUNK_SEGMENT_SIZE = 3;
     private static final int TREND_PROMPT_INTRO_MAX_LENGTH = 140;
     private static final long ASYNC_JOB_LOCK_TTL_SECONDS = 300L;
     private static final int ASYNC_JOB_WAIT_RETRY_COUNT = 5;
     private static final long ASYNC_JOB_WAIT_MILLIS = 200L;
+    private static final String JOB_TYPE_BOOK_ANALYSIS = "book_analysis";
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final PromptConfigRepository promptConfigRepository;
@@ -95,6 +102,7 @@ public class AnalysisService {
     private final UserConfigService userConfigService;
     private final AsyncJobService asyncJobService;
     private final PromptGovernanceService promptGovernanceService;
+    private final AnalysisHistorySearchIndexService analysisHistorySearchIndexService;
     private final ObjectMapper objectMapper;
     private final AsyncTaskExecutor streamTaskExecutor;
     private final ThreadLocal<PromptConfigService.RuntimePromptResolution> runtimePromptResolutionHolder = new ThreadLocal<>();
@@ -111,6 +119,7 @@ public class AnalysisService {
                            UserConfigService userConfigService,
                            AsyncJobService asyncJobService,
                            PromptGovernanceService promptGovernanceService,
+                           AnalysisHistorySearchIndexService analysisHistorySearchIndexService,
                            ObjectMapper objectMapper,
                            AsyncTaskExecutor analysisStreamTaskExecutor) {
         this.promptConfigRepository = promptConfigRepository;
@@ -125,6 +134,7 @@ public class AnalysisService {
         this.userConfigService = userConfigService;
         this.asyncJobService = asyncJobService;
         this.promptGovernanceService = promptGovernanceService;
+        this.analysisHistorySearchIndexService = analysisHistorySearchIndexService;
         this.objectMapper = objectMapper;
         this.streamTaskExecutor = analysisStreamTaskExecutor;
     }
@@ -176,12 +186,31 @@ public class AnalysisService {
             asyncJobService.releaseLock(asyncJob);
             throw new BusinessException(ResultCode.BAD_REQUEST, "chapter content not found");
         }
+        AnalysisInputSignature inputSignature = buildAnalysisInputSignature(promptConfig, analysisType, request.getChapterCount(), chapters);
+        if (forceReanalyze) {
+            enforceForceReanalyzePolicy(request, analysisType, promptConfig, inputSignature);
+            asyncJob = submitForceBookAnalysisJob(jobKey, inputSignature, request, analysisType);
+            if (Boolean.TRUE.equals(asyncJob.getReused())) {
+                AnalysisResultVO waitingResult = waitForReusableBookAnalysis(
+                    request.getPlatform(),
+                    request.getBookId(),
+                    analysisType,
+                    request.getChapterCount(),
+                    promptConfig.getId(),
+                    cacheKey,
+                    inputSignature
+                );
+                if (waitingResult != null) {
+                    return waitingResult;
+                }
+            }
+        }
 
         try {
             AiInvokeResult aiResult = isLangGraphRuntimeEnabled()
                 ? invokeLangGraphBookAnalysis(promptConfig, book, chapters, analysisType)
                 : invokeLegacyBookAnalysis(promptConfig, book, chapters, analysisType, request.getChapterCount());
-            attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size());
+            attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size(), inputSignature);
             Long resultId = saveAnalysisResult(
                 request.getPlatform(),
                 request.getBookId(),
@@ -350,10 +379,29 @@ public class AnalysisService {
                                                          String analysisType) {
         Long userId = AuthUserHolder.get() == null ? null : AuthUserHolder.get().getUserId();
         return asyncJobService.submitOrReuse(
-            "book_analysis",
+            JOB_TYPE_BOOK_ANALYSIS,
             jobKey,
             "analysis:" + request.getBookId() + ":" + analysisType,
             "{\"bookId\":" + request.getBookId() + ",\"analysisType\":\"" + analysisType + "\"}",
+            userId,
+            ASYNC_JOB_LOCK_TTL_SECONDS
+        );
+    }
+
+    private AsyncJobSubmitResponse submitForceBookAnalysisJob(String baseJobKey,
+                                                              AnalysisInputSignature signature,
+                                                              AnalysisRequest request,
+                                                              String analysisType) {
+        Long userId = AuthUserHolder.get() == null ? null : AuthUserHolder.get().getUserId();
+        String jobKey = buildForceReanalyzeJobKey(baseJobKey, signature);
+        return asyncJobService.submitOrReuse(
+            JOB_TYPE_BOOK_ANALYSIS,
+            jobKey,
+            "analysis:" + request.getBookId() + ":" + analysisType,
+            "{\"bookId\":" + request.getBookId()
+                + ",\"analysisType\":\"" + analysisType
+                + "\",\"forceReanalyze\":true"
+                + ",\"signature\":\"" + signature.signature() + "\"}",
             userId,
             ASYNC_JOB_LOCK_TTL_SECONDS
         );
@@ -381,6 +429,16 @@ public class AnalysisService {
                                                          Integer chapterCount,
                                                          Long promptConfigId,
                                                          String cacheKey) {
+        return waitForReusableBookAnalysis(platform, bookId, analysisType, chapterCount, promptConfigId, cacheKey, null);
+    }
+
+    private AnalysisResultVO waitForReusableBookAnalysis(String platform,
+                                                         Long bookId,
+                                                         String analysisType,
+                                                         Integer chapterCount,
+                                                         Long promptConfigId,
+                                                         String cacheKey,
+                                                         AnalysisInputSignature inputSignature) {
         for (int i = 0; i < ASYNC_JOB_WAIT_RETRY_COUNT; i++) {
             AnalysisResultVO persisted = analysisRepository.findLatestReusable(
                     platform,
@@ -392,7 +450,7 @@ public class AnalysisService {
                 )
                 .map(this::toAnalysisResultVO)
                 .orElse(null);
-            if (persisted != null) {
+            if (persisted != null && matchesAnalysisInputSignature(persisted, inputSignature)) {
                 crawlerCacheService.put(cacheKey, persisted, ANALYSIS_TTL_SECONDS);
                 return persisted;
             }
@@ -444,6 +502,60 @@ public class AnalysisService {
             .orElse(null);
     }
 
+    private void enforceForceReanalyzePolicy(AnalysisRequest request,
+                                             String analysisType,
+                                             PromptConfigEntity promptConfig,
+                                             AnalysisInputSignature inputSignature) {
+        AuthUser authUser = AuthUserHolder.get();
+        if (authUser != null && authUser.hasAnyRole(Set.of("ADMIN"))) {
+            return;
+        }
+        List<AnalysisResultEntity> recentResults = analysisRepository.findRecentBookResults(
+            request.getPlatform(),
+            request.getBookId(),
+            analysisType,
+            request.getChapterCount(),
+            promptConfig.getId(),
+            20
+        );
+        if (recentResults.isEmpty()) {
+            return;
+        }
+        AnalysisResultEntity latestSameSignature = recentResults.stream()
+            .filter(entity -> inputSignature.signature().equals(extractAnalysisInputSignature(entity)))
+            .findFirst()
+            .orElse(null);
+        if (latestSameSignature == null) {
+            return;
+        }
+        String baseJobKey = buildBookAnalysisJobKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount());
+        String forceJobKey = buildForceReanalyzeJobKey(baseJobKey, inputSignature);
+        AsyncJobVO latestForceJob = asyncJobService.getLatestJob(JOB_TYPE_BOOK_ANALYSIS, forceJobKey).orElse(null);
+        if (latestForceJob != null && AsyncJobService.STATUS_FAILED.equals(latestForceJob.getStatus())) {
+            return;
+        }
+
+        int maxTimes = systemConfigService.getIntValueOrDefault("analysis.reanalyze.user-max-times", 3);
+        long cooldownHours = systemConfigService.getLongValueOrDefault("analysis.reanalyze.cooldown-hours", 0L);
+        if (maxTimes <= 0) {
+            throw new BusinessException(ResultCode.TOO_MANY_REQUESTS, "reanalyze limit reached");
+        }
+        LocalDateTime windowStart = cooldownHours > 0 ? LocalDateTime.now().minusHours(cooldownHours) : null;
+        Long userId = authUser == null ? null : authUser.getUserId();
+        long successfulForceRuns = asyncJobService.countSuccessfulJobs(
+            JOB_TYPE_BOOK_ANALYSIS,
+            forceJobKey,
+            userId,
+            windowStart
+        );
+        if (successfulForceRuns >= maxTimes) {
+            if (cooldownHours > 0) {
+                throw new BusinessException(ResultCode.TOO_MANY_REQUESTS, "reanalyze cooldown active, please try again later");
+            }
+            throw new BusinessException(ResultCode.TOO_MANY_REQUESTS, "reanalyze limit reached");
+        }
+    }
+
     private java.util.Optional<AnalysisResultEntity> findLatestReusableBookStreamResult(String platform,
                                                                                         Long bookId,
                                                                                         String analysisType,
@@ -487,6 +599,10 @@ public class AnalysisService {
                                            String analysisType,
                                            Integer chapterCount) {
         return "analysis:" + bookId + ":" + analysisType + ":" + chapterCount + ":" + promptConfig.getId() + ":" + resolveRuntimeModelCacheToken(promptConfig);
+    }
+
+    private String buildForceReanalyzeJobKey(String baseJobKey, AnalysisInputSignature signature) {
+        return baseJobKey + ":force:" + signature.signature();
     }
 
     private String buildTrendAnalysisJobKey(PromptConfigEntity promptConfig,
@@ -580,10 +696,16 @@ public class AnalysisService {
     private AnalysisResultVO streamLangGraphBookAnalysis(SseEmitter emitter,
                                                          AnalysisRequest request,
                                                          PromptConfigEntity promptConfig,
-                                                         CrawlBookEntity book,
-                                                         List<ChapterVO> chapters,
-                                                         String analysisType,
-                                                         AiGatewayService.InvocationHandle invocationHandle) {
+                                                          CrawlBookEntity book,
+                                                          List<ChapterVO> chapters,
+                                                          String analysisType,
+                                                          AiGatewayService.InvocationHandle invocationHandle) {
+        AnalysisInputSignature inputSignature = buildAnalysisInputSignature(
+            promptConfig,
+            analysisType,
+            request.getChapterCount(),
+            chapters
+        );
         AnalysisResultVO persisted = findLatestReusableBookStreamResult(
                 request.getPlatform(),
                 request.getBookId(),
@@ -593,53 +715,86 @@ public class AnalysisService {
             )
             .map(this::toAnalysisResultVO)
             .orElse(null);
-        if (persisted != null) {
+        if (!Boolean.TRUE.equals(request.getForceReanalyze()) && persisted != null) {
             sendDeltaEventsUnchecked(emitter, persisted.getResultContent(), invocationHandle);
             return persisted;
         }
-
-        AiInvokeResult aiResult = langGraphWorkerClient.stream(
-            buildLangGraphBookRequest(promptConfig, request.getPlatform(), book, chapters, analysisType, true),
-            delta -> {
-                if (invocationHandle.isCancelled()) {
-                    return;
+        AsyncJobSubmitResponse asyncJob = null;
+        if (Boolean.TRUE.equals(request.getForceReanalyze())) {
+            String jobKey = buildBookAnalysisJobKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount());
+            enforceForceReanalyzePolicy(request, analysisType, promptConfig, inputSignature);
+            asyncJob = submitForceBookAnalysisJob(jobKey, inputSignature, request, analysisType);
+            if (Boolean.TRUE.equals(asyncJob.getReused())) {
+                AnalysisResultVO waitingResult = waitForReusableBookAnalysis(
+                    request.getPlatform(),
+                    request.getBookId(),
+                    analysisType,
+                    request.getChapterCount(),
+                    promptConfig.getId(),
+                    buildAnalysisCacheKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount()),
+                    inputSignature
+                );
+                if (waitingResult != null) {
+                    sendDeltaEventsUnchecked(emitter, waitingResult.getResultContent(), invocationHandle);
+                    return waitingResult;
                 }
-                try {
-                    sendDeltaEvent(emitter, delta, null);
-                } catch (IOException ex) {
-                    invocationHandle.cancel();
-                }
-            },
-            invocationHandle::isCancelled
-        );
-        if (aiResult == null || invocationHandle.isCancelled()) {
-            throw new AnalysisCancelledException();
+            }
         }
-        attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size());
 
-        Long resultId = saveAnalysisResult(
-            request.getPlatform(),
-            request.getBookId(),
-            analysisType,
-            request.getChapterCount(),
-            promptConfig.getId(),
-            aiResult
-        );
+        try {
+            AiInvokeResult aiResult = langGraphWorkerClient.stream(
+                buildLangGraphBookRequest(promptConfig, request.getPlatform(), book, chapters, analysisType, true),
+                delta -> {
+                    if (invocationHandle.isCancelled()) {
+                        return;
+                    }
+                    try {
+                        sendDeltaEvent(emitter, delta, null);
+                    } catch (IOException ex) {
+                        invocationHandle.cancel();
+                    }
+                },
+                invocationHandle::isCancelled
+            );
+            if (aiResult == null || invocationHandle.isCancelled()) {
+                throw new AnalysisCancelledException();
+            }
+            attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size(), inputSignature);
 
-        AnalysisResultVO vo = new AnalysisResultVO();
-        vo.setId(resultId);
-        vo.setBookId(request.getBookId());
-        vo.setAnalysisType(analysisType);
-        vo.setModelName(aiResult.getModelName());
-        vo.setResultContent(aiResult.getContent());
-        vo.setResultJson(aiResult.getResultJson());
-        vo.setTokenUsed(aiResult.getTokenUsed());
-        crawlerCacheService.put(
-            buildAnalysisCacheKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount()),
-            vo,
-            ANALYSIS_TTL_SECONDS
-        );
-        return vo;
+            Long resultId = saveAnalysisResult(
+                request.getPlatform(),
+                request.getBookId(),
+                analysisType,
+                request.getChapterCount(),
+                promptConfig.getId(),
+                aiResult
+            );
+            if (asyncJob != null && Boolean.TRUE.equals(asyncJob.getAcquired())) {
+                asyncJobService.markSuccess(asyncJob.getJobId(), "analysis_result", resultId, shortText(aiResult.getContent(), 120));
+            }
+
+            AnalysisResultVO vo = new AnalysisResultVO();
+            vo.setId(resultId);
+            vo.setBookId(request.getBookId());
+            vo.setAnalysisType(analysisType);
+            vo.setModelName(aiResult.getModelName());
+            vo.setResultContent(aiResult.getContent());
+            vo.setResultJson(aiResult.getResultJson());
+            vo.setTokenUsed(aiResult.getTokenUsed());
+            crawlerCacheService.put(
+                buildAnalysisCacheKey(promptConfig, request.getBookId(), analysisType, request.getChapterCount()),
+                vo,
+                ANALYSIS_TTL_SECONDS
+            );
+            return vo;
+        } catch (RuntimeException ex) {
+            if (asyncJob != null && Boolean.TRUE.equals(asyncJob.getAcquired())) {
+                asyncJobService.markFailed(asyncJob.getJobId(), ex.getMessage());
+            }
+            throw ex;
+        } finally {
+            asyncJobService.releaseLock(asyncJob);
+        }
     }
 
     private AiInvokeResult invokeLangGraphTrendAnalysis(PromptConfigEntity promptConfig,
@@ -976,6 +1131,7 @@ public class AnalysisService {
             promptConfigService.resolveRuntimeCompatiblePrompt(analysisType, governanceResolution.promptConfig())
         );
         selectedModelKey = resolveSelectedModelKeyForRuntime(promptConfig);
+        promptConfig = resolveModelBoundSystemPrompt(analysisType, selectedModelKey, governanceResolution, promptConfig);
         PromptConfigEntity mergedPrompt = promptConfigService.mergeInheritedContractFields(
             promptConfig,
             promptConfigService.findDefaultTemplateForInheritance(analysisType)
@@ -991,6 +1147,37 @@ public class AnalysisService {
         );
         runtimePromptResolutionHolder.set(resolution);
         return resolution.getPromptConfig();
+    }
+
+    private PromptConfigEntity resolveModelBoundSystemPrompt(String analysisType,
+                                                             String selectedModelKey,
+                                                             PromptGovernanceService.Resolution governanceResolution,
+                                                             PromptConfigEntity fallbackPrompt) {
+        if (governanceResolution == null
+            || !isGlobalSystemPromptSource(governanceResolution.effectiveSource())) {
+            return fallbackPrompt;
+        }
+        AiModelRegistryModelVO runtimeModel = systemConfigService.resolveEnabledModel(
+                selectedModelKey,
+                resolvePromptConfiguredModel(fallbackPrompt)
+            )
+            .orElse(null);
+        if (runtimeModel == null || runtimeModel.getPromptBindings() == null) {
+            return fallbackPrompt;
+        }
+        String boundPromptName = runtimeModel.getPromptBindings().get(analysisType);
+        if (boundPromptName == null || boundPromptName.isBlank()) {
+            return fallbackPrompt;
+        }
+        return promptConfigService.resolveRuntimeTemplateByName(analysisType, boundPromptName)
+            .map(boundPrompt -> promptConfigService.resolveRuntimeCompatiblePrompt(analysisType, boundPrompt))
+            .map(promptConfigService::backfillMissingContractFields)
+            .orElse(fallbackPrompt);
+    }
+
+    private boolean isGlobalSystemPromptSource(String effectiveSource) {
+        return PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED.equals(effectiveSource)
+            || PromptGovernanceService.EFFECTIVE_SOURCE_USER_COPY_FALLBACK_TO_GLOBAL.equals(effectiveSource);
     }
 
     private String resolveRuntimeModelCacheToken(PromptConfigEntity promptConfig) {
@@ -1227,6 +1414,14 @@ public class AnalysisService {
         sendEvent(emitter, "delta", payload);
     }
 
+    private void sendProgressEvent(SseEmitter emitter, String phase, String message) throws IOException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("event", "progress");
+        payload.put("phase", phase == null || phase.isBlank() ? "running" : phase);
+        payload.put("message", message);
+        sendEvent(emitter, "progress", payload);
+    }
+
     private void sendDoneEvent(SseEmitter emitter, Object data) throws IOException {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("event", "done");
@@ -1287,17 +1482,21 @@ public class AnalysisService {
     }
 
     private String buildPromptSignature(PromptConfigEntity promptConfig) {
-        return Integer.toHexString(Objects.hash(
-            promptConfig.getId(),
-            promptConfig.getPromptName(),
-            promptConfig.getPromptContent(),
-            promptConfig.getModelName(),
-            promptConfig.getTemperature(),
-            promptConfig.getMaxTokens(),
-            promptConfig.getDifyWorkflowId(),
-            promptConfig.getDifyApiKeyRef(),
-            promptConfig.getUpdateTime()
-        ));
+        if (promptConfig == null) {
+            return "";
+        }
+        String raw = String.join("\n",
+            String.valueOf(promptConfig.getId()),
+            defaultString(promptConfig.getPromptName()),
+            defaultString(promptConfig.getPromptContent()),
+            defaultString(promptConfig.getModelName()),
+            String.valueOf(promptConfig.getTemperature()),
+            String.valueOf(promptConfig.getMaxTokens()),
+            defaultString(promptConfig.getDifyWorkflowId()),
+            defaultString(promptConfig.getDifyApiKeyRef()),
+            String.valueOf(promptConfig.getUpdateTime())
+        );
+        return sha256(raw);
     }
 
     private String buildBookInputText(CrawlBookEntity book, List<ChapterVO> chapters) {
@@ -1314,7 +1513,8 @@ public class AnalysisService {
 
     private void attachBookAnalysisMeta(AiInvokeResult aiResult,
                                         Integer requestedChapterCount,
-                                        int actualChapterCount) {
+                                        int actualChapterCount,
+                                        AnalysisInputSignature inputSignature) {
         if (aiResult == null) {
             return;
         }
@@ -1329,7 +1529,88 @@ public class AnalysisService {
         resultJson.put("inputChapterCount", actualChapterCount);
         resultJson.put("chapterFetchDegraded",
             requestedChapterCount != null && requestedChapterCount > actualChapterCount);
+        if (inputSignature != null) {
+            resultJson.put("analysisInputSignature", inputSignature.toResultJson());
+        }
         aiResult.setResultJson(resultJson);
+    }
+
+    private AnalysisInputSignature buildAnalysisInputSignature(PromptConfigEntity promptConfig,
+                                                               String analysisType,
+                                                               Integer requestedChapterCount,
+                                                               List<ChapterVO> chapters) {
+        String runtimeModel = resolveRuntimeModelCacheToken(promptConfig);
+        String promptSignature = buildPromptSignature(promptConfig);
+        List<Map<String, Object>> chapterFingerprints = new ArrayList<>();
+        StringBuilder raw = new StringBuilder();
+        raw.append("analysisType=").append(defaultString(analysisType)).append('\n');
+        raw.append("requestedChapterCount=").append(requestedChapterCount == null ? 0 : requestedChapterCount).append('\n');
+        raw.append("promptConfigId=").append(promptConfig == null ? "" : promptConfig.getId()).append('\n');
+        raw.append("promptSignature=").append(promptSignature).append('\n');
+        raw.append("runtimeModel=").append(defaultString(runtimeModel)).append('\n');
+        if (chapters != null) {
+            for (ChapterVO chapter : chapters) {
+                String contentHash = sha256(defaultString(chapter.getContent()));
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("chapterNo", chapter.getChapterNo());
+                item.put("chapterTitle", chapter.getChapterTitle());
+                item.put("wordCount", chapter.getWordCount());
+                item.put("sourceWordCount", chapter.getSourceWordCount());
+                item.put("contentHash", contentHash);
+                chapterFingerprints.add(item);
+                raw.append("chapter|")
+                    .append(chapter.getChapterNo()).append('|')
+                    .append(defaultString(chapter.getChapterTitle())).append('|')
+                    .append(chapter.getWordCount()).append('|')
+                    .append(chapter.getSourceWordCount()).append('|')
+                    .append(contentHash).append('\n');
+            }
+        }
+        return new AnalysisInputSignature(
+            sha256(raw.toString()),
+            promptConfig == null ? null : promptConfig.getId(),
+            promptSignature,
+            runtimeModel,
+            chapters == null ? 0 : chapters.size(),
+            chapterFingerprints
+        );
+    }
+
+    private String extractAnalysisInputSignature(AnalysisResultEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        Map<String, Object> resultJson = readResultJson(entity.getResultJson(), entity.getAnalysisType());
+        Object rawSignature = resultJson.get("analysisInputSignature");
+        if (rawSignature instanceof Map<?, ?> signatureMap) {
+            Object signature = signatureMap.get("signature");
+            return signature == null ? null : String.valueOf(signature);
+        }
+        return null;
+    }
+
+    private boolean matchesAnalysisInputSignature(AnalysisResultVO result, AnalysisInputSignature inputSignature) {
+        if (inputSignature == null) {
+            return true;
+        }
+        if (result == null || result.getResultJson() == null) {
+            return false;
+        }
+        Object rawSignature = result.getResultJson().get("analysisInputSignature");
+        if (rawSignature instanceof Map<?, ?> signatureMap) {
+            Object signature = signatureMap.get("signature");
+            return inputSignature.signature().equals(signature == null ? null : String.valueOf(signature));
+        }
+        return false;
+    }
+
+    private String sha256(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(defaultString(value).getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception ex) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "analysis signature failed");
+        }
     }
 
     private void attachPromptRuntimeMeta(Map<String, Object> resultJson, PromptConfigEntity promptConfig) {
@@ -1774,7 +2055,7 @@ public class AnalysisService {
             progress -> {
                 try {
                     ensureNotCancelled(invocationHandle);
-                    sendDeltaEvent(emitter, progress, null);
+                    sendProgressEvent(emitter, "chunk", progress);
                 } catch (IOException ex) {
                     invocationHandle.cancel();
                     throw new AnalysisCancelledException();
@@ -1783,7 +2064,12 @@ public class AnalysisService {
             invocationHandle
         );
         ensureNotCancelled(invocationHandle);
-        attachBookAnalysisMeta(aiResult, request.getChapterCount(), chapters.size());
+        attachBookAnalysisMeta(
+            aiResult,
+            request.getChapterCount(),
+            chapters.size(),
+            buildAnalysisInputSignature(promptConfig, analysisType, request.getChapterCount(), chapters)
+        );
 
         Long resultId = saveAnalysisResult(
             request.getPlatform(),
@@ -1944,7 +2230,7 @@ public class AnalysisService {
         AuthUser authUser = AuthUserHolder.get();
         Long userId = authUser == null ? null : authUser.getUserId();
         long costTime = resolveCostTime(aiResult);
-        return analysisRepository.save(
+        Long resultId = analysisRepository.save(
             userId,
             platform,
             bookId,
@@ -1960,6 +2246,8 @@ public class AnalysisService {
             aiResult.getTokenUsed(),
             costTime
         );
+        analysisHistorySearchIndexService.indexResultAsyncSafe(resultId);
+        return resultId;
     }
 
     private TrendAnalysisVO buildTrendAnalysisVO(RankBoardEntity board,
@@ -2360,6 +2648,24 @@ public class AnalysisService {
     }
 
     private record ChunkAnalysisOutcome(int index, List<ChapterVO> chunk, AiInvokeResult result) {
+    }
+
+    private record AnalysisInputSignature(String signature,
+                                          Long promptConfigId,
+                                          String promptSignature,
+                                          String runtimeModel,
+                                          int actualChapterCount,
+                                          List<Map<String, Object>> chapters) {
+        Map<String, Object> toResultJson() {
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put("signature", signature);
+            value.put("promptConfigId", promptConfigId);
+            value.put("promptSignature", promptSignature);
+            value.put("runtimeModel", runtimeModel);
+            value.put("actualChapterCount", actualChapterCount);
+            value.put("chapters", chapters == null ? List.of() : chapters);
+            return value;
+        }
     }
 
     private static final class AnalysisCancelledException extends RuntimeException {

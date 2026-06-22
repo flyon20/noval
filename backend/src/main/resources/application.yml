@@ -4,6 +4,17 @@ server:
 spring:
   application:
     name: novel-analyzer-backend
+  rabbitmq:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:noval}
+    password: ${RABBITMQ_PASSWORD:CHANGE_ME_WITH_A_STRONG_RABBITMQ_PASSWORD}
+    virtual-host: ${RABBITMQ_VIRTUAL_HOST:/}
+    listener:
+      simple:
+        concurrency: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
+        max-concurrency: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
+        prefetch: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:novel_analyzer}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: ${MYSQL_USER:root}
@@ -16,7 +27,7 @@ spring:
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
-      timeout: 3s
+      timeout: ${SPRING_DATA_REDIS_TIMEOUT:15s}
 
 mybatis-plus:
   global-config:
@@ -105,6 +116,17 @@ app:
     internal-api-key: ${CRAWLER_INTERNAL_API_KEY:}
     connect-timeout-millis: ${CRAWLER_CONNECT_TIMEOUT_MILLIS:5000}
     read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:60000}
+    rank-backfill:
+      enabled: ${CRAWLER_RANK_BACKFILL_ENABLED:true}
+      cron: "${CRAWLER_RANK_BACKFILL_CRON:0 15 2 * * ?}"
+      platform: ${CRAWLER_RANK_BACKFILL_PLATFORM:fanqie}
+      refresh-days: ${CRAWLER_RANK_BACKFILL_REFRESH_DAYS:7}
+      batch-size: ${CRAWLER_RANK_BACKFILL_BATCH_SIZE:20}
+      rank-fetch-count: ${CRAWLER_RANK_BACKFILL_FETCH_COUNT:50}
+    rank-catalog-sync:
+      enabled: ${CRAWLER_RANK_CATALOG_SYNC_ENABLED:true}
+      cron: "${CRAWLER_RANK_CATALOG_SYNC_CRON:0 35 2 1 * ?}"
+      platform: ${CRAWLER_RANK_CATALOG_SYNC_PLATFORM:fanqie}
   knowledge:
     qdrant:
       base-url: ${KNOWLEDGE_QDRANT_BASE_URL:http://127.0.0.1:6333}
@@ -119,6 +141,28 @@ app:
     index:
       max-chapters: ${KNOWLEDGE_INDEX_MAX_CHAPTERS:10}
       max-active-jobs: ${KNOWLEDGE_INDEX_MAX_ACTIVE_JOBS:1}
+      chunk-target-chars: ${KNOWLEDGE_INDEX_CHUNK_TARGET_CHARS:1000}
+      chunk-overlap-chars: ${KNOWLEDGE_INDEX_CHUNK_OVERLAP_CHARS:160}
+      queue-enabled: ${KNOWLEDGE_INDEX_QUEUE_ENABLED:true}
+      worker-concurrency: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
+      max-retries: ${KNOWLEDGE_INDEX_MAX_RETRIES:3}
+      visibility-timeout-seconds: ${KNOWLEDGE_INDEX_VISIBILITY_TIMEOUT_SECONDS:600}
+      retry-backoff-seconds: "${KNOWLEDGE_INDEX_RETRY_BACKOFF_SECONDS:30,120,600}"
+      rabbit:
+        exchange: ${KNOWLEDGE_INDEX_RABBIT_EXCHANGE:noval.knowledge.index}
+        queue: ${KNOWLEDGE_INDEX_RABBIT_QUEUE:noval.knowledge.index.book}
+        routing-key: ${KNOWLEDGE_INDEX_RABBIT_ROUTING_KEY:knowledge.index.book}
+        retry-exchange: ${KNOWLEDGE_INDEX_RABBIT_RETRY_EXCHANGE:noval.knowledge.index.retry}
+        retry-routing-key-prefix: ${KNOWLEDGE_INDEX_RABBIT_RETRY_ROUTING_KEY_PREFIX:knowledge.index.book.retry}
+        dead-letter-exchange: ${KNOWLEDGE_INDEX_RABBIT_DEAD_LETTER_EXCHANGE:noval.knowledge.index.dlx}
+        dead-letter-queue: ${KNOWLEDGE_INDEX_RABBIT_DEAD_LETTER_QUEUE:noval.knowledge.index.book.dlq}
+        dead-letter-routing-key: ${KNOWLEDGE_INDEX_RABBIT_DEAD_LETTER_ROUTING_KEY:knowledge.index.book.dlq}
+      rank-incremental-enabled: ${KNOWLEDGE_RANK_INCREMENTAL_ENABLED:true}
+      rank-incremental-cron: "${KNOWLEDGE_RANK_INCREMENTAL_CRON:0 20 3 * * ?}"
+      rank-incremental-limit: ${KNOWLEDGE_RANK_INCREMENTAL_LIMIT:500}
+      chapter-missing-enabled: ${KNOWLEDGE_CHAPTER_MISSING_ENABLED:false}
+      chapter-missing-cron: "${KNOWLEDGE_CHAPTER_MISSING_CRON:0 50 3 * * ?}"
+      chapter-missing-limit: ${KNOWLEDGE_CHAPTER_MISSING_LIMIT:100}
   ai:
     provider-type: ${AI_PROVIDER_TYPE:openai-compatible}
     dify-base-url: ${DIFY_BASE_URL:https://api.dify.ai/v1}

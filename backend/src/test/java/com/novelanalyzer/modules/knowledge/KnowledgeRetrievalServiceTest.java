@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,6 +36,8 @@ import static org.mockito.Mockito.when;
         "app.auth.jwt-secret=test-jwt-secret-with-enough-length-1234567890",
         "app.crawler.internal-api-key=crawler-internal-api-key-with-enough-length-1234567890",
         "app.ai.langgraph-worker.internal-api-key=langgraph-internal-key-with-enough-length-1234567890",
+        "app.knowledge.index.queue-enabled=false",
+        "app.knowledge.index.rank-incremental-enabled=false",
         "app.knowledge.embedding.api-key=test-embedding-key"
     }
 )
@@ -119,6 +122,164 @@ class KnowledgeRetrievalServiceTest {
         verify(qdrantClient).ensureCollection();
     }
 
+    @Test
+    void shouldFallbackToCrawledChaptersWhenChapterVectorSearchReturnsEmptyForBook() {
+        long bookId = insertBook();
+        insertCrawledChapter(bookId, 1, "第一章 直播曝光", "妹妹直播时拍到主角收藏的古物，弹幕质疑主角真实身份。");
+        insertCrawledChapter(bookId, 2, "第二章 热搜爆发", "专家认出传国玉玺和恐龙蛋，全球网友开始追问长生秘密。");
+        when(embeddingClient.embed("前三章 金手指 钩子")).thenReturn(List.of(0.1, 0.2, 0.3));
+        doNothing().when(qdrantClient).ensureCollection();
+        when(qdrantClient.search(
+            eq(List.of(0.1, 0.2, 0.3)),
+            eq(Map.of("bookId", bookId, "platform", "fanqie", "sourceType", "CHAPTER")),
+            eq(5)
+        )).thenReturn(List.of());
+
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("前三章 金手指 钩子");
+        request.setBookId(bookId);
+        request.setPlatform("fanqie");
+        request.setSourceType("CHAPTER");
+        request.setLimit(5);
+
+        var results = knowledgeRetrievalService.search(request);
+
+        assertThat(results).hasSize(2);
+        assertThat(results.get(0).getBookId()).isEqualTo(bookId);
+        assertThat(results.get(0).getSourceType()).isEqualTo("CHAPTER");
+        assertThat(results.get(0).getChapterNo()).isEqualTo(1);
+        assertThat(results.get(0).getTitle()).isEqualTo("第一章 直播曝光");
+        assertThat(results.get(0).getPreview()).contains("妹妹直播");
+        assertThat(results.get(1).getChapterNo()).isEqualTo(2);
+    }
+
+    @Test
+    void shouldFallbackToLexicalKnowledgeChunksWhenVectorSearchReturnsEmpty() {
+        long bookId = insertBook();
+        long documentId = insertDocument(bookId, "Urban Brainhole Trend", "ANALYSIS", 2002L);
+        long chunkId = insertChunk(
+            documentId,
+            bookId,
+            "lexical-point-1",
+            "analysis-1",
+            "ANALYSIS",
+            2002L,
+            null,
+            "trend",
+            "Life simulator counterattack topic has strong feedback and opening hooks."
+        );
+        when(embeddingClient.embed("life simulator counterattack")).thenReturn(List.of(0.1, 0.2, 0.3));
+        doNothing().when(qdrantClient).ensureCollection();
+        when(qdrantClient.search(
+            eq(List.of(0.1, 0.2, 0.3)),
+            eq(Map.of("bookId", bookId, "platform", "fanqie", "sourceType", "ANALYSIS", "analysisType", "trend")),
+            eq(5)
+        )).thenReturn(List.of());
+
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("life simulator counterattack");
+        request.setBookId(bookId);
+        request.setPlatform("fanqie");
+        request.setSourceType("ANALYSIS");
+        request.setAnalysisType("trend");
+        request.setLimit(5);
+
+        var results = knowledgeRetrievalService.search(request);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getChunkId()).isEqualTo(chunkId);
+        assertThat(results.get(0).getBookId()).isEqualTo(bookId);
+        assertThat(results.get(0).getSourceType()).isEqualTo("ANALYSIS");
+        assertThat(results.get(0).getAnalysisType()).isEqualTo("trend");
+        assertThat(results.get(0).getScore()).isGreaterThanOrEqualTo(0.4d);
+        assertThat(results.get(0).getPreview()).contains("Life simulator");
+    }
+
+    @Test
+    void shouldFallbackToLexicalKnowledgeChunksWhenEmbeddingProviderFails() {
+        long bookId = insertBook();
+        long documentId = insertDocument(bookId, "Simulator Outline", "ANALYSIS", 2003L);
+        long chunkId = insertChunk(
+            documentId,
+            bookId,
+            "lexical-point-embedding-failed",
+            "analysis-embedding-failed",
+            "ANALYSIS",
+            2003L,
+            null,
+            "trend",
+            "Simulator counterattack outline evidence remains searchable without vector embedding."
+        );
+        when(embeddingClient.embed("simulator counterattack outline"))
+            .thenThrow(new RuntimeException("embedding provider unavailable"));
+
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("simulator counterattack outline");
+        request.setBookId(bookId);
+        request.setPlatform("fanqie");
+        request.setSourceType("ANALYSIS");
+        request.setAnalysisType("trend");
+        request.setLimit(5);
+
+        var results = knowledgeRetrievalService.search(request);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getChunkId()).isEqualTo(chunkId);
+        assertThat(results.get(0).getSourceType()).isEqualTo("ANALYSIS");
+        assertThat(results.get(0).getPreview()).contains("Simulator counterattack");
+        verify(qdrantClient, never()).ensureCollection();
+        verify(qdrantClient, never()).search(any(), any(), any(Integer.class));
+    }
+
+    @Test
+    void shouldFilterQdrantResultsBelowRequestedMinScore() {
+        long bookId = insertBook();
+        long documentId = insertDocument(bookId);
+        long strongChunkId = insertChunk(documentId, bookId, "chunk-point-strong", "chapter-1-1");
+        long weakChunkId = insertChunk(documentId, bookId, "chunk-point-weak", "chapter-1-2");
+        when(embeddingClient.embed("trend signal")).thenReturn(List.of(0.1, 0.2, 0.3));
+        doNothing().when(qdrantClient).ensureCollection();
+        when(qdrantClient.search(any(), eq(Map.of()), eq(5))).thenReturn(List.of(
+            new QdrantClient.SearchResult("chunk-point-strong", 0.82, Map.of("chunkId", strongChunkId)),
+            new QdrantClient.SearchResult("chunk-point-weak", 0.41, Map.of("chunkId", weakChunkId))
+        ));
+
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("trend signal");
+        request.setLimit(5);
+        request.setMinScore(0.6);
+
+        var results = knowledgeRetrievalService.search(request);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getChunkId()).isEqualTo(strongChunkId);
+        assertThat(results.get(0).getScore()).isEqualTo(0.82);
+    }
+
+    @Test
+    void shouldApplyDefaultMinScoreWhenRequestDoesNotSpecifyOne() {
+        long bookId = insertBook();
+        long documentId = insertDocument(bookId);
+        long strongChunkId = insertChunk(documentId, bookId, "chunk-point-default-strong", "chapter-1-strong");
+        long weakChunkId = insertChunk(documentId, bookId, "chunk-point-default-weak", "chapter-1-weak");
+        when(embeddingClient.embed("default threshold query")).thenReturn(List.of(0.1, 0.2, 0.3));
+        doNothing().when(qdrantClient).ensureCollection();
+        when(qdrantClient.search(any(), eq(Map.of()), eq(5))).thenReturn(List.of(
+            new QdrantClient.SearchResult("chunk-point-default-strong", 0.52, Map.of("chunkId", strongChunkId)),
+            new QdrantClient.SearchResult("chunk-point-default-weak", 0.19, Map.of("chunkId", weakChunkId))
+        ));
+
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("default threshold query");
+        request.setLimit(5);
+
+        var results = knowledgeRetrievalService.search(request);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getChunkId()).isEqualTo(strongChunkId);
+        assertThat(results.get(0).getScore()).isEqualTo(0.52);
+    }
+
     private long insertBook() {
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update(
@@ -130,30 +291,80 @@ class KnowledgeRetrievalServiceTest {
     }
 
     private long insertDocument(long bookId) {
+        return insertDocument(bookId, "Chapter 1", "CHAPTER", 1001L);
+    }
+
+    private long insertDocument(long bookId, String title, String sourceType, long sourceRefId) {
         jdbcTemplate.update(
             "INSERT INTO knowledge_document(source_type, source_ref_id, platform, book_id, title, status, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            "CHAPTER", 1001L, "fanqie", bookId, "Chapter 1", "INDEXED", 0
+            sourceType, sourceRefId, "fanqie", bookId, title, "INDEXED", 0
         );
-        return jdbcTemplate.queryForObject("SELECT id FROM knowledge_document WHERE book_id = ?", Long.class, bookId);
+        return jdbcTemplate.queryForObject(
+            "SELECT id FROM knowledge_document WHERE book_id = ? AND source_type = ? AND source_ref_id = ?",
+            Long.class,
+            bookId,
+            sourceType,
+            sourceRefId
+        );
     }
 
     private long insertChunk(long documentId, long bookId, String pointId) {
+        return insertChunk(documentId, bookId, pointId, "chapter-1-1");
+    }
+
+    private long insertChunk(long documentId, long bookId, String pointId, String chunkKey) {
+        return insertChunk(
+            documentId,
+            bookId,
+            pointId,
+            chunkKey,
+            "CHAPTER",
+            1001L,
+            1,
+            "deconstruct",
+            "Book: Retrieval Test Book\nhero goal appears in chapter one."
+        );
+    }
+
+    private long insertChunk(long documentId,
+                             long bookId,
+                             String pointId,
+                             String chunkKey,
+                             String sourceType,
+                             Long sourceRefId,
+                             Integer chapterNo,
+                             String analysisType,
+                             String chunkText) {
         jdbcTemplate.update(
             "INSERT INTO knowledge_chunk(document_id, chunk_key, source_type, source_ref_id, book_id, chapter_no, analysis_type, content_hash, chunk_text, token_count, vector_status, qdrant_point_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             documentId,
-            "chapter-1-1",
-            "CHAPTER",
-            1001L,
+            chunkKey,
+            sourceType,
+            sourceRefId,
             bookId,
-            1,
-            "deconstruct",
-            "hash-1",
-            "Book: Retrieval Test Book\nhero goal appears in chapter one.",
+            chapterNo,
+            analysisType,
+            "hash-" + chunkKey,
+            chunkText,
             20,
             "INDEXED",
             pointId,
             0
         );
         return jdbcTemplate.queryForObject("SELECT id FROM knowledge_chunk WHERE qdrant_point_id = ?", Long.class, pointId);
+    }
+
+    private void insertCrawledChapter(long bookId, int chapterNo, String title, String content) {
+        jdbcTemplate.update(
+            "INSERT INTO crawl_chapter(platform, book_id, chapter_no, chapter_title, content, word_count, source_word_count, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "fanqie",
+            bookId,
+            chapterNo,
+            title,
+            content,
+            content.length(),
+            content.length(),
+            0
+        );
     }
 }

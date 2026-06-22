@@ -1,4 +1,11 @@
 import { registerServiceWorker } from '../register-sw';
+import { ElMessageBox } from 'element-plus';
+
+vi.mock('element-plus', () => ({
+  ElMessageBox: {
+    confirm: vi.fn(),
+  },
+}));
 
 describe('registerServiceWorker', () => {
   const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -26,6 +33,7 @@ describe('registerServiceWorker', () => {
       Reflect.deleteProperty(globalThis, 'navigator');
     }
     vi.unstubAllEnvs();
+    vi.clearAllMocks();
   });
 
   test('skips registration outside production build', async () => {
@@ -64,6 +72,44 @@ describe('registerServiceWorker', () => {
     registerServiceWorker();
     await Promise.resolve();
     expect(register).toHaveBeenCalledWith('/sw.js');
+  });
+
+  test('prompts user to activate a waiting update', async () => {
+    vi.stubEnv('DEV', false as unknown as string);
+    vi.stubEnv('PROD', true as unknown as string);
+    vi.stubEnv('VITE_DISABLE_SW', 'false');
+
+    const postMessage = vi.fn();
+    const register = vi.fn().mockResolvedValue({
+      waiting: {
+        postMessage,
+      },
+      addEventListener: vi.fn(),
+    });
+    Object.defineProperty(globalThis.navigator, 'serviceWorker', {
+      value: {
+        controller: {},
+        register,
+        addEventListener: vi.fn(),
+      },
+      configurable: true,
+      writable: true,
+    });
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm');
+
+    registerServiceWorker();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+      '发现新版本，是否立即更新？',
+      '新版本可用',
+      expect.objectContaining({
+        confirmButtonText: '立即更新',
+        cancelButtonText: '稍后再说',
+      }),
+    );
+    expect(postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' });
   });
 
   test('skips when navigator unavailable', () => {

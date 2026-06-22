@@ -4,6 +4,10 @@ spring:
       encoding: UTF-8
 
 app:
+  knowledge:
+    index:
+      queue-enabled: false
+      rank-incremental-enabled: false
   cloudflare:
     turnstile:
       enabled: false

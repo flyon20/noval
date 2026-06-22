@@ -2,6 +2,8 @@ package com.novelanalyzer.modules.data.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.novelanalyzer.common.context.AuthUser;
+import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.utils.TrendResultJsonUtils;
@@ -12,6 +14,9 @@ import com.novelanalyzer.modules.crawler.model.RankBoardEntity;
 import com.novelanalyzer.modules.crawler.model.RankSnapshotEntity;
 import com.novelanalyzer.modules.data.repository.DataQueryRepository;
 import com.novelanalyzer.modules.data.vo.AnalysisHistoryItemVO;
+import com.novelanalyzer.modules.data.vo.AnalysisHistoryPageVO;
+import com.novelanalyzer.modules.data.vo.AnalysisHistorySearchMeta;
+import com.novelanalyzer.modules.data.vo.AnalysisHistorySummaryVO;
 import com.novelanalyzer.modules.data.vo.HotBookVO;
 import com.novelanalyzer.modules.data.vo.InsightCardVO;
 import com.novelanalyzer.modules.data.vo.RankSnapshotVO;
@@ -22,6 +27,8 @@ import com.novelanalyzer.modules.data.vo.ThemeWordCloudItemVO;
 import com.novelanalyzer.modules.data.vo.VisualDataVO;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -34,6 +41,8 @@ import java.util.stream.Collectors;
 public class DataQueryService {
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final int HISTORY_PREVIEW_LIMIT = 120;
+    private static final int MAX_HISTORY_PAGE = 10_000;
 
     private final DataQueryRepository dataQueryRepository;
     private final ObjectMapper objectMapper;
@@ -43,13 +52,64 @@ public class DataQueryService {
         this.objectMapper = objectMapper;
     }
 
-    public List<AnalysisHistoryItemVO> getHistory(String platform, Long bookId, String analysisType, Integer limit) {
-        int size = normalizeLimit(limit, 20, 50);
-        List<AnalysisResultEntity> results = dataQueryRepository.findHistory(platform, bookId, analysisType, size);
+    public AnalysisHistoryPageVO getHistory(
+        String platform,
+        Long bookId,
+        String analysisType,
+        String channelCode,
+        String boardCode,
+        Integer chapterCount,
+        String modelName,
+        String keyword,
+        String startTime,
+        String endTime,
+        Integer page,
+        Integer pageSize
+    ) {
+        int safePage = normalizePage(page);
+        int safePageSize = normalizeLimit(pageSize, 20, 50);
+        DataQueryRepository.HistorySearchCriteria criteria = new DataQueryRepository.HistorySearchCriteria(
+            platform,
+            bookId,
+            analysisType,
+            channelCode,
+            boardCode,
+            chapterCount,
+            modelName,
+            keyword,
+            parseDateTime(startTime),
+            parseDateTime(endTime),
+            currentUserFilter()
+        );
+        long total = dataQueryRepository.countHistory(criteria);
+        List<AnalysisResultEntity> results = total == 0
+            ? List.of()
+            : dataQueryRepository.findHistory(criteria, safePage, safePageSize);
         Map<Long, CrawlBookEntity> bookMap = dataQueryRepository.findBookMap(
             results.stream().map(AnalysisResultEntity::getBookId).filter(Objects::nonNull).distinct().toList()
         );
-        return results.stream().map(item -> toHistoryItem(item, bookMap.get(item.getBookId()))).toList();
+        Map<Long, AnalysisHistorySearchMeta> searchMetaMap = dataQueryRepository.findHistorySearchMetaMap(
+            keyword,
+            results.stream().map(AnalysisResultEntity::getId).filter(Objects::nonNull).toList()
+        );
+        AnalysisHistoryPageVO vo = new AnalysisHistoryPageVO();
+        vo.setItems(results.stream()
+            .map(item -> toHistorySummary(item, bookMap.get(item.getBookId()), searchMetaMap.get(item.getId())))
+            .toList());
+        vo.setPage(safePage);
+        vo.setPageSize(safePageSize);
+        vo.setTotal(total);
+        vo.setHasNext((long) safePage * safePageSize < total);
+        return vo;
+    }
+
+    public AnalysisHistoryItemVO getHistoryDetail(Long id) {
+        AnalysisResultEntity entity = dataQueryRepository.findHistoryDetail(id, currentUserFilter())
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "analysis history not found"));
+        CrawlBookEntity book = entity.getBookId() == null
+            ? null
+            : dataQueryRepository.findBookMap(List.of(entity.getBookId())).get(entity.getBookId());
+        return toHistoryItem(entity, book);
     }
 
     public VisualDataVO getVisualData(String platform, String channelCode, String boardCode) {
@@ -119,16 +179,53 @@ public class DataQueryService {
 
     private AnalysisHistoryItemVO toHistoryItem(AnalysisResultEntity entity, CrawlBookEntity book) {
         AnalysisHistoryItemVO vo = new AnalysisHistoryItemVO();
+        fillHistorySummaryFields(vo, entity, book);
+        vo.setResultContent(entity.getResultContent());
+        vo.setResultJson(readResultJson(entity.getResultJson()));
+        return vo;
+    }
+
+    private AnalysisHistorySummaryVO toHistorySummary(AnalysisResultEntity entity, CrawlBookEntity book, AnalysisHistorySearchMeta searchMeta) {
+        AnalysisHistorySummaryVO vo = new AnalysisHistorySummaryVO();
+        fillHistorySummaryFields(vo, entity, book);
+        if (searchMeta != null) {
+            vo.setMatchedFields(searchMeta.getMatchedFields());
+            vo.setMatchSnippets(searchMeta.getMatchSnippets());
+            vo.setMatchScore(searchMeta.getMatchScore());
+        }
+        return vo;
+    }
+
+    private void fillHistorySummaryFields(AnalysisHistorySummaryVO vo, AnalysisResultEntity entity, CrawlBookEntity book) {
         vo.setId(entity.getId());
         vo.setBookId(entity.getBookId());
         vo.setBookName(book == null ? null : book.getBookName());
         vo.setAnalysisType(entity.getAnalysisType());
         vo.setChapterCount(entity.getChapterCount());
         vo.setModelName(entity.getModelName());
-        vo.setResultContent(entity.getResultContent());
-        vo.setResultJson(readResultJson(entity.getResultJson()));
+        vo.setChannelCode(entity.getChannelCode());
+        vo.setBoardCode(entity.getBoardCode());
+        vo.setSnapshotId(entity.getSnapshotId());
+        vo.setTokenUsed(entity.getTokenUsed());
+        vo.setCostTime(entity.getCostTime());
+        vo.setSummaryPreview(shortText(stripMarkdown(entity.getResultContent()), HISTORY_PREVIEW_LIMIT));
         vo.setCreatedAt(entity.getCreateTime() == null ? null : entity.getCreateTime().format(DATE_TIME_FORMATTER));
-        return vo;
+    }
+
+    private void fillHistorySummaryFields(AnalysisHistoryItemVO vo, AnalysisResultEntity entity, CrawlBookEntity book) {
+        vo.setId(entity.getId());
+        vo.setBookId(entity.getBookId());
+        vo.setBookName(book == null ? null : book.getBookName());
+        vo.setAnalysisType(entity.getAnalysisType());
+        vo.setChapterCount(entity.getChapterCount());
+        vo.setModelName(entity.getModelName());
+        vo.setChannelCode(entity.getChannelCode());
+        vo.setBoardCode(entity.getBoardCode());
+        vo.setSnapshotId(entity.getSnapshotId());
+        vo.setTokenUsed(entity.getTokenUsed());
+        vo.setCostTime(entity.getCostTime());
+        vo.setSummaryPreview(shortText(stripMarkdown(entity.getResultContent()), HISTORY_PREVIEW_LIMIT));
+        vo.setCreatedAt(entity.getCreateTime() == null ? null : entity.getCreateTime().format(DATE_TIME_FORMATTER));
     }
 
     private List<RankSnapshotVO> toLatestSnapshots(List<RankSnapshotEntity> snapshots,
@@ -250,6 +347,37 @@ public class DataQueryService {
         return Math.min(limit, maxValue);
     }
 
+    private int normalizePage(Integer page) {
+        if (page == null || page <= 0) {
+            return 1;
+        }
+        return Math.min(page, MAX_HISTORY_PAGE);
+    }
+
+    private LocalDateTime parseDateTime(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim();
+        try {
+            return LocalDateTime.parse(normalized, DATE_TIME_FORMATTER);
+        } catch (DateTimeParseException ignored) {
+            try {
+                return LocalDateTime.parse(normalized);
+            } catch (DateTimeParseException ex) {
+                throw new BusinessException(ResultCode.BAD_REQUEST, "invalid datetime format");
+            }
+        }
+    }
+
+    private Long currentUserFilter() {
+        AuthUser authUser = AuthUserHolder.get();
+        if (authUser == null || authUser.hasAnyRole(java.util.Set.of("ADMIN"))) {
+            return null;
+        }
+        return authUser.getUserId();
+    }
+
     private Map<String, Object> readResultJson(String resultJson) {
         if (resultJson == null || resultJson.isBlank()) {
             return Map.of();
@@ -369,5 +497,14 @@ public class DataQueryService {
             return normalized;
         }
         return normalized.substring(0, limit).trim() + "...";
+    }
+
+    private String stripMarkdown(String value) {
+        if (value == null) {
+            return null;
+        }
+        return value
+            .replaceAll("(?s)```.*?```", " ")
+            .replaceAll("[#>*_`\\-\\[\\]()]", " ");
     }
 }

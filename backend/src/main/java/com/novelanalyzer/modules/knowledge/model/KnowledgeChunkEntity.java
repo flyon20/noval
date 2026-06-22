@@ -33,6 +33,12 @@ public class KnowledgeChunkEntity {
     private String chunkText;
     @TableField("token_count")
     private Integer tokenCount;
+    @TableField("chunk_strategy_version")
+    private String chunkStrategyVersion;
+    @TableField("embedding_model")
+    private String embeddingModel;
+    @TableField("embedding_dimension")
+    private Integer embeddingDimension;
     @TableField("vector_status")
     private String vectorStatus;
     @TableField("qdrant_point_id")
@@ -130,6 +136,30 @@ public class KnowledgeChunkEntity {
 
     public void setTokenCount(Integer tokenCount) {
         this.tokenCount = tokenCount;
+    }
+
+    public String getChunkStrategyVersion() {
+        return chunkStrategyVersion;
+    }
+
+    public void setChunkStrategyVersion(String chunkStrategyVersion) {
+        this.chunkStrategyVersion = chunkStrategyVersion;
+    }
+
+    public String getEmbeddingModel() {
+        return embeddingModel;
+    }
+
+    public void setEmbeddingModel(String embeddingModel) {
+        this.embeddingModel = embeddingModel;
+    }
+
+    public Integer getEmbeddingDimension() {
+        return embeddingDimension;
+    }
+
+    public void setEmbeddingDimension(Integer embeddingDimension) {
+        this.embeddingDimension = embeddingDimension;
     }
 
     public String getVectorStatus() {

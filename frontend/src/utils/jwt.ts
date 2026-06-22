@@ -41,6 +41,7 @@ export function buildAuthSession(
   return {
     userId: claims.uid,
     username: claims.username,
+    phone: claims.phone,
     roles: parseRoles(claims.roles),
     accessToken: response.accessToken,
     tokenType: response.tokenType,
@@ -67,6 +68,7 @@ export function buildAuthSessionFromSnapshot(
   return {
     userId: claims.uid,
     username: claims.username,
+    phone: claims.phone,
     roles: parseRoles(claims.roles),
     accessToken: snapshot.accessToken,
     tokenType: snapshot.tokenType as 'Bearer',

@@ -15,6 +15,34 @@ describe('AppShell', () => {
     expect(source).toContain('backdrop-filter: none;');
   });
 
+  test('keeps desktop sidebar fixed while preserving mobile hidden navigation', () => {
+    const shellSource = fs.readFileSync(path.resolve(__dirname, '../AppShell.vue'), 'utf-8');
+    const sidebarSource = fs.readFileSync(path.resolve(__dirname, '../../components/layout/AppSidebar.vue'), 'utf-8');
+
+    expect(sidebarSource).toContain('position: fixed;');
+    expect(sidebarSource).toContain('max-height: calc(100dvh - 2.7rem);');
+    expect(sidebarSource).toContain('overflow-y: auto;');
+    expect(sidebarSource).toContain('@media (max-width: 980px) and (min-width: 769px)');
+    expect(shellSource).not.toContain('position: static;');
+    expect(shellSource).toContain('@media (max-width: 768px)');
+    expect(shellSource).toContain('display: none;');
+  });
+
+  test('keeps admin agent panels reachable from the desktop sidebar', () => {
+    const sidebarSource = fs.readFileSync(path.resolve(__dirname, '../../components/layout/AppSidebar.vue'), 'utf-8');
+
+    expect(sidebarSource).toContain('/knowledge/admin/traces');
+    expect(sidebarSource).toContain('/knowledge/admin/skills');
+    expect(sidebarSource).toContain("props.roles.includes('ADMIN')");
+  });
+
+  test('does not clip desktop page-level sticky controls', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppShell.vue'), 'utf-8');
+
+    expect(source).toContain('.app-shell__surface');
+    expect(source).toContain('overflow: visible;');
+  });
+
   test('renders app shell slots and top actions', async () => {
     const router = createRouter({
       history: createMemoryHistory(),
@@ -36,6 +64,7 @@ describe('AppShell', () => {
     });
 
     expect(wrapper.text()).toContain('demo');
+    expect(wrapper.text()).toContain('修改密码');
     expect(wrapper.text()).toContain('page body');
   });
 

@@ -71,17 +71,47 @@ export interface AnalysisHistoryQuery {
   platform?: 'fanqie';
   bookId?: number;
   analysisType?: 'deconstruct' | 'structure' | 'plot' | 'theme';
-  limit?: number;
+  channelCode?: string;
+  boardCode?: string;
+  chapterCount?: number;
+  modelName?: string;
+  keyword?: string;
+  startTime?: string;
+  endTime?: string;
+  page?: number;
+  pageSize?: number;
 }
 
-export interface AnalysisHistoryItem {
+export interface AnalysisHistorySummary {
   id: number;
   bookId: number;
   bookName?: string | null;
   analysisType: 'deconstruct' | 'structure' | 'plot' | 'theme';
   chapterCount: number;
   modelName: string;
-  resultContent: string;
-  resultJson: Record<string, unknown>;
+  channelCode?: string | null;
+  boardCode?: string | null;
+  snapshotId?: number | null;
+  tokenUsed?: number | null;
+  costTime?: number | null;
+  summaryPreview?: string | null;
+  matchedFields?: string[];
+  matchSnippets?: string[];
+  matchScore?: number | null;
   createdAt: string;
 }
+
+export interface AnalysisHistoryDetail extends AnalysisHistorySummary {
+  resultContent: string;
+  resultJson: Record<string, unknown>;
+}
+
+export interface AnalysisHistoryPage {
+  items: AnalysisHistorySummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasNext: boolean;
+}
+
+export type AnalysisHistoryItem = AnalysisHistoryDetail;

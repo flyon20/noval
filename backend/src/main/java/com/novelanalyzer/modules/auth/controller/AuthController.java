@@ -1,11 +1,14 @@
 package com.novelanalyzer.modules.auth.controller;
 
 import com.novelanalyzer.common.exception.BusinessException;
+import com.novelanalyzer.common.context.AuthUser;
+import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.common.result.Result;
 import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.web.RequestIpResolver;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
+import com.novelanalyzer.modules.auth.dto.PasswordChangeRequest;
 import com.novelanalyzer.modules.auth.dto.PasswordResetRequest;
 import com.novelanalyzer.modules.auth.dto.RegisterRequest;
 import com.novelanalyzer.modules.auth.dto.SmsLoginRequest;
@@ -117,6 +120,16 @@ public class AuthController {
                                       HttpServletRequest httpServletRequest) {
         assertPublicAuthRequestAllowed(httpServletRequest, "/api/auth/password/reset");
         authService.resetPassword(request);
+        return Result.success();
+    }
+
+    @PostMapping("/password/change")
+    public Result<Void> changePassword(@Valid @RequestBody PasswordChangeRequest request) {
+        AuthUser authUser = AuthUserHolder.get();
+        if (authUser == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "unauthorized");
+        }
+        authService.changePassword(authUser.getUserId(), authUser.getSessionId(), request);
         return Result.success();
     }
 

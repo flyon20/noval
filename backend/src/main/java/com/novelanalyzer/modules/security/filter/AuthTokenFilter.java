@@ -169,7 +169,7 @@ public class AuthTokenFilter extends OncePerRequestFilter {
         if (rolesValue != null && !rolesValue.isBlank()) {
             roles.addAll(Arrays.asList(rolesValue.split(",")));
         }
-        return AuthUser.of(userId, username, roles);
+        return AuthUser.of(userId, username, claims.get("sid", String.class), roles);
     }
 
     private void validateSession(Claims claims) {

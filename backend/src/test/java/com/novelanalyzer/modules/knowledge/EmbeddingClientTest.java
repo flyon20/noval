@@ -88,9 +88,49 @@ class EmbeddingClientTest {
         assertThat(capturedRequest.body()).doesNotContain("dashscope-fallback-key");
     }
 
+    @Test
+    void shouldSendDashscopeMultimodalEmbeddingRequestForVisionFlashModel() throws Exception {
+        String baseUrl = startServer("""
+            {
+              "output": {
+                "embeddings": [
+                  {"embedding": [0.7, 0.8, 0.9]}
+                ]
+              }
+            }
+            """);
+        KnowledgeProperties properties = knowledgeProperties(baseUrl);
+        properties.getEmbedding().setProvider("dashscope-multimodal");
+        properties.getEmbedding().setModel("tongyi-embedding-vision-flash-2026-03-06");
+        EmbeddingClient client = new EmbeddingClient(
+            HttpClient.newHttpClient(),
+            objectMapper,
+            new KnowledgeEmbeddingRuntimeResolver(properties, supplier("unused-key"))
+        );
+
+        List<Double> embedding = client.embed("通用多模态表征模型示例");
+
+        assertThat(embedding).containsExactly(0.7, 0.8, 0.9);
+        assertThat(capturedRequest.method()).isEqualTo("POST");
+        assertThat(capturedRequest.path()).isEqualTo("/v1/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding");
+        assertThat(capturedRequest.authorization()).isEqualTo("Bearer test-embedding-key");
+        Map<String, Object> body = objectMapper.readValue(capturedRequest.body(), new TypeReference<>() {});
+        assertThat(body).containsEntry("model", "tongyi-embedding-vision-flash-2026-03-06");
+        assertThat(body).containsEntry("parameters", Map.of("dimension", 3));
+        assertThat(body.get("input")).isEqualTo(Map.of("contents", List.of(Map.of("text", "通用多模态表征模型示例"))));
+    }
+
     private String startServer(String responseBody) throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/embeddings", exchange -> {
+            capturedRequest = capture(exchange);
+            byte[] response = responseBody.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.createContext("/v1/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", exchange -> {
             capturedRequest = capture(exchange);
             byte[] response = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");

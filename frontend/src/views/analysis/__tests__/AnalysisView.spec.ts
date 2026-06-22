@@ -21,9 +21,16 @@ vi.mock('@/api/data', () => ({
   dataApi: {
     getHistory: vi.fn().mockResolvedValue({
       data: {
-        data: [],
+        data: {
+          items: [],
+          page: 1,
+          pageSize: 20,
+          total: 0,
+          hasNext: false,
+        },
       },
     }),
+    getHistoryDetail: vi.fn(),
   },
 }));
 
@@ -128,9 +135,16 @@ describe('AnalysisView', () => {
     vi.mocked(analysisApi.streamPlot).mockReset();
     vi.mocked(dataApi.getHistory).mockResolvedValue({
       data: {
-        data: [],
+        data: {
+          items: [],
+          page: 1,
+          pageSize: 20,
+          total: 0,
+          hasNext: false,
+        },
       },
     } as never);
+    vi.mocked(dataApi.getHistoryDetail).mockReset();
     vi.mocked(userConfigApi.get).mockImplementation((configKey: string) => {
       if (configKey === 'analysis.current-context') {
         return Promise.resolve({
@@ -180,6 +194,76 @@ describe('AnalysisView', () => {
 
     await wrapper.get('[data-test="analysis-empty-go-back"]').trigger('click');
     expect(push).toHaveBeenCalledWith('/rank');
+  });
+
+  test('keeps the analysis mode switcher sticky on desktop without changing mobile flow', async () => {
+    const source = await import('../AnalysisView.vue?raw');
+
+    expect(source.default).toContain('.analysis-page__tab-strip');
+    expect(source.default).toContain('position: sticky;');
+    expect(source.default).toContain('top: 1rem;');
+    expect(source.default).toContain('@media (max-width: 768px)');
+    expect(source.default).toContain('position: static;');
+  });
+
+  test('provides a mobile reading drawer with fullscreen and swipe close affordances', async () => {
+    const source = await import('../AnalysisView.vue?raw');
+
+    expect(source.default).toContain('analysis-result-open-reader');
+    expect(source.default).toContain('analysis-result-drawer-close');
+    expect(source.default).toContain('analysis-result-drawer-fullscreen');
+    expect(source.default).toContain(':append-to-body="true"');
+    expect(source.default).toContain('useMobileEdgeSwipeClose');
+    expect(source.default).toContain('useMobileDrawerBack');
+    expect(source.default).toContain('resultDrawerSwipe.onTouchStart');
+    expect(source.default).toContain('resultDrawerSwipe.onPointerEnd');
+    expect(source.default).toContain('analysis-result-drawer.is-fullscreen');
+    expect(source.default).toContain('analysis-result-drawer:not(.is-fullscreen)');
+  });
+
+  test('mobile browser back closes the reading drawer at the exact mobile breakpoint', async () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 768,
+    });
+    const { analysisApi } = await import('@/api/analysis');
+    vi.mocked(analysisApi.streamDeconstruct).mockImplementation(
+      createStreamTask(createResult('deconstruct', '# deconstruct result')),
+    );
+    vi.mocked(analysisApi.streamStructure).mockImplementation(
+      createStreamTask(createResult('structure', '# structure result')),
+    );
+    vi.mocked(analysisApi.streamPlot).mockImplementation(
+      createStreamTask(createResult('plot', '# plot result')),
+    );
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/analysis', component: AnalysisView }],
+    });
+    await router.push('/analysis?bookId=1001&platform=fanqie&chapterCount=3');
+
+    const wrapper = mount(AnalysisView, {
+      attachTo: document.body,
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-test="analysis-toolbar-rerun"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="analysis-result-open-reader"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.findComponent({ name: 'ElDrawer' }).props('modelValue')).toBe(true);
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await flushPromises();
+
+    expect(wrapper.findComponent({ name: 'ElDrawer' }).props('modelValue')).toBe(false);
+    wrapper.unmount();
   });
 
   test('waits for manual start, then runs only the active analysis mode on first trigger', async () => {
@@ -431,34 +515,82 @@ describe('AnalysisView', () => {
         },
       });
     });
-    vi.mocked(dataApi.getHistory).mockResolvedValue({
-      data: {
-        data: [
-          {
-            id: 11,
+    vi.mocked(dataApi.getHistory)
+      .mockResolvedValueOnce({
+        data: {
+          data: {
+            items: [
+              {
+                id: 11,
+                bookId: 1001,
+                bookName: 'Persisted Book',
+                analysisType: 'plot',
+                chapterCount: 5,
+                modelName: 'deepseek-chat',
+                summaryPreview: '# plot restored',
+                createdAt: '2026-03-26 20:00:00',
+              },
+              {
+                id: 10,
+                bookId: 1001,
+                bookName: 'Persisted Book',
+                analysisType: 'deconstruct',
+                chapterCount: 5,
+                modelName: 'deepseek-chat',
+                summaryPreview: '# deconstruct restored',
+                createdAt: '2026-03-26 19:59:00',
+              },
+            ],
+            page: 1,
+            pageSize: 20,
+            total: 3,
+            hasNext: true,
+          },
+        },
+      } as never)
+      .mockResolvedValueOnce({
+        data: {
+          data: {
+            items: [
+              {
+                id: 12,
+                bookId: 1001,
+                bookName: 'Persisted Book',
+                analysisType: 'structure',
+                chapterCount: 5,
+                modelName: 'deepseek-chat',
+                summaryPreview: '# structure restored',
+                createdAt: '2026-03-26 19:58:00',
+              },
+            ],
+            page: 2,
+            pageSize: 20,
+            total: 3,
+            hasNext: false,
+          },
+        },
+      } as never);
+    vi.mocked(dataApi.getHistoryDetail).mockImplementation(async (id: number) => {
+      if (id === 10) {
+        throw new Error('stale detail');
+      }
+
+      return {
+        data: {
+          data: {
+            id,
             bookId: 1001,
             bookName: 'Persisted Book',
-            analysisType: 'plot',
+            analysisType: id === 11 ? 'plot' : 'structure',
             chapterCount: 5,
             modelName: 'deepseek-chat',
-            resultContent: '# plot restored',
+            resultContent: id === 11 ? '# plot restored' : '# structure restored',
             resultJson: {},
-            createdAt: '2026-03-26 20:00:00',
+            createdAt: id === 11 ? '2026-03-26 20:00:00' : '2026-03-26 19:58:00',
           },
-          {
-            id: 10,
-            bookId: 1001,
-            bookName: 'Persisted Book',
-            analysisType: 'deconstruct',
-            chapterCount: 5,
-            modelName: 'deepseek-chat',
-            resultContent: '# deconstruct restored',
-            resultJson: {},
-            createdAt: '2026-03-26 19:59:00',
-          },
-        ],
-      },
-    } as never);
+        },
+      } as never;
+    });
 
     const router = createRouter({
       history: createMemoryHistory(),
@@ -477,11 +609,25 @@ describe('AnalysisView', () => {
     expect(dataApi.getHistory).toHaveBeenCalledWith({
       platform: 'fanqie',
       bookId: 1001,
-      limit: 20,
+      chapterCount: 5,
+      page: 1,
+      pageSize: 20,
     });
+    expect(dataApi.getHistory).toHaveBeenCalledWith({
+      platform: 'fanqie',
+      bookId: 1001,
+      chapterCount: 5,
+      page: 2,
+      pageSize: 20,
+    });
+    expect(dataApi.getHistoryDetail).toHaveBeenCalledWith(11);
+    expect(dataApi.getHistoryDetail).toHaveBeenCalledWith(10);
+    expect(dataApi.getHistoryDetail).toHaveBeenCalledWith(12);
     expect(wrapper.text()).toContain('Persisted Book');
     expect(wrapper.get('[data-test="analysis-mode-panel"]').attributes('data-mode')).toBe('plot');
     expect(wrapper.text()).toContain('plot restored');
+    await wrapper.findAll('[data-test="analysis-tab"]')[1].trigger('click');
+    expect(wrapper.text()).toContain('structure restored');
     expect(analysisApi.streamDeconstruct).not.toHaveBeenCalled();
     expect(analysisApi.streamStructure).not.toHaveBeenCalled();
     expect(analysisApi.streamPlot).not.toHaveBeenCalled();

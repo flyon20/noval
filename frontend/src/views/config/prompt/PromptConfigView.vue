@@ -51,7 +51,7 @@ const currentPromptIsDefault = ref(false);
 const contractStatusDescription = computed(() => (
   hasLoadedContract.value
     ? `当前已加载 ${contractFieldCount.value} 项系统结构约束，运行时会以这些字段作为框架侧的输入 / 输出合同基础。`
-    : '当前还没有读取到系统结构约束，请检查后端回填逻辑或数据库里的 prompt_config 数据。'
+    : '当前模板还没有结构约束。'
 ));
 
 function applyPromptConfig(config: PromptConfig) {
@@ -205,12 +205,12 @@ onMounted(() => {
   <section class="prompt-config-page">
     <header class="prompt-config-page__hero">
       <div>
-        <p class="prompt-config-page__eyebrow">Current Page</p>
+        <p class="prompt-config-page__eyebrow">配置中心</p>
         <h2 class="prompt-config-page__title">提示词配置</h2>
       </div>
       <div class="prompt-config-page__meta">
         <span>当前类型：{{ activeType }}</span>
-        <span v-if="traceId">traceId：{{ traceId }}</span>
+        <span v-if="errorMessage && traceId">traceId：{{ traceId }}</span>
       </div>
     </header>
 
@@ -291,7 +291,7 @@ onMounted(() => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Temperature">
+        <el-form-item label="温度">
           <el-input
             v-model="formState.temperature"
             data-test="prompt-temperature-input"
@@ -303,7 +303,7 @@ onMounted(() => {
           />
         </el-form-item>
 
-        <el-form-item label="Max Tokens">
+        <el-form-item label="最大输出 Token">
           <el-input
             v-model="formState.maxTokens"
             data-test="prompt-max-tokens-input"
@@ -339,7 +339,7 @@ onMounted(() => {
       <section class="prompt-config-page__contract">
         <div class="prompt-config-page__contract-head">
           <div>
-            <p class="prompt-config-page__contract-eyebrow">JSON Contract</p>
+            <p class="prompt-config-page__contract-eyebrow">结构约束</p>
             <h3 class="prompt-config-page__contract-title">输入 / 输出结构约束</h3>
             <p class="prompt-config-page__contract-copy">默认锁定，点击“启用编辑”后才能改动这些高权限字段。</p>
           </div>
@@ -362,7 +362,7 @@ onMounted(() => {
         />
 
         <div class="prompt-config-page__grid">
-          <el-form-item label="Input JSON Schema">
+          <el-form-item label="输入 JSON Schema">
             <el-input
               v-model="formState.inputJsonSchema"
               :autosize="{ minRows: 6, maxRows: 10 }"
@@ -373,7 +373,7 @@ onMounted(() => {
             />
           </el-form-item>
 
-          <el-form-item label="Input Example JSON">
+          <el-form-item label="输入示例 JSON">
             <el-input
               v-model="formState.inputExampleJson"
               :autosize="{ minRows: 6, maxRows: 10 }"
@@ -386,7 +386,7 @@ onMounted(() => {
         </div>
 
         <div class="prompt-config-page__grid">
-          <el-form-item label="Output JSON Schema">
+          <el-form-item label="输出 JSON Schema">
             <el-input
               v-model="formState.outputJsonSchema"
               :autosize="{ minRows: 6, maxRows: 10 }"
@@ -397,7 +397,7 @@ onMounted(() => {
             />
           </el-form-item>
 
-          <el-form-item label="Output Example JSON">
+          <el-form-item label="输出示例 JSON">
             <el-input
               v-model="formState.outputExampleJson"
               :autosize="{ minRows: 6, maxRows: 10 }"
@@ -410,7 +410,7 @@ onMounted(() => {
         </div>
 
         <div class="prompt-config-page__grid">
-          <el-form-item label="Post Process Type">
+          <el-form-item label="后处理类型">
             <el-input
               v-model="formState.postProcessType"
               :disabled="!contractUnlocked"
@@ -419,7 +419,7 @@ onMounted(() => {
             />
           </el-form-item>
 
-          <el-form-item label="Parse Config JSON">
+          <el-form-item label="解析配置 JSON">
             <el-input
               v-model="formState.parseConfigJson"
               :autosize="{ minRows: 6, maxRows: 10 }"

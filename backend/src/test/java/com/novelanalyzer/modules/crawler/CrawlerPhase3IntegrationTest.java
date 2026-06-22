@@ -13,6 +13,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -78,11 +79,15 @@ class CrawlerPhase3IntegrationTest {
     @BeforeEach
     void prepareState() {
         jdbcTemplate.update("UPDATE sys_user SET phone = ? WHERE id = 1", ADMIN_PHONE);
-        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
         try {
-            connection.serverCommands().flushDb();
-        } finally {
-            connection.close();
+            RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
+            try {
+                connection.serverCommands().flushDb();
+            } finally {
+                connection.close();
+            }
+        } catch (RedisConnectionFailureException ignored) {
+            // Crawler controller tests do not depend on Redis. Keep them runnable when local Redis is absent.
         }
     }
 

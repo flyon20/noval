@@ -11,6 +11,7 @@ from langgraph.graph import END, StateGraph
 
 from app.config import settings
 from app.models.analysis import PromptConfigPayload, RunRequest, RunResponse
+from app.services.checkpointing import build_langgraph_checkpointer, checkpoint_store_name
 from app.services.provider_client import OpenAICompatibleProviderClient
 
 
@@ -39,11 +40,15 @@ class LangGraphAnalysisService:
     def __init__(self, provider_client: OpenAICompatibleProviderClient | None = None) -> None:
         self.provider_client = provider_client or OpenAICompatibleProviderClient()
         self._llm_semaphore = asyncio.Semaphore(settings.max_active_llm_calls)
+        self._checkpointer = build_langgraph_checkpointer("analysis-service")
         self._graph = self._build_graph()
 
     async def run(self, request: RunRequest) -> RunResponse:
         started_at = perf_counter()
-        state = await self._graph.ainvoke({"request": request})
+        state = await self._graph.ainvoke(
+            {"request": request},
+            config=self._graph_config(request),
+        )
         return self._finalize_response(
             request=request,
             response=state["response"],
@@ -147,7 +152,11 @@ class LangGraphAnalysisService:
         graph.add_edge("split_chunks", "analyze_chunks")
         graph.add_edge("analyze_chunks", "merge_chunks")
         graph.add_edge("merge_chunks", END)
-        return graph.compile()
+        return graph.compile(checkpointer=self._checkpointer)
+
+    def _graph_config(self, request: RunRequest) -> dict[str, Any]:
+        thread_id = request.traceId or request.taskId or f"analysis:{id(request)}"
+        return {"configurable": {"thread_id": thread_id}}
 
     async def _prepare_node(self, state: AnalysisState) -> AnalysisState:
         prepared = self._prepare_request(state["request"])
@@ -800,6 +809,8 @@ class LangGraphAnalysisService:
         }
         if request.traceId:
             runtime_meta["traceId"] = request.traceId
+        runtime_meta["checkpointThreadId"] = self._graph_config(request)["configurable"]["thread_id"]
+        runtime_meta["checkpointStore"] = checkpoint_store_name(self._checkpointer)
         return runtime_meta
 
     def _build_chunk_runtime_meta(

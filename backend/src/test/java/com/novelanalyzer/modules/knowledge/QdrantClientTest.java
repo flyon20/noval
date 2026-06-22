@@ -8,6 +8,9 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -20,6 +23,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 
+@ExtendWith(OutputCaptureExtension.class)
 class QdrantClientTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -58,6 +62,18 @@ class QdrantClientTest {
     }
 
     @Test
+    void shouldCacheSuccessfulCollectionEnsure() throws Exception {
+        String baseUrl = startServer();
+        QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
+
+        client.ensureCollection();
+        client.ensureCollection();
+
+        assertThat(requests).hasSize(1);
+        assertThat(requests.get(0).path()).isEqualTo("/collections/novel_knowledge_chunks");
+    }
+
+    @Test
     void shouldUpsertPointWithVectorAndPayloadMetadata() throws Exception {
         String baseUrl = startServer();
         QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
@@ -78,6 +94,22 @@ class QdrantClientTest {
         assertThat(points.get(0).get("vector")).isEqualTo(List.of(0.1, 0.2, 0.3));
         Map<String, Object> payload = objectMapper.convertValue(points.get(0).get("payload"), new TypeReference<>() {});
         assertThat(payload).containsEntry("bookId", 101).containsEntry("sourceType", "CHAPTER");
+    }
+
+    @Test
+    void shouldNotLogFullPayloadTextOnUpsert(CapturedOutput output) throws Exception {
+        String baseUrl = startServer();
+        QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
+
+        client.upsertPoint("1", List.of(0.1, 0.2, 0.3), Map.of(
+            "bookId", 101,
+            "sourceType", "CHAPTER",
+            "chunkText", "FULL_SECRET_CHAPTER_TEXT_SHOULD_NOT_BE_LOGGED"
+        ));
+
+        assertThat(output.getOut())
+            .contains("payloadKeys=")
+            .doesNotContain("FULL_SECRET_CHAPTER_TEXT_SHOULD_NOT_BE_LOGGED");
     }
 
     @Test

@@ -86,6 +86,13 @@ class KnowledgeApiTest(unittest.TestCase):
         self.assertIn("Setting answer[1]", response.text)
         self.assertIn("event: done", response.text)
 
+    def test_should_close_research_agent_client_on_app_shutdown(self) -> None:
+        with patch("app.api.knowledge.research_agent.aclose", AsyncMock()) as close_mock:
+            with TestClient(app):
+                pass
+
+        close_mock.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

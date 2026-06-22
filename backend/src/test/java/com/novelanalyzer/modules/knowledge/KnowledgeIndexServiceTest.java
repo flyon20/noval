@@ -2,6 +2,7 @@ package com.novelanalyzer.modules.knowledge;
 
 import com.novelanalyzer.modules.knowledge.client.EmbeddingClient;
 import com.novelanalyzer.modules.knowledge.client.QdrantClient;
+import com.novelanalyzer.modules.knowledge.repository.KnowledgeRepository;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeIndexService;
 import com.novelanalyzer.modules.asyncjob.dto.AsyncJobSubmitResponse;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,6 +39,10 @@ import static org.mockito.Mockito.when;
         "app.crawler.internal-api-key=crawler-internal-api-key-with-enough-length-1234567890",
         "app.ai.langgraph-worker.internal-api-key=langgraph-internal-key-with-enough-length-1234567890",
         "app.knowledge.index.max-chapters=2",
+        "app.knowledge.index.chunk-target-chars=600",
+        "app.knowledge.index.chunk-overlap-chars=80",
+        "app.knowledge.index.queue-enabled=false",
+        "app.knowledge.index.rank-incremental-enabled=false",
         "app.knowledge.embedding.api-key=test-embedding-key"
     }
 )
@@ -55,6 +61,9 @@ class KnowledgeIndexServiceTest {
 
     @Autowired
     private KnowledgeIndexService knowledgeIndexService;
+
+    @Autowired
+    private KnowledgeRepository knowledgeRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -92,6 +101,197 @@ class KnowledgeIndexServiceTest {
         assertThat(thirdChapterChunkCount).isZero();
         verify(embeddingClient, times(3)).embed(anyString());
         verify(qdrantClient, times(3)).upsertPoint(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void shouldPersistChunkStrategyAndEmbeddingMetadataInMysqlAndQdrantPayload() {
+        long bookId = insertBook();
+        insertChapter(bookId, 1, "metadata chapter", "metadata test content with early conflict.");
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+
+        knowledgeIndexService.indexBook(bookId);
+
+        Integer chunksWithMetadata = jdbcTemplate.queryForObject(
+            """
+                SELECT COUNT(1)
+                FROM knowledge_chunk
+                WHERE book_id = ?
+                  AND chunk_strategy_version = 'rag-v2'
+                  AND embedding_model = 'text-embedding-v4'
+                  AND embedding_dimension = 1024
+                """,
+            Integer.class,
+            bookId
+        );
+
+        assertThat(chunksWithMetadata).isEqualTo(2);
+        verify(qdrantClient, times(2)).upsertPoint(anyString(), any(), argThat(payload ->
+            "rag-v2".equals(payload.get("chunkStrategyVersion"))
+                && "text-embedding-v4".equals(payload.get("embeddingModel"))
+                && Integer.valueOf(1024).equals(payload.get("embeddingDimension"))
+        ));
+    }
+
+    @Test
+    void shouldIndexLatestRankEvidenceForBook() {
+        long bookId = insertBook();
+        insertRankItem(bookId, 1, "male-new", "urban-brain", "男频新书榜", "都市脑洞");
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+
+        KnowledgeIndexService.IndexResult result = knowledgeIndexService.indexBook(bookId);
+
+        assertThat(result.createdChunks()).isEqualTo(2);
+        assertThat(result.indexedChunks()).isEqualTo(2);
+        String rankChunk = jdbcTemplate.queryForObject(
+            """
+                SELECT chunk_text
+                FROM knowledge_chunk
+                WHERE book_id = ? AND source_type = 'RANK'
+                """,
+            String.class,
+            bookId
+        );
+        assertThat(rankChunk)
+            .contains("榜单：男频新书榜 / 都市脑洞")
+            .contains("排名：第1名")
+            .contains("书名：测试小说")
+            .contains("作者：作者A");
+        verify(qdrantClient).upsertPoint(anyString(), any(), argThat(payload ->
+            "RANK".equals(payload.get("sourceType"))
+                && Integer.valueOf(1).equals(payload.get("rankNo"))
+                && "male-new".equals(payload.get("channelCode"))
+                && "urban-brain".equals(payload.get("boardCode"))
+        ));
+    }
+
+    @Test
+    void shouldIndexOnlyRankEvidenceForRankIncrementalMode() {
+        long bookId = insertBook();
+        insertChapter(bookId, 1, "chapter should not run", "chapter content should not be indexed by rank incremental mode.");
+        insertRankItem(bookId, 1, "male-new", "urban-brain", "男频新书榜", "都市脑洞");
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+
+        KnowledgeIndexService.IndexResult result = knowledgeIndexService.indexBook(bookId, "RANK_INCREMENTAL");
+
+        Integer rankChunks = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM knowledge_chunk WHERE book_id = ? AND source_type = 'RANK'",
+            Integer.class,
+            bookId
+        );
+        Integer chapterChunks = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM knowledge_chunk WHERE book_id = ? AND source_type = 'CHAPTER'",
+            Integer.class,
+            bookId
+        );
+        Integer introChunks = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM knowledge_chunk WHERE book_id = ? AND source_type = 'INTRO'",
+            Integer.class,
+            bookId
+        );
+
+        assertThat(result.createdChunks()).isEqualTo(1);
+        assertThat(result.indexedChunks()).isEqualTo(1);
+        assertThat(rankChunks).isEqualTo(1);
+        assertThat(chapterChunks).isZero();
+        assertThat(introChunks).isZero();
+        verify(embeddingClient, times(1)).embed(anyString());
+        verify(qdrantClient, times(1)).upsertPoint(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void shouldReindexExistingChunkWhenChunkStrategyVersionChanges() {
+        long bookId = insertBook();
+        insertChapter(bookId, 1, "strategy chapter", "strategy version content with stable hash.");
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+
+        knowledgeIndexService.indexBook(bookId);
+        clearInvocations(embeddingClient, qdrantClient);
+        jdbcTemplate.update(
+            """
+                UPDATE knowledge_chunk
+                SET chunk_strategy_version = 'legacy-v1',
+                    embedding_model = 'text-embedding-v4',
+                    embedding_dimension = 1024
+                WHERE book_id = ?
+                """,
+            bookId
+        );
+
+        KnowledgeIndexService.IndexResult result = knowledgeIndexService.indexBook(bookId);
+
+        assertThat(result.createdChunks()).isZero();
+        assertThat(result.indexedChunks()).isEqualTo(2);
+        Integer currentVersionChunks = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM knowledge_chunk WHERE book_id = ? AND chunk_strategy_version = 'rag-v2'",
+            Integer.class,
+            bookId
+        );
+        assertThat(currentVersionChunks).isEqualTo(2);
+        verify(embeddingClient, times(2)).embed(anyString());
+        verify(qdrantClient, times(2)).upsertPoint(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void shouldReindexExistingChunkWhenEmbeddingModelChanges() {
+        long bookId = insertBook();
+        insertChapter(bookId, 1, "embedding model chapter", "stable content for embedding model migration.");
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+
+        knowledgeIndexService.indexBook(bookId);
+        clearInvocations(embeddingClient, qdrantClient);
+        jdbcTemplate.update(
+            """
+                UPDATE knowledge_chunk
+                SET embedding_model = 'legacy-embedding-model',
+                    embedding_dimension = 1024
+                WHERE book_id = ?
+                """,
+            bookId
+        );
+
+        KnowledgeIndexService.IndexResult result = knowledgeIndexService.indexBook(bookId, "FULL_REINDEX");
+
+        assertThat(result.createdChunks()).isZero();
+        assertThat(result.indexedChunks()).isEqualTo(2);
+        Integer migratedChunks = jdbcTemplate.queryForObject(
+            """
+                SELECT COUNT(1)
+                FROM knowledge_chunk
+                WHERE book_id = ?
+                  AND embedding_model = 'text-embedding-v4'
+                  AND embedding_dimension = 1024
+                  AND vector_status = 'INDEXED'
+                """,
+            Integer.class,
+            bookId
+        );
+        assertThat(migratedChunks).isEqualTo(2);
+        verify(embeddingClient, times(2)).embed(anyString());
+        verify(qdrantClient, times(2)).upsertPoint(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void shouldTreatChaptersIndexedWithOldEmbeddingModelAsMissingForChapterRebuild() {
+        long bookId = insertBook();
+        insertChapter(bookId, 1, "old model chapter", "chapter content already indexed under an old embedding model.");
+        long chapterId = jdbcTemplate.queryForObject(
+            "SELECT id FROM crawl_chapter WHERE book_id = ? AND chapter_no = 1",
+            Long.class,
+            bookId
+        );
+        assertThat(chapterId).isNotNull();
+        long documentId = insertKnowledgeDocument(bookId, "CHAPTER", chapterId, "old model chapter");
+        insertIndexedChapterChunk(documentId, bookId, chapterId, 1, "legacy-embedding-model", 768);
+
+        List<Long> bookIds = knowledgeRepository.findBookIdsForKnowledgeRebuild(
+            "CHAPTER_MISSING",
+            10,
+            "text-embedding-v4",
+            1024,
+            2
+        );
+
+        assertThat(bookIds).contains(bookId);
     }
 
     @Test
@@ -289,6 +489,66 @@ class KnowledgeIndexServiceTest {
         );
     }
 
+    private void insertRankItem(long bookId, int rankNo, String channelCode, String boardCode, String channelName, String boardName) {
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update(
+            "INSERT INTO rank_board(platform, channel_code, board_code, board_name, description, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "fanqie",
+            channelCode,
+            boardCode,
+            boardName,
+            channelName,
+            Timestamp.valueOf(now),
+            Timestamp.valueOf(now),
+            0
+        );
+        Long boardId = jdbcTemplate.queryForObject(
+            "SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ?",
+            Long.class,
+            "fanqie",
+            channelCode,
+            boardCode
+        );
+        assertThat(boardId).isNotNull();
+        jdbcTemplate.update(
+            "INSERT INTO rank_snapshot(rank_board_id, snapshot_time, record_count, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?)",
+            boardId,
+            Timestamp.valueOf(now),
+            30,
+            Timestamp.valueOf(now),
+            Timestamp.valueOf(now),
+            0
+        );
+        Long snapshotId = jdbcTemplate.queryForObject(
+            "SELECT id FROM rank_snapshot WHERE rank_board_id = ?",
+            Long.class,
+            boardId
+        );
+        assertThat(snapshotId).isNotNull();
+        jdbcTemplate.update(
+            """
+                INSERT INTO crawl_rank(
+                    platform, category, channel_code, board_code, snapshot_id, rank_no, book_id,
+                    book_name, book_url, author, intro, crawl_time, create_time, deleted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            "fanqie",
+            boardName,
+            channelCode,
+            boardCode,
+            snapshotId,
+            rankNo,
+            bookId,
+            "测试小说",
+            "https://fanqienovel.com/page/book-101",
+            "作者A",
+            "这是一本入伍退伍题材都市脑洞作品。",
+            Timestamp.valueOf(now),
+            Timestamp.valueOf(now),
+            0
+        );
+    }
+
     private long insertAnalysisResult(long bookId) {
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update(
@@ -350,6 +610,41 @@ class KnowledgeIndexServiceTest {
             "old text",
             1,
             "PENDING",
+            Timestamp.valueOf(now),
+            Timestamp.valueOf(now),
+            0
+        );
+    }
+
+    private void insertIndexedChapterChunk(long documentId,
+                                           long bookId,
+                                           long chapterId,
+                                           int chapterNo,
+                                           String embeddingModel,
+                                           int embeddingDimension) {
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update(
+            """
+                INSERT INTO knowledge_chunk(
+                    document_id, chunk_key, source_type, source_ref_id, book_id, chapter_no,
+                    content_hash, chunk_text, token_count, chunk_strategy_version, embedding_model,
+                    embedding_dimension, vector_status, qdrant_point_id, create_time, update_time, deleted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            documentId,
+            "chapter-" + chapterNo + "-0",
+            "CHAPTER",
+            chapterId,
+            bookId,
+            chapterNo,
+            "old-hash-" + chapterId,
+            "old chapter text",
+            3,
+            "rag-v2",
+            embeddingModel,
+            embeddingDimension,
+            "INDEXED",
+            "old-point-" + chapterId,
             Timestamp.valueOf(now),
             Timestamp.valueOf(now),
             0

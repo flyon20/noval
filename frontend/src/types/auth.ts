@@ -35,6 +35,14 @@ export interface PasswordResetRequest {
   newPassword: string;
 }
 
+export interface PasswordChangeRequest {
+  verifyMode?: 'OLD_PASSWORD' | 'SMS_CODE';
+  oldPassword?: string;
+  smsCode?: string;
+  smsOutId?: string;
+  newPassword: string;
+}
+
 export interface TokenResponse {
   accessToken: string;
   tokenType: 'Bearer';
@@ -57,6 +65,7 @@ export type AuthRestoreStatus = 'restoring' | 'authenticated' | 'logged_out';
 export interface AuthSession {
   userId: number;
   username: string;
+  phone?: string;
   roles: RoleCode[];
   accessToken: string;
   tokenType: 'Bearer';

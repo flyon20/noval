@@ -14,6 +14,8 @@ public class KnowledgeChatRequest {
     private String question;
     private String bookName;
     private Long bookId;
+    private Long projectId;
+    private String conversationId;
     @Valid
     private CandidateDTO selectedCandidate;
     private String mode;
@@ -49,6 +51,22 @@ public class KnowledgeChatRequest {
 
     public void setBookId(Long bookId) {
         this.bookId = bookId;
+    }
+
+    public Long getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(Long projectId) {
+        this.projectId = projectId;
+    }
+
+    public String getConversationId() {
+        return conversationId;
+    }
+
+    public void setConversationId(String conversationId) {
+        this.conversationId = conversationId;
     }
 
     public CandidateDTO getSelectedCandidate() {

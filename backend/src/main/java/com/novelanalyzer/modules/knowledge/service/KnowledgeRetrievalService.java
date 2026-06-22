@@ -15,6 +15,8 @@ import java.util.Objects;
 @Service
 public class KnowledgeRetrievalService {
 
+    private static final double DEFAULT_MIN_SCORE = 0.2d;
+
     private final EmbeddingClient embeddingClient;
     private final QdrantClient qdrantClient;
     private final KnowledgeRepository knowledgeRepository;
@@ -28,17 +30,63 @@ public class KnowledgeRetrievalService {
     }
 
     public List<KnowledgeSearchResultVO> search(KnowledgeSearchRequest request) {
-        List<Double> queryVector = embeddingClient.embed(request.getQuery().trim());
-        qdrantClient.ensureCollection();
-        List<QdrantClient.SearchResult> qdrantResults = qdrantClient.search(
-            queryVector,
-            buildFilters(request),
+        try {
+            List<Double> queryVector = embeddingClient.embed(request.getQuery().trim());
+            qdrantClient.ensureCollection();
+            List<QdrantClient.SearchResult> qdrantResults = qdrantClient.search(
+                queryVector,
+                buildFilters(request),
+                normalizeLimit(request.getLimit())
+            );
+            List<KnowledgeSearchResultVO> results = qdrantResults.stream()
+                .filter(result -> meetsMinScore(result, effectiveMinScore(request.getMinScore())))
+                .map(result -> knowledgeRepository.findSearchResultSource(resolveChunkId(result.payload()), result.id(), result.score()).orElse(null))
+                .filter(Objects::nonNull)
+                .toList();
+            if (!results.isEmpty()) {
+                return results;
+            }
+        } catch (RuntimeException ex) {
+            // External embedding/vector services can fail independently of local indexed data.
+            // Keep Q&A usable by falling back to lightweight lexical retrieval.
+        }
+        List<KnowledgeSearchResultVO> lexicalResults = knowledgeRepository.findLexicalSearchResults(
+            request.getQuery(),
+            request.getBookId(),
+            request.getPlatform(),
+            request.getSourceType(),
+            request.getChapterNo(),
+            request.getAnalysisType(),
             normalizeLimit(request.getLimit())
         );
-        return qdrantResults.stream()
-            .map(result -> knowledgeRepository.findSearchResultSource(resolveChunkId(result.payload()), result.id(), result.score()).orElse(null))
-            .filter(Objects::nonNull)
-            .toList();
+        if (!lexicalResults.isEmpty()) {
+            return lexicalResults;
+        }
+        return fallbackToCrawledChapters(request);
+    }
+
+    private List<KnowledgeSearchResultVO> fallbackToCrawledChapters(KnowledgeSearchRequest request) {
+        if (request.getBookId() == null || !isChapterSearch(request.getSourceType())) {
+            return List.of();
+        }
+        return knowledgeRepository.findCrawledChapterSources(
+            request.getBookId(),
+            request.getPlatform(),
+            request.getChapterNo(),
+            normalizeLimit(request.getLimit())
+        );
+    }
+
+    private boolean isChapterSearch(String sourceType) {
+        return sourceType != null && "CHAPTER".equalsIgnoreCase(sourceType.trim());
+    }
+
+    private boolean meetsMinScore(QdrantClient.SearchResult result, Double minScore) {
+        return minScore == null || result.score() >= minScore;
+    }
+
+    private Double effectiveMinScore(Double requestedMinScore) {
+        return requestedMinScore == null ? DEFAULT_MIN_SCORE : requestedMinScore;
     }
 
     private Map<String, Object> buildFilters(KnowledgeSearchRequest request) {

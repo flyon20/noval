@@ -1,0 +1,44 @@
+[
+  {
+    "case_id": "creative-advice-001",
+    "question": "我想写一本都市脑洞小说，主角重生回到高考前，怎么设计开头三章？",
+    "request_payload": {
+      "mode": "research"
+    },
+    "expected_intent": "opening_strategy",
+    "expected_answer_mode": "creative",
+    "relevant_source_ids": [],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  },
+  {
+    "case_id": "creative-advice-002",
+    "question": "设计一个都市修仙的世界观体系。",
+    "request_payload": {
+      "mode": "research"
+    },
+    "expected_intent": "worldbuilding",
+    "expected_answer_mode": "creative",
+    "relevant_source_ids": [],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  },
+  {
+    "case_id": "creative-advice-003",
+    "question": "帮我设计一个霸道总裁型主角，包括人设、背景和性格特点。",
+    "request_payload": {
+      "mode": "research"
+    },
+    "expected_intent": "character_design",
+    "expected_answer_mode": "creative",
+    "relevant_source_ids": [],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  }
+]

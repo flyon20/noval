@@ -124,6 +124,19 @@ public class AuthRepository {
         return affected > 0;
     }
 
+    public boolean updatePasswordByUserId(Long userId, String encodedPassword) {
+        int affected = jdbcTemplate.update(
+            """
+            UPDATE sys_user
+            SET password = ?, password_updated_time = CURRENT_TIMESTAMP, update_time = CURRENT_TIMESTAMP
+            WHERE id = ? AND deleted = 0
+            """,
+            encodedPassword,
+            userId
+        );
+        return affected > 0;
+    }
+
     public Optional<Long> findActiveRoleIdByCode(String roleCode) {
         List<Long> roleIds = jdbcTemplate.queryForList(
             "SELECT id FROM sys_role WHERE role_code = ? AND deleted = 0 AND status = 1 LIMIT 1",

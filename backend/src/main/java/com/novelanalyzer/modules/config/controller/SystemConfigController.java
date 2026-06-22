@@ -37,6 +37,12 @@ public class SystemConfigController {
         return Result.success(systemConfigService.getByKey(configKey));
     }
 
+    @GetMapping("/system/known")
+    @RequireRole({"ADMIN"})
+    public Result<List<SystemConfigVO>> getKnownSystemConfigs() {
+        return Result.success(systemConfigService.getKnownConfigs());
+    }
+
     @PutMapping("/system")
     @RequireRole({"ADMIN"})
     public Result<SystemConfigVO> updateSystemConfig(@Valid @RequestBody SystemConfigUpdateRequest request) {

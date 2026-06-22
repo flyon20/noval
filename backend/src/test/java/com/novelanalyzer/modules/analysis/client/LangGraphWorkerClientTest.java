@@ -9,8 +9,11 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -130,5 +133,25 @@ class LangGraphWorkerClientTest {
         assertThat(ReflectionTestUtils.getField(invokeResult, "content")).isEqualTo("worker top-level content");
         assertThat(ReflectionTestUtils.getField(invokeResult, "tokenUsed")).isEqualTo(156);
         assertThat(ReflectionTestUtils.getField(invokeResult, "resultJson")).isEqualTo(resultJson);
+    }
+
+    @Test
+    void shouldIgnoreProgressEventsWhenAccumulatingAnalysisStreamContent() {
+        StringBuilder accumulatedContent = new StringBuilder("answer");
+        List<String> deltas = new ArrayList<>();
+
+        Object result = ReflectionTestUtils.invokeMethod(
+            client,
+            "processEvent",
+            "progress",
+            "{\"event\":\"progress\",\"message\":\"preparing\"}",
+            accumulatedContent,
+            new LinkedHashMap<String, Object>(),
+            (Consumer<String>) deltas::add
+        );
+
+        assertThat(result).isNull();
+        assertThat(accumulatedContent).hasToString("answer");
+        assertThat(deltas).isEmpty();
     }
 }

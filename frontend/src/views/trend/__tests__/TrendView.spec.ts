@@ -1,5 +1,6 @@
-import ElementPlus from 'element-plus';
-import { ElMessage } from 'element-plus';
+import fs from 'node:fs';
+import path from 'node:path';
+import ElementPlus, { ElMessage } from 'element-plus';
 import { nextTick } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -282,6 +283,15 @@ describe('TrendView', () => {
         },
       });
     });
+  });
+
+  test('keeps the desktop trend toolbar sticky without forcing mobile sticky layout', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../TrendView.vue'), 'utf-8');
+
+    expect(source).toContain('.trend-page__toolbar');
+    expect(source).toContain('position: sticky;');
+    expect(source).toContain('@media (max-width: 768px)');
+    expect(source).toContain('position: static;');
   });
 
   test('loads board context and visual data without auto starting analysis', async () => {

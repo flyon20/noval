@@ -1,11 +1,27 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
-import { Promotion } from '@element-plus/icons-vue';
+import { nextTick, onMounted, ref, watch } from 'vue';
+import { Delete, Plus, Promotion } from '@element-plus/icons-vue';
 import BookCandidatePicker from '@/components/knowledge/BookCandidatePicker.vue';
 import KnowledgeMessageBubble from '@/components/knowledge/KnowledgeMessageBubble.vue';
 import { useKnowledgeChat } from '@/composables/useKnowledgeChat';
+import { useVisualViewportKeyboard } from '@/composables/useVisualViewportKeyboard';
 
-const { state, canSend, sendQuestion, selectCandidate } = useKnowledgeChat();
+defineOptions({
+  name: 'KnowledgeChatView',
+});
+
+const {
+  state,
+  canSend,
+  sendQuestion,
+  selectCandidate,
+  loadProjects,
+  createProject,
+  selectProject,
+  clearConversation,
+  deleteMessage,
+} = useKnowledgeChat();
+const { keyboardStyle } = useVisualViewportKeyboard();
 const messagesRef = ref<HTMLElement | null>(null);
 
 const quickPrompts = [
@@ -14,23 +30,75 @@ const quickPrompts = [
   '修仙文开局怎么设计爽点？',
 ];
 
+async function scrollMessagesToBottom() {
+  await nextTick();
+  if (messagesRef.value) {
+    messagesRef.value.scrollTop = messagesRef.value.scrollHeight;
+  }
+}
+
+onMounted(async () => {
+  await loadProjects();
+  await scrollMessagesToBottom();
+});
+
 watch(
   () => [
     state.messages.map((message) => message.content).join('|'),
     state.candidates.length,
     state.loading,
   ],
-  async () => {
-    await nextTick();
-    if (messagesRef.value) {
-      messagesRef.value.scrollTop = messagesRef.value.scrollHeight;
-    }
-  },
+  scrollMessagesToBottom,
 );
 </script>
 
 <template>
-  <main class="knowledge-chat">
+  <main class="knowledge-chat" :style="keyboardStyle">
+    <section class="knowledge-chat__projects" aria-label="writing projects">
+      <el-select
+        :model-value="state.activeProjectId"
+        clearable
+        size="small"
+        placeholder="项目"
+        data-test="knowledge-project-select"
+        @change="(value: number | '') => selectProject(value || null)"
+      >
+        <el-option
+          v-for="project in state.projects"
+          :key="project.projectId"
+          :label="project.name"
+          :value="project.projectId"
+        />
+      </el-select>
+      <div data-test="knowledge-project-name">
+        <el-input
+          v-model="state.projectNameDraft"
+          size="small"
+          placeholder="新项目"
+          @keydown.enter.prevent="createProject"
+        />
+      </div>
+      <el-button
+        size="small"
+        :icon="Plus"
+        data-test="knowledge-create-project"
+        @click="createProject"
+      />
+    </section>
+
+    <header v-if="state.messages.length" class="knowledge-chat__toolbar">
+      <span>最近会话</span>
+      <el-button
+        data-test="knowledge-clear-chat"
+        size="small"
+        :icon="Delete"
+        :disabled="state.loading"
+        @click="clearConversation"
+      >
+        清空会话
+      </el-button>
+    </header>
+
     <section ref="messagesRef" class="knowledge-chat__messages" aria-live="polite">
       <div v-if="!state.messages.length" class="knowledge-chat__empty">
         <h1>网文 AI 问答</h1>
@@ -52,7 +120,13 @@ watch(
         :role="message.role"
         :content="message.content"
         :status="message.status"
+        :answer-status="message.answerStatus"
+        :intent="message.intent"
+        :answer-boundary="message.answerBoundary"
         :sources="message.sources"
+        :deletable="!state.loading"
+        :delete-test-id="`knowledge-delete-message-${index}`"
+        @delete="deleteMessage(index)"
       />
 
       <BookCandidatePicker
@@ -63,7 +137,7 @@ watch(
       />
 
       <div v-if="state.loading && !state.answer" class="knowledge-chat__typing">
-        正在思考
+        {{ state.status || '正在思考...' }}
       </div>
     </section>
 
@@ -116,12 +190,34 @@ watch(
 
 <style scoped lang="scss">
 .knowledge-chat {
+  --keyboard-offset: 0px;
   height: calc(100dvh - 4rem);
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   padding-bottom: 1rem;
   overflow: hidden;
+}
+
+.knowledge-chat__projects {
+  width: min(100%, 880px);
+  justify-self: center;
+  display: grid;
+  grid-template-columns: minmax(10rem, 16rem) minmax(8rem, 1fr) auto;
+  gap: 0.5rem;
+  padding: 0 1rem 0.5rem;
+}
+
+.knowledge-chat__toolbar {
+  width: min(100%, 880px);
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 1rem 0.35rem;
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
 }
 
 .knowledge-chat__messages {
@@ -212,13 +308,30 @@ watch(
 
 @media (max-width: 720px) {
   .knowledge-chat {
-    height: calc(100dvh - var(--bottom-nav-height) - 1.75rem);
-    padding-bottom: calc(env(safe-area-inset-bottom) + 1.15rem);
+    min-height: calc(100dvh - 56px);
+    height: calc(100dvh - 56px);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    padding-bottom: 0;
   }
 
   .knowledge-chat__messages {
     width: 100%;
-    padding: 0.75rem 0.75rem 1.25rem;
+    padding:
+      0.75rem
+      0.75rem
+      calc(9.5rem + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + var(--keyboard-offset));
+    scroll-padding-bottom: calc(9.5rem + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + var(--keyboard-offset));
+  }
+
+  .knowledge-chat__projects {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    padding: 0 0.75rem 0.5rem;
+  }
+
+  .knowledge-chat__toolbar {
+    width: 100%;
+    padding: 0 0.75rem 0.35rem;
   }
 
   .knowledge-chat__empty {
@@ -230,9 +343,20 @@ watch(
   }
 
   .knowledge-chat__composer {
-    width: calc(100% - 1rem);
-    margin: 0 0.5rem 0.75rem;
+    position: fixed;
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: calc(
+      var(--bottom-nav-height)
+      + env(safe-area-inset-bottom, 0px)
+      + 0.65rem
+      + var(--keyboard-offset)
+    );
+    z-index: 48;
+    width: auto;
+    margin: 0;
     padding: 0.65rem;
+    transition: bottom 180ms ease;
   }
 
   .knowledge-chat__tools :deep(.el-segmented) {

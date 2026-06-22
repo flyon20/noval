@@ -1,0 +1,95 @@
+-- Phase 10: derived full-text index for history replay search.
+
+CREATE TABLE IF NOT EXISTS analysis_result_search_doc (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'history search doc id',
+    analysis_result_id BIGINT NOT NULL COMMENT 'analysis_result id',
+    user_id BIGINT COMMENT 'owner user id',
+    platform VARCHAR(20) NOT NULL COMMENT 'platform',
+    book_id BIGINT COMMENT 'book id',
+    book_name VARCHAR(255) COMMENT 'book name snapshot',
+    analysis_type VARCHAR(50) COMMENT 'analysis type',
+    channel_code VARCHAR(50) COMMENT 'rank channel code',
+    board_code VARCHAR(50) COMMENT 'rank board code',
+    chapter_count INT COMMENT 'chapter count',
+    model_name VARCHAR(100) COMMENT 'model name',
+    search_text MEDIUMTEXT NOT NULL COMMENT 'combined metadata, content and structured JSON text',
+    structured_terms TEXT COMMENT 'project-aware tags and extracted structured values',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+    deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
+    UNIQUE KEY uk_history_search_result (analysis_result_id),
+    INDEX idx_history_search_user_time (user_id, deleted, create_time, id),
+    INDEX idx_history_search_book_type (book_id, analysis_type, deleted),
+    FULLTEXT KEY ft_history_search (search_text, structured_terms) WITH PARSER ngram
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='derived analysis history search document';
+
+INSERT INTO analysis_result_search_doc (
+    analysis_result_id,
+    user_id,
+    platform,
+    book_id,
+    book_name,
+    analysis_type,
+    channel_code,
+    board_code,
+    chapter_count,
+    model_name,
+    search_text,
+    structured_terms,
+    create_time,
+    update_time,
+    deleted
+)
+SELECT
+    ar.id,
+    ar.user_id,
+    ar.platform,
+    ar.book_id,
+    cb.book_name,
+    ar.analysis_type,
+    ar.channel_code,
+    ar.board_code,
+    ar.chapter_count,
+    ar.model_name,
+    LEFT(CONCAT_WS(' ',
+        ar.platform,
+        ar.analysis_type,
+        ar.channel_code,
+        ar.board_code,
+        ar.model_name,
+        cb.book_name,
+        cb.author,
+        cb.intro,
+        ar.result_content,
+        CAST(ar.result_json AS CHAR)
+    ), 120000),
+    LEFT(CONCAT_WS(' ',
+        CONCAT('platform:', ar.platform),
+        CONCAT('analysisType:', ar.analysis_type),
+        CONCAT('channel:', ar.channel_code),
+        CONCAT('board:', ar.board_code),
+        CONCAT('model:', ar.model_name),
+        CONCAT('book:', cb.book_name),
+        CONCAT('author:', cb.author),
+        CAST(ar.result_json AS CHAR)
+    ), 20000),
+    ar.create_time,
+    NOW(),
+    0
+FROM analysis_result ar
+LEFT JOIN crawl_book cb ON cb.id = ar.book_id AND cb.deleted = 0
+WHERE ar.deleted = 0
+ON DUPLICATE KEY UPDATE
+    user_id = VALUES(user_id),
+    platform = VALUES(platform),
+    book_id = VALUES(book_id),
+    book_name = VALUES(book_name),
+    analysis_type = VALUES(analysis_type),
+    channel_code = VALUES(channel_code),
+    board_code = VALUES(board_code),
+    chapter_count = VALUES(chapter_count),
+    model_name = VALUES(model_name),
+    search_text = VALUES(search_text),
+    structured_terms = VALUES(structured_terms),
+    update_time = NOW(),
+    deleted = 0;

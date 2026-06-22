@@ -37,6 +37,20 @@ const router = createRouter({
           component: () => import('@/views/knowledge/KnowledgeChatView.vue'),
         },
         {
+          path: 'knowledge/admin/traces',
+          component: () => import('@/views/knowledge/AdminAgentTraceView.vue'),
+          meta: {
+            roles: ['ADMIN'],
+          },
+        },
+        {
+          path: 'knowledge/admin/skills',
+          component: () => import('@/views/knowledge/AdminSkillGovernanceView.vue'),
+          meta: {
+            roles: ['ADMIN'],
+          },
+        },
+        {
           path: 'history',
           component: () => import('@/views/history/HistoryView.vue'),
         },

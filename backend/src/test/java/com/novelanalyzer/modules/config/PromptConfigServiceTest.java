@@ -7,6 +7,7 @@ import com.novelanalyzer.modules.config.model.PromptConfigEntity;
 import com.novelanalyzer.modules.config.repository.PromptConfigRepository;
 import com.novelanalyzer.modules.config.service.DefaultPromptContractCatalog;
 import com.novelanalyzer.modules.config.service.PromptConfigService;
+import com.novelanalyzer.modules.config.service.PromptGovernanceService;
 import com.novelanalyzer.modules.config.vo.AiModelRegistryModelVO;
 import com.novelanalyzer.modules.config.vo.PromptConfigVO;
 import org.junit.jupiter.api.Test;
@@ -229,6 +230,73 @@ class PromptConfigServiceTest {
     }
 
     @Test
+    void shouldRejectDeletingTemplateWhenBoundByDisabledModel() {
+        PromptConfigRepository repository = mock(PromptConfigRepository.class);
+        PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
+
+        when(repository.findActiveByTypeAndName("deconstruct", "kimi-template")).thenReturn(Optional.of(buildEntity(
+            9L,
+            "deconstruct",
+            "kimi-template",
+            "Kimi {{content}}"
+        )));
+
+        AiModelRegistryModelVO model = new AiModelRegistryModelVO();
+        model.setModelKey("kimi-k2.5");
+        model.setEnabled(false);
+        model.setPromptBindings(Map.of("deconstruct", "kimi-template"));
+
+        assertThatThrownBy(() -> service.deleteTemplate("deconstruct", "kimi-template", List.of(model)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("template is bound to model");
+
+        verify(repository, never()).softDeleteById(any());
+    }
+
+    @Test
+    void shouldRejectDeletingTemplateWhenRequestNameHasWhitespaceAndTemplateIsBound() {
+        PromptConfigRepository repository = mock(PromptConfigRepository.class);
+        PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
+
+        when(repository.findActiveByTypeAndName("deconstruct", "kimi-template")).thenReturn(Optional.of(buildEntity(
+            9L,
+            "deconstruct",
+            "kimi-template",
+            "Kimi {{content}}"
+        )));
+
+        AiModelRegistryModelVO model = new AiModelRegistryModelVO();
+        model.setModelKey("kimi-k2.5");
+        model.setEnabled(true);
+        model.setPromptBindings(Map.of("deconstruct", "kimi-template"));
+
+        assertThatThrownBy(() -> service.deleteTemplate("deconstruct", " kimi-template ", List.of(model)))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("template is bound to model");
+
+        verify(repository, never()).softDeleteById(any());
+    }
+
+    @Test
+    void shouldResolveRuntimeTemplateOnlyFromSystemScope() {
+        PromptConfigRepository repository = mock(PromptConfigRepository.class);
+        PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
+
+        PromptConfigEntity userCopy = buildEntity(
+            9L,
+            "deconstruct",
+            "kimi-template",
+            "User copy {{content}}"
+        );
+        userCopy.setScopeType(PromptGovernanceService.SCOPE_USER_COPY);
+        when(repository.findActiveByTypeAndName("deconstruct", "kimi-template")).thenReturn(Optional.of(userCopy));
+
+        Optional<PromptConfigEntity> actual = service.resolveRuntimeTemplateByName("deconstruct", "kimi-template");
+
+        assertThat(actual).isEmpty();
+    }
+
+    @Test
     void shouldPreferCanonicalDefaultWhenPromptNameMissing() {
         PromptConfigRepository repository = mock(PromptConfigRepository.class);
         PromptConfigService service = new PromptConfigService(repository, new DefaultPromptContractCatalog());
@@ -298,6 +366,7 @@ class PromptConfigServiceTest {
         entity.setPromptName(promptName);
         entity.setPromptContent(promptContent);
         entity.setModelName("kimi-k2.5");
+        entity.setScopeType(PromptGovernanceService.SCOPE_SYSTEM);
         entity.setStatus(1);
         entity.setIsDefault("default".equals(promptName) ? 1 : 0);
         return entity;

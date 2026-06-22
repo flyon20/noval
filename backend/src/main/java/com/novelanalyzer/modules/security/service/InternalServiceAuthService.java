@@ -22,19 +22,19 @@ public class InternalServiceAuthService {
     }
 
     public void assertLangGraphWorkerCaller(HttpServletRequest request) {
-        String expected = resolveLangGraphWorkerInternalApiKey();
         String actual = request == null ? null : request.getHeader(INTERNAL_API_KEY_HEADER);
-        if (expected == null || expected.isBlank() || actual == null || !expected.equals(actual)) {
+        if (actual == null || actual.isBlank() || !matchesLangGraphWorkerInternalApiKey(actual)) {
             throw new BusinessException(ResultCode.UNAUTHORIZED, "invalid internal service token");
         }
     }
 
-    private String resolveLangGraphWorkerInternalApiKey() {
+    private boolean matchesLangGraphWorkerInternalApiKey(String actual) {
+        String normalizedActual = actual.trim();
         String value = systemConfigService.getValueOrDefault("ai.langgraph-worker.internal-api-key", null);
-        if (value != null && !value.isBlank()) {
-            return value.trim();
+        if (value != null && !value.isBlank() && value.trim().equals(normalizedActual)) {
+            return true;
         }
         String configured = aiProperties.getLanggraphWorker().getInternalApiKey();
-        return configured == null ? "" : configured.trim();
+        return configured != null && !configured.isBlank() && configured.trim().equals(normalizedActual);
     }
 }

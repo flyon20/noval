@@ -7,14 +7,16 @@ async function resolvePwaPlugin() {
     const { VitePWA } = await import('vite-plugin-pwa');
 
     return VitePWA({
-      registerType: 'autoUpdate',
+      injectRegister: false,
+      registerType: 'prompt',
       manifest: {
         name: 'NOVAL 小说分析工作台',
         short_name: 'NOVAL',
         description: '趋势、分析、历史一站式 PWA 工作台',
         theme_color: '#f5efe4',
         background_color: '#ffffff',
-        display: 'standalone',
+        display: 'fullscreen',
+        display_override: ['fullscreen', 'standalone'],
         start_url: '/',
         icons: [
           {

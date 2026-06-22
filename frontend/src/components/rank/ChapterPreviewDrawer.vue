@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useMobileDrawerBack } from '@/composables/useMobileDrawerBack';
+import { useMobileEdgeSwipeClose } from '@/composables/useMobileEdgeSwipeClose';
 import type { ChapterItem, ChapterRefreshResult, Platform } from '@/types/crawler';
 
 const SUMMARY_LENGTH = 160;
@@ -35,7 +37,9 @@ const selectedChapter = computed(() =>
 );
 
 const drawerDirection = computed(() => (isMobileViewport.value ? 'btt' : 'rtl'));
-const drawerSize = computed(() => (isMobileViewport.value ? '78%' : '820px'));
+const drawerSize = computed(() => (isMobileViewport.value ? '100%' : '820px'));
+const drawerClass = computed(() =>
+  (isMobileViewport.value ? 'chapter-preview-drawer is-fullscreen' : 'chapter-preview-drawer'));
 
 watch(
   () => props.modelValue,
@@ -45,6 +49,13 @@ watch(
     }
   },
 );
+
+watch(selectedChapterNo, (next, previous) => {
+  if (!props.modelValue || !isMobileViewport.value || next === previous || next == null) {
+    return;
+  }
+  window.history.pushState({ ...(window.history.state ?? {}), chapterDetailNo: next }, '');
+});
 
 function getExcerpt(content: string) {
   const normalized = content.replace(/\s+/g, ' ').trim();
@@ -58,14 +69,39 @@ function openChapter(chapterNo: number) {
   selectedChapterNo.value = chapterNo;
 }
 
-function closeChapterDetail() {
+function backToChapterList() {
   selectedChapterNo.value = null;
 }
 
+function handleChapterBack() {
+  if (isMobileViewport.value && selectedChapterNo.value !== null && typeof window !== 'undefined') {
+    window.history.back();
+    return;
+  }
+  backToChapterList();
+}
+
 function closeDrawer() {
+  const closingFromMobileDetail = isMobileViewport.value && selectedChapterNo.value !== null && typeof window !== 'undefined';
   selectedChapterNo.value = null;
+  if (closingFromMobileDetail) {
+    drawerBack.unregisterDrawer({ consumeHistory: false });
+    visible.value = false;
+    window.history.go(-2);
+    return;
+  }
   visible.value = false;
 }
+
+const drawerSwipe = useMobileEdgeSwipeClose(closeDrawer, { mobileWidth: 920 });
+const drawerBack = useMobileDrawerBack({
+  isOpen: () => visible.value,
+  close: closeDrawer,
+  hasInnerDetail: () => selectedChapterNo.value !== null,
+  backInnerDetail: backToChapterList,
+  mobileWidth: 920,
+  isMobile: () => typeof window !== 'undefined' && window.innerWidth <= 920,
+});
 
 function syncViewportMode() {
   isMobileViewport.value = window.innerWidth <= 920;
@@ -84,13 +120,21 @@ onBeforeUnmount(() => {
 <template>
   <el-drawer
     v-model="visible"
+    :class="drawerClass"
     :append-to-body="true"
     :destroy-on-close="false"
     :with-header="false"
     :direction="drawerDirection"
     :size="drawerSize"
   >
-    <div class="chapter-drawer" data-testid="chapter-drawer-surface">
+    <div
+      class="chapter-drawer"
+      data-testid="chapter-drawer-surface"
+      @touchstart.passive="drawerSwipe.onTouchStart"
+      @touchend.passive="drawerSwipe.onTouchEnd"
+      @pointerdown.passive="drawerSwipe.onPointerStart"
+      @pointerup.passive="drawerSwipe.onPointerEnd"
+    >
       <div class="chapter-drawer__header">
         <div class="chapter-drawer__header-main">
           <h3>{{ selectedChapter ? selectedChapter.chapterTitle : `已加载 ${chapters.length} 章` }}</h3>
@@ -99,7 +143,7 @@ onBeforeUnmount(() => {
           <el-button
             data-testid="chapter-back"
             plain
-            @click="closeChapterDetail"
+            @click="handleChapterBack"
           >
             返回列表
           </el-button>
@@ -310,6 +354,16 @@ onBeforeUnmount(() => {
 .chapter-drawer__count,
 .chapter-drawer__quota {
   font-size: 0.85rem;
+}
+
+:global(.chapter-preview-drawer.is-fullscreen) {
+  max-width: 100% !important;
+}
+
+:global(.chapter-preview-drawer.is-fullscreen .el-drawer__body) {
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 @media (max-width: 920px) {

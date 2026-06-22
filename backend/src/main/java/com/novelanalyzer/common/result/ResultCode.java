@@ -7,6 +7,7 @@ public enum ResultCode {
     FORBIDDEN(403, "forbidden"),
     NOT_FOUND(404, "not found"),
     TOO_MANY_REQUESTS(429, "too many requests"),
+    BAD_GATEWAY(502, "bad gateway"),
     INTERNAL_ERROR(500, "internal server error");
 
     private final int code;

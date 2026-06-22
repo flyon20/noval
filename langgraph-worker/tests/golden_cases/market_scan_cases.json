@@ -1,0 +1,66 @@
+[
+  {
+    "case_id": "market-scan-001",
+    "question": "最近番茄男频都市脑洞新书榜风向是什么？",
+    "request_payload": {
+      "mode": "research",
+      "limits": {"rankLimit": 10}
+    },
+    "expected_intent": "market_scan",
+    "expected_answer_mode": "trend",
+    "relevant_source_ids": ["rank:101", "rank:102", "rank:103"],
+    "forbidden_claims": ["世界首富", "绝对会火", "必定成功"],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.6,
+      "min_context_recall_at_k": 0.5
+    }
+  },
+  {
+    "case_id": "market-scan-002",
+    "question": "番茄男频都市脑洞新书榜第一名是什么书？",
+    "request_payload": {
+      "mode": "research",
+      "limits": {"rankLimit": 1}
+    },
+    "expected_intent": "market_scan",
+    "expected_answer_mode": "rank_fact",
+    "relevant_source_ids": ["rank:101"],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 1.0,
+      "min_context_precision_at_k": 1.0
+    }
+  },
+  {
+    "case_id": "market-scan-003",
+    "question": "最近男频都市脑洞热门题材有哪些？",
+    "request_payload": {
+      "mode": "research",
+      "limits": {"rankLimit": 10}
+    },
+    "expected_intent": "market_scan",
+    "expected_answer_mode": "trend",
+    "relevant_source_ids": ["rank:101", "rank:102", "rank:103", "rank:104", "rank:105"],
+    "forbidden_claims": ["一定会成功", "绝对火爆"],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.6,
+      "min_context_recall_at_k": 0.5
+    }
+  },
+  {
+    "case_id": "market-scan-004",
+    "question": "番茄女频现言榜前五名都是什么类型的书？",
+    "request_payload": {
+      "mode": "research",
+      "limits": {"rankLimit": 5}
+    },
+    "expected_intent": "market_scan",
+    "expected_answer_mode": "trend",
+    "relevant_source_ids": ["rank:201", "rank:202", "rank:203", "rank:204", "rank:205"],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.8,
+      "min_context_recall_at_k": 0.6
+    }
+  }
+]

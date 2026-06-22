@@ -5,9 +5,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
@@ -34,6 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
     }
 )
 @AutoConfigureMockMvc
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @Sql(
     scripts = {"classpath:sql/phase2-schema-h2.sql", "classpath:sql/phase2-data-h2.sql"},
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
@@ -48,11 +51,15 @@ class PasswordLoginRiskControlIntegrationTest {
 
     @BeforeEach
     void clearRedisCache() {
-        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
         try {
-            connection.serverCommands().flushDb();
-        } finally {
-            connection.close();
+            RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
+            try {
+                connection.serverCommands().flushDb();
+            } finally {
+                connection.close();
+            }
+        } catch (RedisConnectionFailureException ignored) {
+            // Password risk control falls back to local counters when Redis is absent.
         }
     }
 

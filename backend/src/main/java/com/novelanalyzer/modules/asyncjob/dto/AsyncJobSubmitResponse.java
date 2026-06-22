@@ -1,5 +1,7 @@
 package com.novelanalyzer.modules.asyncjob.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 public class AsyncJobSubmitResponse {
 
     private Long jobId;
@@ -51,6 +53,7 @@ public class AsyncJobSubmitResponse {
         this.reused = reused;
     }
 
+    @JsonIgnore
     public Boolean getAcquired() {
         return acquired;
     }
@@ -59,6 +62,7 @@ public class AsyncJobSubmitResponse {
         this.acquired = acquired;
     }
 
+    @JsonIgnore
     public String getLockKey() {
         return lockKey;
     }
@@ -67,6 +71,7 @@ public class AsyncJobSubmitResponse {
         this.lockKey = lockKey;
     }
 
+    @JsonIgnore
     public String getLockValue() {
         return lockValue;
     }

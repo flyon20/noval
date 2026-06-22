@@ -294,6 +294,41 @@ describe('LoginView', () => {
     expect(wrapper.text()).toContain('请完成人机校验后再发送验证码');
   });
 
+  test('shows actionable message when turnstile errors before sms send', async () => {
+    const { authApi } = await import('@/api/auth');
+    const { systemApi } = await import('@/api/system');
+    vi.mocked(systemApi.getAuthPublicConfig).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          turnstileEnabled: true,
+          turnstileSiteKey: 'site-key',
+        },
+        timestamp: 1,
+        traceId: 'trace-public-auth-config',
+      },
+    });
+
+    const router = buildRouter();
+    await router.push('/login');
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await wrapper.get('[data-test="auth-mode-register"]').trigger('click');
+    await wrapper.getComponent({ name: 'TurnstileWidget' }).vm.$emit('error');
+    await wrapper.get('input[data-test="login-phone"]').setValue('13800138000');
+    await wrapper.get('[data-test="send-sms-code"]').trigger('click');
+    await flushPromises();
+
+    expect(authApi.sendSmsCode).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('人机校验组件加载失败，请刷新页面或更换网络后重试');
+  });
+
   test('successful sms send keeps turnstile token for resend on same phone', async () => {
     const { authApi } = await import('@/api/auth');
     const { systemApi } = await import('@/api/system');

@@ -39,4 +39,15 @@ public class AsyncJobLockService {
             // Redis unavailable: skip unlock, there is no remote state to clean up safely.
         }
     }
+
+    public void renew(String lockKey, String lockValue, long ttlSeconds) {
+        try {
+            String currentValue = stringRedisTemplate.opsForValue().get(lockKey);
+            if (currentValue != null && currentValue.equals(lockValue)) {
+                stringRedisTemplate.expire(lockKey, ttlSeconds, TimeUnit.SECONDS);
+            }
+        } catch (Exception ignored) {
+            // Redis unavailable: skip renewal. The job remains protected by MySQL idempotency.
+        }
+    }
 }

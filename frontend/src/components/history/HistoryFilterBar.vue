@@ -8,30 +8,73 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   filter: [
-    { analysisType?: 'deconstruct' | 'structure' | 'plot' | 'theme'; bookId?: number; limit?: number }
+    {
+      analysisType?: 'deconstruct' | 'structure' | 'plot' | 'theme';
+      bookId?: number;
+      channelCode?: string;
+      boardCode?: string;
+      chapterCount?: number;
+      modelName?: string;
+      keyword?: string;
+      startTime?: string;
+      endTime?: string;
+      pageSize?: number;
+    }
   ];
 }>();
 
 const state = reactive({
   analysisType: '' as '' | 'deconstruct' | 'structure' | 'plot' | 'theme',
   bookId: '' as string,
-  limit: props.defaultLimit ?? 20,
+  channelCode: '',
+  boardCode: '',
+  chapterCount: '',
+  modelName: '',
+  keyword: '',
+  timeRange: [] as string[],
+  pageSize: props.defaultLimit ?? 20,
 });
 
 const limitOptions = computed(() => [10, 20, 30, 50]);
 
+function optionalText(value: string) {
+  const normalized = value.trim();
+  return normalized ? normalized : undefined;
+}
+
+function optionalNumber(value: string, allowZero = false) {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && (allowZero ? parsed >= 0 : parsed > 0) ? parsed : undefined;
+}
+
 function submit() {
   emit('filter', {
     analysisType: state.analysisType || undefined,
-    bookId: state.bookId ? Number(state.bookId) : undefined,
-    limit: state.limit,
+    bookId: optionalNumber(state.bookId),
+    channelCode: optionalText(state.channelCode),
+    boardCode: optionalText(state.boardCode),
+    chapterCount: optionalNumber(state.chapterCount, true),
+    modelName: optionalText(state.modelName),
+    keyword: optionalText(state.keyword),
+    startTime: state.timeRange[0],
+    endTime: state.timeRange[1],
+    pageSize: state.pageSize,
   });
 }
 
 function reset() {
   state.analysisType = '';
   state.bookId = '';
-  state.limit = props.defaultLimit ?? 20;
+  state.channelCode = '';
+  state.boardCode = '';
+  state.chapterCount = '';
+  state.modelName = '';
+  state.keyword = '';
+  state.timeRange = [];
+  state.pageSize = props.defaultLimit ?? 20;
   submit();
 }
 </script>
@@ -71,9 +114,68 @@ function reset() {
         />
       </el-form-item>
 
-      <el-form-item label="返回条数">
+      <el-form-item label="频道">
+        <el-input
+          v-model="state.channelCode"
+          placeholder="如 male-new"
+          data-test="history-filter-channel"
+          clearable
+        />
+      </el-form-item>
+
+      <el-form-item label="搜索内容">
+        <el-input
+          v-model="state.keyword"
+          placeholder="书名、题材、结论、结构点"
+          data-test="history-filter-keyword"
+          clearable
+        />
+      </el-form-item>
+
+      <el-form-item label="榜单">
+        <el-input
+          v-model="state.boardCode"
+          placeholder="如 urban-brain"
+          data-test="history-filter-board"
+          clearable
+        />
+      </el-form-item>
+
+      <el-form-item label="章节数">
+        <el-input
+          v-model="state.chapterCount"
+          type="number"
+          min="0"
+          placeholder="全部"
+          data-test="history-filter-chapter-count"
+          clearable
+        />
+      </el-form-item>
+
+      <el-form-item label="模型">
+        <el-input
+          v-model="state.modelName"
+          placeholder="如 deepseek-chat"
+          data-test="history-filter-model"
+          clearable
+        />
+      </el-form-item>
+
+      <el-form-item label="生成时间">
+        <el-date-picker
+          v-model="state.timeRange"
+          type="datetimerange"
+          value-format="YYYY-MM-DD HH:mm:ss"
+          range-separator="至"
+          start-placeholder="开始"
+          end-placeholder="结束"
+          data-test="history-filter-time"
+        />
+      </el-form-item>
+
+      <el-form-item label="每页条数">
         <el-select
-          v-model="state.limit"
+          v-model="state.pageSize"
           :loading="props.loading"
           data-test="history-filter-limit"
         >
@@ -146,6 +248,14 @@ function reset() {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 1rem;
+}
+
+.history-filter__grid :deep(.el-form-item),
+.history-filter__grid :deep(.el-input),
+.history-filter__grid :deep(.el-select),
+.history-filter__grid :deep(.el-date-editor) {
+  min-width: 0;
+  width: 100%;
 }
 
 .history-filter__actions {

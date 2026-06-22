@@ -45,11 +45,15 @@ const state = reactive({
   turnstileEnabled: false,
   turnstileSiteKey: '',
   turnstileToken: '',
+  turnstileUnavailable: false,
   debugVerifyCode: '',
   smsOutId: '',
   errorMessage: '',
   traceId: '',
 });
+
+const TURNSTILE_REQUIRED_MESSAGE = '请完成人机校验后再发送验证码';
+const TURNSTILE_LOAD_ERROR_MESSAGE = '人机校验组件加载失败，请刷新页面或更换网络后重试';
 
 const countdownTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const turnstileRef = ref<{ reset: () => void } | null>(null);
@@ -170,6 +174,7 @@ function switchMode(mode: AuthMode) {
 
 function clearTurnstileVerification({ resetWidget = false }: { resetWidget?: boolean } = {}) {
   state.turnstileToken = '';
+  state.turnstileUnavailable = false;
   lastTurnstilePhone.value = '';
   if (resetWidget) {
     turnstileRef.value?.reset();
@@ -272,11 +277,15 @@ async function sendSmsCode() {
   if (!validatePhone() || state.sendingSms || state.smsCountdown > 0) {
     return;
   }
+  if (showTurnstile.value && state.turnstileUnavailable) {
+    state.errorMessage = TURNSTILE_LOAD_ERROR_MESSAGE;
+    return;
+  }
   if (showTurnstile.value && lastTurnstilePhone.value && lastTurnstilePhone.value !== normalizedPhone) {
     clearTurnstileVerification({ resetWidget: true });
   }
   if (showTurnstile.value && !state.turnstileToken) {
-    state.errorMessage = '请完成人机校验后再发送验证码';
+    state.errorMessage = TURNSTILE_REQUIRED_MESSAGE;
     return;
   }
 
@@ -318,6 +327,7 @@ async function loadAuthPublicConfig() {
 
 function handleTurnstileVerified(token: string) {
   state.turnstileToken = token.trim();
+  state.turnstileUnavailable = false;
   lastTurnstilePhone.value = form.phone.trim();
 }
 
@@ -327,6 +337,8 @@ function handleTurnstileExpired() {
 
 function handleTurnstileError() {
   clearTurnstileVerification();
+  state.turnstileUnavailable = true;
+  state.errorMessage = TURNSTILE_LOAD_ERROR_MESSAGE;
 }
 
 watch(() => form.phone.trim(), (nextPhone, previousPhone) => {
@@ -553,6 +565,8 @@ async function handleSubmit() {
               @verified="handleTurnstileVerified"
               @expired="handleTurnstileExpired"
               @error="handleTurnstileError"
+              @timeout="handleTurnstileError"
+              @unsupported="handleTurnstileError"
             />
           </el-form-item>
 

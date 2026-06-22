@@ -19,7 +19,7 @@ export interface AnalysisResult {
   traceId?: string;
 }
 
-export type StreamEventType = 'start' | 'delta' | 'done' | 'error';
+export type StreamEventType = 'start' | 'progress' | 'delta' | 'done' | 'error';
 
 export interface StreamStartEvent {
   event: 'start';
@@ -31,6 +31,12 @@ export interface StreamDeltaEvent {
   event: 'delta';
   delta: string;
   chunkIndex?: number;
+}
+
+export interface StreamProgressEvent {
+  event: 'progress';
+  message: string;
+  phase?: string;
 }
 
 export interface StreamDoneEvent<T> {

@@ -4,12 +4,14 @@ import type {
   StreamDeltaEvent,
   StreamDoneEvent,
   StreamErrorEvent,
+  StreamProgressEvent,
   StreamStartEvent,
 } from '@/types/analysis';
 import type { TokenResponse } from '@/types/auth';
 
 export interface AnalysisStreamCallbacks<TDone = AnalysisResult> {
   onStart(event: StreamStartEvent): void;
+  onProgress?(event: StreamProgressEvent): void;
   onDelta(event: StreamDeltaEvent): void;
   onDone(event: StreamDoneEvent<TDone>): void;
   onError(event: StreamErrorEvent): void;
@@ -22,7 +24,7 @@ export interface AnalysisStreamTask<TDone = AnalysisResult> {
 }
 
 interface ParsedEvent {
-  event: 'start' | 'delta' | 'done' | 'error';
+  event: 'start' | 'progress' | 'delta' | 'done' | 'error';
   payload: unknown;
 }
 
@@ -35,6 +37,7 @@ export interface AnalysisStreamRunnerDeps<TRequest = AnalysisRequest, TDone = An
   clearSession(): void;
   fetchImpl?: typeof fetch;
   fallbackRequest(payload: TRequest): Promise<TDone>;
+  allowBlockingFallback?: boolean;
 }
 
 export function parseSseFrames(buffer: string, options: { flush?: boolean } = {}) {
@@ -115,6 +118,7 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
   deps: AnalysisStreamRunnerDeps<TRequest, TDone>,
 ) {
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const allowBlockingFallback = deps.allowBlockingFallback !== false;
 
   return {
     run(
@@ -170,6 +174,11 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
                 continue;
               }
 
+              if (item.event === 'progress') {
+                callbacks.onProgress?.(item.payload as StreamProgressEvent);
+                continue;
+              }
+
               if (item.event === 'done') {
                 const doneEvent = item.payload as StreamDoneEvent<TDone>;
                 callbacks.onDone(doneEvent);
@@ -180,6 +189,9 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
                 const errorEvent = item.payload as StreamErrorEvent;
                 callbacks.onError(errorEvent);
                 if (!sawDelta) {
+                  if (!allowBlockingFallback) {
+                    throw new Error(errorEvent.message);
+                  }
                   callbacks.onFallback?.();
                   return FALLBACK_SIGNAL;
                 }
@@ -222,11 +234,17 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
             const contentType = response.headers.get('Content-Type') ?? '';
 
             if (!response.ok || !contentType.includes('text/event-stream')) {
+              if (!allowBlockingFallback) {
+                throw new Error('Stream response unavailable');
+              }
               callbacks.onFallback?.();
               return deps.fallbackRequest(payload);
             }
 
             if (!response.body) {
+              if (!allowBlockingFallback) {
+                throw new Error('Stream response body unavailable');
+              }
               callbacks.onFallback?.();
               return deps.fallbackRequest(payload);
             }
@@ -235,46 +253,63 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
             const decoder = new TextDecoder();
             let buffer = '';
 
-            while (true) {
-              if (controller.signal.aborted) {
-                throw createAbortError();
-              }
+            try {
+              while (true) {
+                if (controller.signal.aborted) {
+                  throw createAbortError();
+                }
 
-              const { done, value } = await reader.read();
+                const { done, value } = await reader.read();
 
-              if (done) {
-                buffer += decoder.decode();
-                const finalParsed = parseSseFrames(buffer, { flush: true });
-                buffer = finalParsed.rest;
-                const finalResult = consumeEvents(finalParsed.events);
+                if (done) {
+                  buffer += decoder.decode();
+                  const finalParsed = parseSseFrames(buffer, { flush: true });
+                  buffer = finalParsed.rest;
+                  const finalResult = consumeEvents(finalParsed.events);
 
-                if (finalResult === FALLBACK_SIGNAL) {
+                  if (finalResult === FALLBACK_SIGNAL) {
+                    return deps.fallbackRequest(payload);
+                  }
+
+                  if (finalResult) {
+                    return finalResult;
+                  }
+
+                  break;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                const parsed = parseSseFrames(buffer);
+                buffer = parsed.rest;
+
+                const streamedResult = consumeEvents(parsed.events);
+
+                if (streamedResult === FALLBACK_SIGNAL) {
                   return deps.fallbackRequest(payload);
                 }
 
-                if (finalResult) {
-                  return finalResult;
+                if (streamedResult) {
+                  return streamedResult;
                 }
-
-                break;
               }
-
-              buffer += decoder.decode(value, { stream: true });
-              const parsed = parseSseFrames(buffer);
-              buffer = parsed.rest;
-
-              const streamedResult = consumeEvents(parsed.events);
-
-              if (streamedResult === FALLBACK_SIGNAL) {
+            } catch (error) {
+              if (isAbortError(error)) {
+                throw error;
+              }
+              if (!sawDelta) {
+                if (!allowBlockingFallback) {
+                  throw error;
+                }
+                callbacks.onFallback?.();
                 return deps.fallbackRequest(payload);
               }
-
-              if (streamedResult) {
-                return streamedResult;
-              }
+              throw error;
             }
 
             if (!sawDelta) {
+              if (!allowBlockingFallback) {
+                throw new Error('Stream ended before answer delta');
+              }
               callbacks.onFallback?.();
               return deps.fallbackRequest(payload);
             }

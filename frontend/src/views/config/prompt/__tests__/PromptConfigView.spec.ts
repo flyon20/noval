@@ -564,4 +564,143 @@ describe('PromptConfigView', () => {
     expect(wrapper.get('[data-test="prompt-name-input"]').attributes('disabled')).toBeUndefined();
     expect(wrapper.find('[data-test="prompt-delete-button"]').exists()).toBe(true);
   });
+
+  test('deletes non-default template through prompt config API and reloads default template', async () => {
+    const { promptConfigApi, systemConfigApi } = await import('@/api/config');
+
+    vi.mocked(promptConfigApi.listTemplates).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          { id: 1, promptType: 'deconstruct', promptName: 'default', modelName: 'deepseek-chat', isDefault: true },
+          { id: 2, promptType: 'deconstruct', promptName: 'kimi-template', modelName: 'kimi-k2.5', isDefault: false },
+        ],
+        timestamp: 1,
+        traceId: 'trace-templates',
+      },
+    });
+    vi.mocked(promptConfigApi.getByType)
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: {
+            ...createPromptConfig('deconstruct'),
+            id: 2,
+            promptName: 'kimi-template',
+            modelName: 'kimi-k2.5',
+          },
+          timestamp: 1,
+          traceId: 'trace-kimi-template',
+        },
+      } as never)
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          message: 'success',
+          data: {
+            ...createPromptConfig('deconstruct'),
+            promptName: 'default',
+            isDefault: true,
+          },
+          timestamp: 1,
+          traceId: 'trace-default',
+        },
+      } as never);
+    vi.mocked(promptConfigApi.remove).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-delete',
+      },
+    } as never);
+    vi.mocked(systemConfigApi.getModelOptions).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [],
+        timestamp: 1,
+        traceId: 'trace-models',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/config/prompt', component: PromptConfigView }],
+    });
+    await router.push('/config/prompt');
+
+    const wrapper = mount(PromptConfigView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+    await wrapper.get('[data-test="prompt-delete-button"]').trigger('click');
+    await flushPromises();
+
+    expect(promptConfigApi.remove).toHaveBeenCalledWith('deconstruct', 'kimi-template');
+    expect(promptConfigApi.getByType).toHaveBeenLastCalledWith('deconstruct', 'default');
+  });
+
+  test('does not render unrelated English intro labels', async () => {
+    const { promptConfigApi, systemConfigApi } = await import('@/api/config');
+
+    vi.mocked(promptConfigApi.listTemplates).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          { id: 1, promptType: 'deconstruct', promptName: 'default', modelName: 'deepseek-chat', isDefault: true },
+        ],
+        timestamp: 1,
+        traceId: 'trace-templates',
+      },
+    });
+    vi.mocked(promptConfigApi.getByType).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          ...createPromptConfig('deconstruct'),
+          promptName: 'default',
+          isDefault: true,
+        },
+        timestamp: 1,
+        traceId: 'trace-default',
+      },
+    });
+    vi.mocked(systemConfigApi.getModelOptions).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [],
+        timestamp: 1,
+        traceId: 'trace-models',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/config/prompt', component: PromptConfigView }],
+    });
+    await router.push('/config/prompt');
+
+    const wrapper = mount(PromptConfigView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain('Current Page');
+    expect(wrapper.text()).not.toContain('JSON Contract');
+    expect(wrapper.text()).not.toContain('Temperature');
+    expect(wrapper.text()).not.toContain('Max Tokens');
+  });
 });

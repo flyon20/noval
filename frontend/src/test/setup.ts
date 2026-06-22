@@ -20,3 +20,20 @@ Object.defineProperty(window, 'matchMedia', {
     dispatchEvent: vi.fn(),
   })),
 });
+
+Object.defineProperty(window, 'visualViewport', {
+  configurable: true,
+  writable: true,
+  value: {
+    width: 390,
+    height: 780,
+    offsetTop: 0,
+    offsetLeft: 0,
+    scale: 1,
+    onresize: null,
+    onscroll: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  },
+});

@@ -35,6 +35,25 @@ public class AsyncJobService {
                                                 String requestJson,
                                                 Long triggerUserId,
                                                 long lockTtlSeconds) {
+        return submitOrReuse(jobType, jobKey, resourceKey, requestJson, triggerUserId, lockTtlSeconds, STATUS_RUNNING);
+    }
+
+    public AsyncJobSubmitResponse submitOrReusePending(String jobType,
+                                                       String jobKey,
+                                                       String resourceKey,
+                                                       String requestJson,
+                                                       Long triggerUserId,
+                                                       long lockTtlSeconds) {
+        return submitOrReuse(jobType, jobKey, resourceKey, requestJson, triggerUserId, lockTtlSeconds, STATUS_PENDING);
+    }
+
+    private AsyncJobSubmitResponse submitOrReuse(String jobType,
+                                                 String jobKey,
+                                                 String resourceKey,
+                                                 String requestJson,
+                                                 Long triggerUserId,
+                                                 long lockTtlSeconds,
+                                                 String initialStatus) {
         Optional<AsyncJobEntity> latest = asyncJobRepository.findLatestByTypeAndKey(jobType, jobKey);
         if (latest.isPresent() && isActiveStatus(latest.get().getStatus())) {
             return toSubmitResponse(latest.get(), true, false, null, null);
@@ -55,10 +74,12 @@ public class AsyncJobService {
         entity.setJobKey(jobKey);
         entity.setResourceKey(resourceKey);
         entity.setRequestJson(requestJson);
-        entity.setStatus(STATUS_RUNNING);
+        entity.setStatus(initialStatus);
         entity.setTriggerUserId(triggerUserId);
         entity.setRetryCount(0);
-        entity.setStartedAt(LocalDateTime.now());
+        if (STATUS_RUNNING.equals(initialStatus)) {
+            entity.setStartedAt(LocalDateTime.now());
+        }
         Long id = asyncJobRepository.save(entity);
         entity.setId(id);
         return toSubmitResponse(entity, false, true, lockKey, lockValue);
@@ -72,6 +93,10 @@ public class AsyncJobService {
         return asyncJobRepository.findLatestByTypeAndKey(jobType, jobKey).map(this::toVO);
     }
 
+    public long countSuccessfulJobs(String jobType, String jobKey, Long triggerUserId, LocalDateTime createdAfter) {
+        return asyncJobRepository.countByTypeKeyAndUserAfter(jobType, jobKey, triggerUserId, STATUS_SUCCESS, createdAfter);
+    }
+
     public void markSuccess(Long jobId, String resultRefType, Long resultRefId, String resultSummary) {
         AsyncJobEntity entity = asyncJobRepository.findById(jobId).orElseThrow();
         entity.setStatus(STATUS_SUCCESS);
@@ -79,6 +104,31 @@ public class AsyncJobService {
         entity.setResultRefId(resultRefId);
         entity.setResultSummary(resultSummary);
         entity.setFinishedAt(LocalDateTime.now());
+        asyncJobRepository.updateById(entity);
+    }
+
+    public void markRunning(Long jobId) {
+        AsyncJobEntity entity = asyncJobRepository.findById(jobId).orElseThrow();
+        entity.setStatus(STATUS_RUNNING);
+        entity.setStartedAt(LocalDateTime.now());
+        entity.setFinishedAt(null);
+        asyncJobRepository.updateById(entity);
+    }
+
+    public void markPendingForRetry(Long jobId, String errorMessage) {
+        AsyncJobEntity entity = asyncJobRepository.findById(jobId).orElseThrow();
+        entity.setStatus(STATUS_PENDING);
+        entity.setErrorMessage(truncate(errorMessage, MAX_ERROR_MESSAGE_LENGTH));
+        entity.setRetryCount((entity.getRetryCount() == null ? 0 : entity.getRetryCount()) + 1);
+        entity.setFinishedAt(null);
+        asyncJobRepository.updateById(entity);
+    }
+
+    public void markRetryPublishFailed(Long jobId, String errorMessage) {
+        AsyncJobEntity entity = asyncJobRepository.findById(jobId).orElseThrow();
+        entity.setStatus(STATUS_PENDING);
+        entity.setErrorMessage(truncate(errorMessage, MAX_ERROR_MESSAGE_LENGTH));
+        entity.setFinishedAt(null);
         asyncJobRepository.updateById(entity);
     }
 
@@ -95,6 +145,13 @@ public class AsyncJobService {
             return;
         }
         asyncJobLockService.release(response.getLockKey(), response.getLockValue());
+    }
+
+    public void renewLock(AsyncJobSubmitResponse response, long ttlSeconds) {
+        if (response == null || response.getLockKey() == null || response.getLockValue() == null) {
+            return;
+        }
+        asyncJobLockService.renew(response.getLockKey(), response.getLockValue(), ttlSeconds);
     }
 
     private String buildLockKey(String jobType, String jobKey) {

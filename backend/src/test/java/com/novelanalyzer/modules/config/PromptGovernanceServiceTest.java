@@ -2,11 +2,14 @@ package com.novelanalyzer.modules.config;
 
 import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.modules.config.dto.AdminPromptConfigUpdateRequest;
+import com.novelanalyzer.modules.config.dto.AiModelRegistryModelRequest;
+import com.novelanalyzer.modules.config.dto.AiModelRegistrySaveRequest;
 import com.novelanalyzer.modules.config.dto.PromptPublishRequest;
 import com.novelanalyzer.modules.config.dto.UserPromptBindingUpdateRequest;
 import com.novelanalyzer.modules.config.dto.UserPromptCopyCreateRequest;
 import com.novelanalyzer.modules.config.dto.UserPromptCopyUpdateRequest;
 import com.novelanalyzer.modules.config.service.PromptGovernanceService;
+import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.vo.PromptPublishVersionVO;
 import com.novelanalyzer.modules.config.vo.UserPromptBindingVO;
 import org.junit.jupiter.api.Test;
@@ -42,6 +45,9 @@ class PromptGovernanceServiceTest {
 
     @Autowired
     private PromptGovernanceService promptGovernanceService;
+
+    @Autowired
+    private SystemConfigService systemConfigService;
 
     @Test
     void shouldPublishSelectedSystemTemplatesAsNewGlobalVersion() {
@@ -184,6 +190,33 @@ class PromptGovernanceServiceTest {
 
         assertThat(resolved.getId()).isEqualTo(1L);
         assertThat(resolved.getPromptName()).isEqualTo("default");
+    }
+
+    @Test
+    void shouldRejectDeletingSystemTemplateBoundByModelRegistry() {
+        AdminPromptConfigUpdateRequest templateRequest = new AdminPromptConfigUpdateRequest();
+        templateRequest.setPromptType("deconstruct");
+        templateRequest.setPromptName("kimi-template");
+        templateRequest.setPromptContent("Kimi {{content}}");
+        templateRequest.setModelName("kimi-k2.5");
+        promptGovernanceService.saveSystemTemplate(templateRequest);
+
+        AiModelRegistryModelRequest modelRequest = new AiModelRegistryModelRequest();
+        modelRequest.setModelKey("kimi-k2.5");
+        modelRequest.setDisplayName("Kimi");
+        modelRequest.setProviderType("openai-compatible");
+        modelRequest.setModelName("kimi-k2.5");
+        modelRequest.setEnabled(true);
+        modelRequest.setPromptBindings(java.util.Map.of("deconstruct", "kimi-template"));
+
+        AiModelRegistrySaveRequest registryRequest = new AiModelRegistrySaveRequest();
+        registryRequest.setDefaultModelKey("kimi-k2.5");
+        registryRequest.setModels(java.util.List.of(modelRequest));
+        systemConfigService.saveModelRegistry(registryRequest);
+
+        assertThatThrownBy(() -> promptGovernanceService.deleteSystemTemplate("deconstruct", "kimi-template"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("template is bound to model");
     }
 
     private PromptPublishRequest.PromptPublishSelectionItem selection(String promptType, String promptName, Long promptConfigId) {

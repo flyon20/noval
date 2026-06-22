@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,31 +37,32 @@ public class SystemConfigService {
     );
 
     private static final Map<String, DefaultSystemConfig> DEFAULT_SYSTEM_CONFIGS = Map.ofEntries(
-        Map.entry("ai.provider.type", new DefaultSystemConfig("openai-compatible", "ai", "AI provider type", true)),
-        Map.entry("ai.timeout.millis", new DefaultSystemConfig("15000", "ai", "AI request timeout in milliseconds", true)),
-        Map.entry("analysis.runtime.mode", new DefaultSystemConfig("langgraph", "analysis", "Analysis runtime mode: legacy or langgraph", true)),
-        Map.entry("ai.openai-compatible.base-url", new DefaultSystemConfig("", "ai", "OpenAI compatible base URL, blank means fallback to application config", true)),
-        Map.entry("ai.openai-compatible.default-model", new DefaultSystemConfig("deepseek-chat", "ai", "Default OpenAI compatible model name", true)),
-        Map.entry("ai.openai-compatible.api-key", new DefaultSystemConfig("", "ai", "OpenAI compatible API key (stored in DB, takes precedence over env var)", true)),
-        Map.entry("ai.openai-compatible.streaming-enabled", new DefaultSystemConfig("true", "ai", "Whether OpenAI compatible streaming is enabled", true)),
-        Map.entry("ai.langgraph-worker.base-url", new DefaultSystemConfig("", "ai", "LangGraph worker base URL, blank means fallback to application config", true)),
-        Map.entry("ai.langgraph-worker.internal-api-key", new DefaultSystemConfig("", "ai", "LangGraph worker internal service token", true)),
-        Map.entry("ai.langgraph-worker.timeout-millis", new DefaultSystemConfig("30000", "ai", "LangGraph worker timeout in milliseconds", true)),
-        Map.entry("ai.available-models", new DefaultSystemConfig("deepseek-chat", "ai", "Comma-separated list of available AI models for user selection", true)),
-        Map.entry("auth.bootstrap-admin-phones", new DefaultSystemConfig("15599316908", "auth", "Comma-separated admin phone bootstrap list", true)),
-        Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "Default crawler chapter count", true)),
-        Map.entry("crawler.http.timeout-seconds", new DefaultSystemConfig("20", "crawler", "Python crawler page fetch timeout in seconds", true)),
-        Map.entry("crawler.chapter.fetch-workers", new DefaultSystemConfig("3", "crawler", "Python crawler chapter fetch workers", true)),
-        Map.entry("crawler.chapter.force-refresh.user-max-times", new DefaultSystemConfig("3", "crawler", "Maximum chapter force refresh times for normal users in current rank cache window", true)),
-        Map.entry("crawler.rank.refresh-days", new DefaultSystemConfig("5", "crawler", "Rank refresh days", true)),
-        Map.entry("crawler.rank.force-cooldown-days", new DefaultSystemConfig("2", "crawler", "Rank force refresh cooldown days", true)),
-        Map.entry("crawler.rank.force-max-times", new DefaultSystemConfig("2", "crawler", "Rank force refresh max times", true)),
-        Map.entry("crawler.book.refresh-days", new DefaultSystemConfig("7", "crawler", "Book refresh days", true)),
-        Map.entry("analysis.reanalyze.cooldown-hours", new DefaultSystemConfig("0", "analysis", "Analysis reanalyze cooldown hours", true)),
-        Map.entry("analysis.chunk.max-input-tokens", new DefaultSystemConfig("32000", "analysis", "Approximate max input tokens before analysis switches to chunk mode", true)),
-        Map.entry("analysis.chunk.target-input-tokens", new DefaultSystemConfig("24000", "analysis", "Approximate target input tokens for each chunked analysis request", true)),
-        Map.entry("analysis.chunk.parallelism", new DefaultSystemConfig("3", "analysis", "Maximum parallel chunk analysis requests", true)),
-        Map.entry("security.audit.enabled", new DefaultSystemConfig("true", "security", "Whether audit logging is enabled", true))
+        Map.entry("ai.provider.type", new DefaultSystemConfig("openai-compatible", "ai", "旧版兼容配置，模型注册表会优先决定实际请求方式。", true)),
+        Map.entry("ai.timeout.millis", new DefaultSystemConfig("15000", "ai", "控制单书分析等常规 AI 请求超时时间。", true)),
+        Map.entry("analysis.runtime.mode", new DefaultSystemConfig("langgraph", "analysis", "控制单书分析使用 legacy 还是 LangGraph 运行链路。", true)),
+        Map.entry("ai.openai-compatible.base-url", new DefaultSystemConfig("", "ai", "旧版兼容地址，模型注册表为空时作为回落值。", true)),
+        Map.entry("ai.openai-compatible.default-model", new DefaultSystemConfig("deepseek-chat", "ai", "旧版默认模型，模型注册表为空时作为回落值。", true)),
+        Map.entry("ai.openai-compatible.api-key", new DefaultSystemConfig("", "ai", "旧版兼容密钥，留空或掩码会保留原密钥。", true)),
+        Map.entry("ai.openai-compatible.streaming-enabled", new DefaultSystemConfig("true", "ai", "旧版兼容开关，当前主要由运行链路决定流式表现。", true)),
+        Map.entry("ai.langgraph-worker.base-url", new DefaultSystemConfig("", "ai", "LangGraph worker 服务地址，留空时使用环境配置。", true)),
+        Map.entry("ai.langgraph-worker.internal-api-key", new DefaultSystemConfig("", "ai", "后端调用 LangGraph worker 的内部鉴权令牌。", true)),
+        Map.entry("ai.langgraph-worker.timeout-millis", new DefaultSystemConfig("30000", "ai", "后端等待 LangGraph worker 响应的超时时间。", true)),
+        Map.entry("ai.available-models", new DefaultSystemConfig("deepseek-chat", "ai", "旧版逗号分隔模型列表，模型注册表保存后会同步。", true)),
+        Map.entry("auth.bootstrap-admin-phones", new DefaultSystemConfig("15599316908", "auth", "逗号分隔的管理员手机号列表，登录或刷新时自动补齐 ADMIN 角色。", true)),
+        Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "扫榜页默认抓取的章节数量。", true)),
+        Map.entry("crawler.http.timeout-seconds", new DefaultSystemConfig("20", "crawler", "爬虫请求页面时的超时时间。", true)),
+        Map.entry("crawler.chapter.fetch-workers", new DefaultSystemConfig("3", "crawler", "多章节抓取时的最大并发数。", true)),
+        Map.entry("crawler.chapter.force-refresh.user-max-times", new DefaultSystemConfig("3", "crawler", "普通用户在当前窗口内的章节重抓上限。", true)),
+        Map.entry("crawler.rank.refresh-days", new DefaultSystemConfig("5", "crawler", "榜单缓存期与章节重抓统计窗口。", true)),
+        Map.entry("crawler.rank.force-cooldown-days", new DefaultSystemConfig("2", "crawler", "普通用户强制刷新榜单后的冷却天数。", true)),
+        Map.entry("crawler.rank.force-max-times", new DefaultSystemConfig("2", "crawler", "普通用户在冷却窗口内可强制刷新榜单的次数。", true)),
+        Map.entry("crawler.book.refresh-days", new DefaultSystemConfig("7", "crawler", "书籍详情和章节信息的缓存天数。", true)),
+        Map.entry("analysis.reanalyze.cooldown-hours", new DefaultSystemConfig("0", "analysis", "已有成功结果且输入未变化时，普通用户的重新分析冷却时间。", true)),
+        Map.entry("analysis.reanalyze.user-max-times", new DefaultSystemConfig("3", "analysis", "已有成功结果且输入未变化时，普通用户在冷却窗口内的次数上限。", true)),
+        Map.entry("analysis.chunk.max-input-tokens", new DefaultSystemConfig("32000", "analysis", "单次分析允许的估算输入 Token 上限，超过后自动分段汇总。", true)),
+        Map.entry("analysis.chunk.target-input-tokens", new DefaultSystemConfig("24000", "analysis", "分段分析时每段的目标输入 Token 大小。", true)),
+        Map.entry("analysis.chunk.parallelism", new DefaultSystemConfig("3", "analysis", "分段分析时的最大并发段数。", true)),
+        Map.entry("security.audit.enabled", new DefaultSystemConfig("true", "security", "控制后台操作审计日志是否启用。", true))
     );
 
     private final SystemConfigRepository systemConfigRepository;
@@ -98,6 +100,15 @@ public class SystemConfigService {
         return toVO(systemConfigRepository.saveOrUpdate(entity));
     }
 
+    public List<SystemConfigVO> getKnownConfigs() {
+        return DEFAULT_SYSTEM_CONFIGS.keySet().stream()
+            .sorted(Comparator.naturalOrder())
+            .map(this::findOrCreateDefaultConfig)
+            .flatMap(Optional::stream)
+            .map(this::toKnownConfigVO)
+            .toList();
+    }
+
     public String getValueOrDefault(String configKey, String defaultValue) {
         return findOrCreateDefaultConfig(configKey)
             .map(SystemConfigEntity::getConfigValue)
@@ -120,6 +131,19 @@ public class SystemConfigService {
 
     public AiModelRegistryVO getModelRegistry() {
         return sanitizeModelRegistry(getModelRegistryInternal());
+    }
+
+    public boolean isPromptTemplateBound(String promptType, String promptName) {
+        if (promptType == null || promptType.isBlank() || promptName == null || promptName.isBlank()) {
+            return false;
+        }
+        String normalizedPromptName = promptName.trim();
+        return getModelRegistryInternal().getModels().stream()
+            .map(AiModelRegistryModelVO::getPromptBindings)
+            .filter(bindings -> bindings != null)
+            .map(bindings -> bindings.get(promptType))
+            .filter(boundPromptName -> boundPromptName != null)
+            .anyMatch(boundPromptName -> normalizedPromptName.equals(boundPromptName.trim()));
     }
 
     public AiModelRegistryVO saveModelRegistry(AiModelRegistrySaveRequest request) {
@@ -220,6 +244,17 @@ public class SystemConfigService {
         vo.setConfigType(entity.getConfigType());
         vo.setDescription(entity.getDescription());
         vo.setEditable(entity.getEditable() == null || entity.getEditable() == 1);
+        return vo;
+    }
+
+    private SystemConfigVO toKnownConfigVO(SystemConfigEntity entity) {
+        SystemConfigVO vo = toVO(entity);
+        DefaultSystemConfig known = DEFAULT_SYSTEM_CONFIGS.get(entity.getConfigKey());
+        if (known != null) {
+            vo.setConfigType(known.configType());
+            vo.setDescription(known.description());
+            vo.setEditable(known.editable());
+        }
         return vo;
     }
 

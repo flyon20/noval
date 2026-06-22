@@ -10,6 +10,12 @@ public class AnalysisHistoryItemVO {
     private String analysisType;
     private Integer chapterCount;
     private String modelName;
+    private String channelCode;
+    private String boardCode;
+    private Long snapshotId;
+    private Integer tokenUsed;
+    private Long costTime;
+    private String summaryPreview;
     private String resultContent;
     private Map<String, Object> resultJson;
     private String createdAt;
@@ -60,6 +66,54 @@ public class AnalysisHistoryItemVO {
 
     public void setModelName(String modelName) {
         this.modelName = modelName;
+    }
+
+    public String getChannelCode() {
+        return channelCode;
+    }
+
+    public void setChannelCode(String channelCode) {
+        this.channelCode = channelCode;
+    }
+
+    public String getBoardCode() {
+        return boardCode;
+    }
+
+    public void setBoardCode(String boardCode) {
+        this.boardCode = boardCode;
+    }
+
+    public Long getSnapshotId() {
+        return snapshotId;
+    }
+
+    public void setSnapshotId(Long snapshotId) {
+        this.snapshotId = snapshotId;
+    }
+
+    public Integer getTokenUsed() {
+        return tokenUsed;
+    }
+
+    public void setTokenUsed(Integer tokenUsed) {
+        this.tokenUsed = tokenUsed;
+    }
+
+    public Long getCostTime() {
+        return costTime;
+    }
+
+    public void setCostTime(Long costTime) {
+        this.costTime = costTime;
+    }
+
+    public String getSummaryPreview() {
+        return summaryPreview;
+    }
+
+    public void setSummaryPreview(String summaryPreview) {
+        this.summaryPreview = summaryPreview;
     }
 
     public String getResultContent() {

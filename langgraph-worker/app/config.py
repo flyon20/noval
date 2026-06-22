@@ -23,6 +23,17 @@ class Settings(BaseModel):
         os.getenv("AI_LANGGRAPH_WORKER_INTERNAL_API_KEY", ""),
     )
     backend_tool_timeout_millis: int = int(os.getenv("AI_BACKEND_TOOL_TIMEOUT_MILLIS", "90000"))
+    agent_max_parallel_tool_calls: int = max(1, int(os.getenv("AI_AGENT_MAX_PARALLEL_TOOL_CALLS", "3")))
+    agent_max_skill_chars: int = max(500, int(os.getenv("AI_AGENT_MAX_SKILL_CHARS", "3000")))
+    agent_max_material_chars: int = max(1000, int(os.getenv("AI_AGENT_MAX_MATERIAL_CHARS", "12000")))
+    agent_market_topn_default: int = max(1, int(os.getenv("AI_AGENT_MARKET_TOPN_DEFAULT", "10")))
+    agent_chapters_per_rank_book: int = max(1, int(os.getenv("AI_AGENT_CHAPTERS_PER_RANK_BOOK", "1")))
+    mysql_host: str = os.getenv("MYSQL_HOST", "mysql")
+    mysql_port: int = int(os.getenv("MYSQL_PORT", "3306"))
+    mysql_database: str = os.getenv("MYSQL_DATABASE", "novel_analyzer")
+    mysql_user: str = os.getenv("MYSQL_USER", "novel")
+    mysql_password: str = os.getenv("MYSQL_PASSWORD", "")
+    langgraph_checkpoint_backend: str = os.getenv("AI_LANGGRAPH_CHECKPOINT_BACKEND", "mysql")
 
 
 settings = Settings()

@@ -1,0 +1,77 @@
+[
+  {
+    "case_id": "edge-case-001",
+    "question": "今天天气怎么样？",
+    "request_payload": {
+      "mode": "research"
+    },
+    "expected_intent": "out_of_scope",
+    "expected_answer_mode": null,
+    "relevant_source_ids": [],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  },
+  {
+    "case_id": "edge-case-002",
+    "question": "帮我写一个 Python 函数计算斐波那契数列。",
+    "request_payload": {
+      "mode": "research"
+    },
+    "expected_intent": "out_of_scope",
+    "expected_answer_mode": null,
+    "relevant_source_ids": [],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  },
+  {
+    "case_id": "edge-case-003",
+    "question": "比如《重生之都市修仙》这种书名，参考这个风格设计一个新题材。",
+    "request_payload": {
+      "mode": "research"
+    },
+    "expected_intent": "opening_strategy",
+    "expected_answer_mode": "creative",
+    "relevant_source_ids": [],
+    "forbidden_claims": ["《重生之都市修仙》是榜一", "必须选择这本书"],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  },
+  {
+    "case_id": "edge-case-004",
+    "question": "继续上面那个大纲，扩展成30章细纲。",
+    "request_payload": {
+      "mode": "research",
+      "contextSummary": "上一轮结论：已设计都市重生题材大纲，包含主角重生、金手指、三幕结构。",
+      "history": [
+        {"role": "user", "content": "设计一个都市重生的大纲"},
+        {"role": "assistant", "content": "## 大纲\n主角李明重生回到高考前..."}
+      ]
+    },
+    "expected_intent": "followup_context",
+    "expected_answer_mode": "creative",
+    "relevant_source_ids": [],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  },
+  {
+    "case_id": "edge-case-005",
+    "question": "这段开头有什么毒点？\n\n李明睁开眼，发现自己回到了十年前。他兴奋地跳起来，大喊：'我终于重生了！我要成为世界首富！'",
+    "request_payload": {
+      "mode": "research"
+    },
+    "expected_intent": "revision_advice",
+    "expected_answer_mode": "creative",
+    "relevant_source_ids": [],
+    "forbidden_claims": ["没有任何问题"],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.0
+    }
+  }
+]

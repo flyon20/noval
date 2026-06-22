@@ -40,6 +40,15 @@ public class PromptConfigService {
         return getByType(promptType, null);
     }
 
+    public Optional<PromptConfigEntity> resolveRuntimeTemplateByName(String promptType, String promptName) {
+        if (promptName == null || promptName.isBlank()) {
+            return Optional.empty();
+        }
+        return findActiveByTypeAndName(promptType, normalizePromptName(promptName))
+            .filter(entity -> PromptGovernanceService.SCOPE_SYSTEM.equals(entity.getScopeType()))
+            .map(this::backfillMissingContractFields);
+    }
+
     public List<PromptConfigVO> listByType(String promptType) {
         return promptConfigRepository.findActiveByType(promptType).stream()
             .map(this::backfillMissingContractFields)
@@ -168,11 +177,13 @@ public class PromptConfigService {
         if (isDefaultTemplate(entity)) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "default template cannot be deleted");
         }
+        String effectivePromptName = entity.getPromptName() == null ? normalizePromptName(promptName) : entity.getPromptName().trim();
         boolean bound = models != null && models.stream()
-            .filter(model -> Boolean.TRUE.equals(model.getEnabled()))
             .map(AiModelRegistryModelVO::getPromptBindings)
             .filter(bindings -> bindings != null)
-            .anyMatch(bindings -> promptName.equals(bindings.get(promptType)));
+            .map(bindings -> bindings.get(promptType))
+            .filter(boundPromptName -> boundPromptName != null)
+            .anyMatch(boundPromptName -> effectivePromptName.equals(boundPromptName.trim()));
         if (bound) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "template is bound to model");
         }

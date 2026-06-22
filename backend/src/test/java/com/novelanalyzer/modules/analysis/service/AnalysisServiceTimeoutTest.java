@@ -19,6 +19,7 @@ import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.crawler.vo.ChapterVO;
+import com.novelanalyzer.modules.data.service.AnalysisHistorySearchIndexService;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -53,6 +54,7 @@ class AnalysisServiceTimeoutTest {
         userConfigService,
         asyncJobService,
         promptGovernanceService,
+        mock(AnalysisHistorySearchIndexService.class),
         new ObjectMapper(),
         mock(AsyncTaskExecutor.class)
     );
@@ -209,7 +211,7 @@ class AnalysisServiceTimeoutTest {
             true
         );
 
-        assertThat(timeoutMillis).isEqualTo(60000);
+        assertThat(timeoutMillis).isEqualTo(180000);
     }
 
     @Test
@@ -284,7 +286,8 @@ class AnalysisServiceTimeoutTest {
             "attachBookAnalysisMeta",
             aiInvokeResult,
             10,
-            8
+            8,
+            null
         );
 
         Map<String, Object> resultJson = aiInvokeResult.getResultJson();
@@ -426,6 +429,162 @@ class AnalysisServiceTimeoutTest {
 
             assertThat(resolved.getId()).isEqualTo(10L);
             assertThat(resolved.getPromptName()).isEqualTo("kimi-k2.5");
+        } finally {
+            com.novelanalyzer.common.context.AuthUserHolder.clear();
+        }
+    }
+
+    @Test
+    void shouldUseSelectedModelPromptBindingForGlobalRuntimePrompt() {
+        PromptConfigEntity publishedPrompt = new PromptConfigEntity();
+        publishedPrompt.setId(10L);
+        publishedPrompt.setPromptType("deconstruct");
+        publishedPrompt.setPromptName("default");
+        publishedPrompt.setPromptContent("Default {{content}}");
+        publishedPrompt.setModelName("deepseek-chat");
+
+        PromptConfigEntity boundPrompt = new PromptConfigEntity();
+        boundPrompt.setId(11L);
+        boundPrompt.setPromptType("deconstruct");
+        boundPrompt.setPromptName("kimi-template");
+        boundPrompt.setPromptContent("Kimi {{content}}");
+        boundPrompt.setModelName("kimi-k2.5");
+
+        AiModelRegistryModelVO runtimeModel = new AiModelRegistryModelVO();
+        runtimeModel.setModelKey("kimi-k2.5");
+        runtimeModel.setModelName("kimi-k2.5");
+        runtimeModel.setEnabled(true);
+        runtimeModel.setPromptBindings(Map.of("deconstruct", "kimi-template"));
+
+        when(userConfigService.getValueForUser(3L, "ai.preferred-model")).thenReturn("kimi-k2.5");
+        when(promptGovernanceService.resolveEffectivePrompt(3L, "deconstruct", "kimi-k2.5"))
+            .thenReturn(new PromptGovernanceService.Resolution(
+                publishedPrompt,
+                null,
+                PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED,
+                1L,
+                false,
+                null
+            ));
+        when(promptConfigService.resolveRuntimeCompatiblePrompt("deconstruct", publishedPrompt)).thenReturn(publishedPrompt);
+        when(promptConfigService.backfillMissingContractFields(publishedPrompt)).thenReturn(publishedPrompt);
+        when(systemConfigService.resolveEnabledModel("kimi-k2.5", "deepseek-chat"))
+            .thenReturn(Optional.of(runtimeModel));
+        when(promptConfigService.resolveRuntimeTemplateByName("deconstruct", "kimi-template"))
+            .thenReturn(Optional.of(boundPrompt));
+        when(promptConfigService.resolveRuntimeCompatiblePrompt("deconstruct", boundPrompt)).thenReturn(boundPrompt);
+        when(promptConfigService.backfillMissingContractFields(boundPrompt)).thenReturn(boundPrompt);
+        when(promptConfigService.findDefaultTemplateForInheritance("deconstruct")).thenReturn(publishedPrompt);
+        when(promptConfigService.mergeInheritedContractFields(boundPrompt, publishedPrompt)).thenReturn(boundPrompt);
+        when(promptConfigService.wrapRuntimePrompt(
+            boundPrompt,
+            3L,
+            "deconstruct",
+            "kimi-k2.5",
+            PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED,
+            1L,
+            false
+        )).thenReturn(new PromptConfigService.RuntimePromptResolution(
+            boundPrompt,
+            3L,
+            "deconstruct",
+            "kimi-k2.5",
+            11L,
+            PromptGovernanceService.EFFECTIVE_SOURCE_GLOBAL_PUBLISHED,
+            1L,
+            false
+        ));
+
+        com.novelanalyzer.common.context.AuthUser authUser = new com.novelanalyzer.common.context.AuthUser();
+        authUser.setUserId(3L);
+        com.novelanalyzer.common.context.AuthUserHolder.set(authUser);
+        try {
+            PromptConfigEntity resolved = ReflectionTestUtils.invokeMethod(
+                analysisService,
+                "resolveRuntimePromptConfig",
+                "deconstruct"
+            );
+
+            assertThat(resolved.getId()).isEqualTo(11L);
+            assertThat(resolved.getPromptName()).isEqualTo("kimi-template");
+        } finally {
+            com.novelanalyzer.common.context.AuthUserHolder.clear();
+        }
+    }
+
+    @Test
+    void shouldUseSelectedModelPromptBindingWhenUserCopyFallsBackToGlobalRuntimePrompt() {
+        PromptConfigEntity publishedPrompt = new PromptConfigEntity();
+        publishedPrompt.setId(10L);
+        publishedPrompt.setPromptType("deconstruct");
+        publishedPrompt.setPromptName("default");
+        publishedPrompt.setPromptContent("Default {{content}}");
+        publishedPrompt.setModelName("deepseek-chat");
+
+        PromptConfigEntity boundPrompt = new PromptConfigEntity();
+        boundPrompt.setId(11L);
+        boundPrompt.setPromptType("deconstruct");
+        boundPrompt.setPromptName("kimi-template");
+        boundPrompt.setPromptContent("Kimi {{content}}");
+        boundPrompt.setModelName("kimi-k2.5");
+
+        AiModelRegistryModelVO runtimeModel = new AiModelRegistryModelVO();
+        runtimeModel.setModelKey("kimi-k2.5");
+        runtimeModel.setModelName("kimi-k2.5");
+        runtimeModel.setEnabled(true);
+        runtimeModel.setPromptBindings(Map.of("deconstruct", "kimi-template"));
+
+        when(userConfigService.getValueForUser(3L, "ai.preferred-model")).thenReturn("kimi-k2.5");
+        when(promptGovernanceService.resolveEffectivePrompt(3L, "deconstruct", "kimi-k2.5"))
+            .thenReturn(new PromptGovernanceService.Resolution(
+                publishedPrompt,
+                null,
+                PromptGovernanceService.EFFECTIVE_SOURCE_USER_COPY_FALLBACK_TO_GLOBAL,
+                1L,
+                true,
+                "fallback"
+            ));
+        when(promptConfigService.resolveRuntimeCompatiblePrompt("deconstruct", publishedPrompt)).thenReturn(publishedPrompt);
+        when(promptConfigService.backfillMissingContractFields(publishedPrompt)).thenReturn(publishedPrompt);
+        when(systemConfigService.resolveEnabledModel("kimi-k2.5", "deepseek-chat"))
+            .thenReturn(Optional.of(runtimeModel));
+        when(promptConfigService.resolveRuntimeTemplateByName("deconstruct", "kimi-template"))
+            .thenReturn(Optional.of(boundPrompt));
+        when(promptConfigService.resolveRuntimeCompatiblePrompt("deconstruct", boundPrompt)).thenReturn(boundPrompt);
+        when(promptConfigService.backfillMissingContractFields(boundPrompt)).thenReturn(boundPrompt);
+        when(promptConfigService.findDefaultTemplateForInheritance("deconstruct")).thenReturn(publishedPrompt);
+        when(promptConfigService.mergeInheritedContractFields(boundPrompt, publishedPrompt)).thenReturn(boundPrompt);
+        when(promptConfigService.wrapRuntimePrompt(
+            boundPrompt,
+            3L,
+            "deconstruct",
+            "kimi-k2.5",
+            PromptGovernanceService.EFFECTIVE_SOURCE_USER_COPY_FALLBACK_TO_GLOBAL,
+            1L,
+            true
+        )).thenReturn(new PromptConfigService.RuntimePromptResolution(
+            boundPrompt,
+            3L,
+            "deconstruct",
+            "kimi-k2.5",
+            11L,
+            PromptGovernanceService.EFFECTIVE_SOURCE_USER_COPY_FALLBACK_TO_GLOBAL,
+            1L,
+            true
+        ));
+
+        com.novelanalyzer.common.context.AuthUser authUser = new com.novelanalyzer.common.context.AuthUser();
+        authUser.setUserId(3L);
+        com.novelanalyzer.common.context.AuthUserHolder.set(authUser);
+        try {
+            PromptConfigEntity resolved = ReflectionTestUtils.invokeMethod(
+                analysisService,
+                "resolveRuntimePromptConfig",
+                "deconstruct"
+            );
+
+            assertThat(resolved.getId()).isEqualTo(11L);
+            assertThat(resolved.getPromptName()).isEqualTo("kimi-template");
         } finally {
             com.novelanalyzer.common.context.AuthUserHolder.clear();
         }

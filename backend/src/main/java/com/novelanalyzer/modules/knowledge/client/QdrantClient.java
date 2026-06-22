@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
 public class QdrantClient {
@@ -27,6 +28,7 @@ public class QdrantClient {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final KnowledgeProperties knowledgeProperties;
+    private final AtomicBoolean collectionEnsured = new AtomicBoolean(false);
 
     public QdrantClient(HttpClient httpClient,
                         ObjectMapper objectMapper,
@@ -37,6 +39,9 @@ public class QdrantClient {
     }
 
     public void ensureCollection() {
+        if (collectionEnsured.get()) {
+            return;
+        }
         Map<String, Object> request = Map.of(
             "vectors", Map.of(
                 "size", knowledgeProperties.getEmbedding().getDimension(),
@@ -44,13 +49,15 @@ public class QdrantClient {
             )
         );
         send("PUT", collectionPath(), request, "qdrant collection ensure failed");
+        collectionEnsured.set(true);
     }
 
     public void upsertPoint(String pointId, List<Double> vector, Map<String, Object> payload) {
-        LOGGER.info("qdrant upsert request: pointId={}, vectorSize={}, payload={}",
+        LOGGER.info("qdrant upsert request: pointId={}, vectorSize={}, payloadKeys={}, payloadSize={}",
             pointId,
             vector == null ? 0 : vector.size(),
-            payload);
+            payload == null ? List.of() : payload.keySet(),
+            payload == null ? 0 : payload.size());
         Map<String, Object> point = Map.of(
             "id", normalizePointId(pointId),
             "vector", vector,

@@ -1090,10 +1090,24 @@ watch(
 }
 
 .rank-page__toolbar {
+  position: sticky;
+  top: 1rem;
+  z-index: 20;
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
   align-items: end;
+  padding: 0.75rem;
+  margin: -0.75rem;
+  border-radius: 1rem;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface-strong) 96%, transparent),
+      color-mix(in srgb, var(--color-surface) 90%, transparent)
+    );
+  backdrop-filter: blur(14px) saturate(1.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
 }
 
 .rank-page__toolbar-group {
@@ -1447,7 +1461,15 @@ watch(
   }
 
   .rank-page__toolbar {
+    position: static;
+    z-index: auto;
     gap: 0.75rem;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .rank-page__toolbar-group {

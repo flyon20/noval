@@ -78,6 +78,25 @@ public class AnalysisRepository {
         return Optional.ofNullable(entity);
     }
 
+    public List<AnalysisResultEntity> findRecentBookResults(String platform,
+                                                            Long bookId,
+                                                            String analysisType,
+                                                            Integer chapterCount,
+                                                            Long promptConfigId,
+                                                            int limit) {
+        return analysisResultMapper.selectList(
+            new LambdaQueryWrapper<AnalysisResultEntity>()
+                .eq(AnalysisResultEntity::getDeleted, 0)
+                .eq(AnalysisResultEntity::getPlatform, platform)
+                .eq(AnalysisResultEntity::getBookId, bookId)
+                .eq(AnalysisResultEntity::getAnalysisType, analysisType)
+                .eq(AnalysisResultEntity::getChapterCount, chapterCount)
+                .eq(AnalysisResultEntity::getPromptConfigId, promptConfigId)
+                .orderByDesc(AnalysisResultEntity::getCreateTime)
+                .last("LIMIT " + Math.max(1, limit))
+        );
+    }
+
     public Optional<AnalysisResultEntity> findLatestReusableBoardTrend(String platform,
                                                                        String channelCode,
                                                                        String boardCode,

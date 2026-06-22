@@ -154,6 +154,43 @@ describe('analysis stream runtime', () => {
     expect(fallbackRequest).toHaveBeenCalledWith(payload);
   });
 
+  test('rejects stream errors before first delta when blocking fallback is disabled', async () => {
+    const fallbackRequest = vi.fn().mockResolvedValue(result);
+    const onError = vi.fn();
+    const runtime = createAnalysisStreamRunner({
+      getAccessToken: () => 'token-1',
+      refreshToken: vi.fn(),
+      applyTokenResponse: vi.fn(),
+      clearSession: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(
+        createSseResponse(
+          [
+            'event: start',
+            'data: {"event":"start","traceId":"trace-1","analysisType":"knowledge"}',
+            '',
+            'event: error',
+            'data: {"event":"error","code":500,"message":"stream failed","traceId":"trace-1"}',
+            '',
+          ].join('\n'),
+        ),
+      ),
+      fallbackRequest,
+      allowBlockingFallback: false,
+    });
+
+    const task = runtime.run('/api/knowledge/chat/stream', payload, {
+      onStart: vi.fn(),
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError,
+      onFallback: vi.fn(),
+    });
+
+    await expect(task.result).rejects.toThrow('stream failed');
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(fallbackRequest).not.toHaveBeenCalled();
+  });
+
   test('does not treat analysis progress placeholder as real delta before fallback', async () => {
     const fallbackRequest = vi.fn().mockResolvedValue(result);
     const onDelta = vi.fn();
@@ -193,6 +230,135 @@ describe('analysis stream runtime', () => {
     await expect(task.result).resolves.toEqual(result);
     expect(onDelta).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
+    expect(onFallback).toHaveBeenCalledTimes(1);
+    expect(fallbackRequest).toHaveBeenCalledWith(payload);
+  });
+
+  test('forwards progress events without counting them as answer deltas', async () => {
+    const onProgress = vi.fn();
+    const onDelta = vi.fn();
+    const runtime = createAnalysisStreamRunner({
+      getAccessToken: () => 'token-1',
+      refreshToken: vi.fn(),
+      applyTokenResponse: vi.fn(),
+      clearSession: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(
+        createSseResponse(
+          [
+            'event: start',
+            'data: {"event":"start","traceId":"trace-1","analysisType":"deconstruct"}',
+            '',
+            'event: progress',
+            'data: {"event":"progress","phase":"retrieve","message":"searching"}',
+            '',
+            'event: delta',
+            'data: {"event":"delta","delta":"answer"}',
+            '',
+            'event: done',
+            `data: ${JSON.stringify({ event: 'done', data: result })}`,
+            '',
+          ].join('\n'),
+        ),
+      ),
+      fallbackRequest: vi.fn(),
+    });
+
+    const task = runtime.run('/api/analysis/deconstruct/stream', payload, {
+      onStart: vi.fn(),
+      onProgress,
+      onDelta,
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await expect(task.result).resolves.toEqual(result);
+    expect(onProgress).toHaveBeenCalledWith({ event: 'progress', phase: 'retrieve', message: 'searching' });
+    expect(onDelta).toHaveBeenCalledTimes(1);
+  });
+
+  test('falls back when progress is followed by an error before first answer delta', async () => {
+    const fallbackRequest = vi.fn().mockResolvedValue(result);
+    const onProgress = vi.fn();
+    const onFallback = vi.fn();
+    const runtime = createAnalysisStreamRunner({
+      getAccessToken: () => 'token-1',
+      refreshToken: vi.fn(),
+      applyTokenResponse: vi.fn(),
+      clearSession: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(
+        createSseResponse(
+          [
+            'event: progress',
+            'data: {"event":"progress","phase":"retrieve","message":"searching"}',
+            '',
+            'event: error',
+            'data: {"event":"error","code":500,"message":"internal server error","traceId":"trace-1"}',
+            '',
+          ].join('\n'),
+        ),
+      ),
+      fallbackRequest,
+    });
+
+    const task = runtime.run('/api/analysis/deconstruct/stream', payload, {
+      onStart: vi.fn(),
+      onProgress,
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+      onFallback,
+    });
+
+    await expect(task.result).resolves.toEqual(result);
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(onFallback).toHaveBeenCalledTimes(1);
+    expect(fallbackRequest).toHaveBeenCalledWith(payload);
+  });
+
+  test('falls back when stream connection fails after progress but before first answer delta', async () => {
+    const encoder = new TextEncoder();
+    const fallbackRequest = vi.fn().mockResolvedValue(result);
+    const onProgress = vi.fn();
+    const onFallback = vi.fn();
+    const runtime = createAnalysisStreamRunner({
+      getAccessToken: () => 'token-1',
+      refreshToken: vi.fn(),
+      applyTokenResponse: vi.fn(),
+      clearSession: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode([
+                'event: progress',
+                'data: {"event":"progress","phase":"chunk","message":"第 1/4 段正在分析"}',
+                '',
+              ].join('\n')));
+              controller.error(new TypeError('network error'));
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              'Content-Type': 'text/event-stream;charset=UTF-8',
+            },
+          },
+        ),
+      ),
+      fallbackRequest,
+    });
+
+    const task = runtime.run('/api/analysis/deconstruct/stream', payload, {
+      onStart: vi.fn(),
+      onProgress,
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+      onFallback,
+    });
+
+    await expect(task.result).resolves.toEqual(result);
+    expect(onProgress).toHaveBeenCalledTimes(0);
     expect(onFallback).toHaveBeenCalledTimes(1);
     expect(fallbackRequest).toHaveBeenCalledWith(payload);
   });

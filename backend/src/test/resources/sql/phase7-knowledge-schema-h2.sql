@@ -29,6 +29,9 @@ CREATE TABLE knowledge_chunk (
     content_hash CHAR(64) NOT NULL,
     chunk_text CLOB NOT NULL,
     token_count INT DEFAULT 0,
+    chunk_strategy_version VARCHAR(50) NOT NULL DEFAULT 'rag-v2',
+    embedding_model VARCHAR(100),
+    embedding_dimension INT DEFAULT 0,
     vector_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     qdrant_point_id VARCHAR(100),
     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -39,4 +42,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_knowledge_chunk_document_key ON knowledge_c
 CREATE UNIQUE INDEX IF NOT EXISTS uk_knowledge_chunk_qdrant_point ON knowledge_chunk(qdrant_point_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_book_source ON knowledge_chunk(book_id, source_type, chapter_no);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_hash_status ON knowledge_chunk(content_hash, vector_status);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_strategy_status ON knowledge_chunk(chunk_strategy_version, embedding_model, embedding_dimension, vector_status);
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_document_status ON knowledge_chunk(document_id, vector_status);

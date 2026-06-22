@@ -118,6 +118,15 @@ describe('auth api logout contract', () => {
         traceId: 'trace-auth',
       },
     });
+    const httpPost = vi.fn().mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: null,
+        timestamp: 1,
+        traceId: 'trace-auth-change',
+      },
+    });
 
     vi.doMock('@/lib/auth-session', () => ({
       clearCurrentSession: vi.fn(),
@@ -125,7 +134,7 @@ describe('auth api logout contract', () => {
     }));
     vi.doMock('@/lib/http', () => ({
       httpClient: {
-        post: vi.fn(),
+        post: httpPost,
       },
       rawHttpClient: {
         post: rawPost,
@@ -139,6 +148,7 @@ describe('auth api logout contract', () => {
     await authApi.sendSmsCode({ phone: '13800138000', bizType: 'LOGIN' });
     await authApi.register({ phone: '13800138000', smsCode: '123456', password: 'Password123' });
     await authApi.resetPassword({ phone: '13800138000', smsCode: '123456', newPassword: 'NewPassword123' });
+    await authApi.changePassword({ oldPassword: 'Password123', newPassword: 'NewPassword123' });
 
     expect(rawPost).toHaveBeenNthCalledWith(1, '/api/auth/login/password', {
       phone: '13800138000',
@@ -172,6 +182,10 @@ describe('auth api logout contract', () => {
       newPassword: 'NewPassword123',
     }, {
       withCredentials: true,
+    });
+    expect(httpPost).toHaveBeenCalledWith('/api/auth/password/change', {
+      oldPassword: 'Password123',
+      newPassword: 'NewPassword123',
     });
   });
 });

@@ -7,6 +7,7 @@ describe('jwt utils', () => {
     sub: 'alice',
     uid: 7,
     username: 'alice',
+    phone: '13800138000',
     roles: 'ADMIN,USER',
     iat: 1_710_000_000,
     exp: 1_710_007_200,
@@ -35,6 +36,7 @@ describe('jwt utils', () => {
 
     expect(session.userId).toBe(7);
     expect(session.username).toBe('alice');
+    expect(session.phone).toBe('13800138000');
     expect(session.roles).toEqual(['ADMIN', 'USER']);
     expect(session.expireAt).toBe(1_710_007_200_000);
   });

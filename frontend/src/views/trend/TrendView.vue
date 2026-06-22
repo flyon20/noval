@@ -883,6 +883,9 @@ onBeforeUnmount(() => {
 }
 
 .trend-page__toolbar {
+  position: sticky;
+  top: 1rem;
+  z-index: 20;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1092,12 +1095,14 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .trend-page__visual {
     grid-template-columns: 1fr;
   }
 
   .trend-page__toolbar {
+    position: static;
+    z-index: auto;
     padding: 0.95rem;
   }
 

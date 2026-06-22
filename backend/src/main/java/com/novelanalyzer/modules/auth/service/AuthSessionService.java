@@ -79,6 +79,29 @@ public class AuthSessionService {
         return revoked;
     }
 
+    public int revokeOtherActiveSessions(Long userId, String exceptSessionId, int revokedStatus, String revokeReason) {
+        if (userId == null || userId <= 0 || exceptSessionId == null || exceptSessionId.isBlank()) {
+            return 0;
+        }
+        var activeSessions = authSessionRepository.findActiveSessionsByUserId(userId);
+        int revoked = authSessionRepository.revokeOtherActiveSessionsByUserId(
+            userId,
+            exceptSessionId,
+            revokedStatus,
+            revokeReason,
+            LocalDateTime.now()
+        );
+        if (revoked <= 0) {
+            return 0;
+        }
+        for (AuthSessionEntity session : activeSessions) {
+            if (!exceptSessionId.equals(session.getSessionId())) {
+                removeSessionState(session);
+            }
+        }
+        return revoked;
+    }
+
     public void updateActivity(String sessionId) {
         updateActivity(sessionId, LocalDateTime.now());
     }

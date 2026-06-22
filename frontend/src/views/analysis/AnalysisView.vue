@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus';
+import { Close, FullScreen } from '@element-plus/icons-vue';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { analysisApi } from '@/api/analysis';
@@ -11,17 +12,37 @@ import AnalysisModeTabs from '@/components/analysis/AnalysisModeTabs.vue';
 import AnalysisResultCard from '@/components/analysis/AnalysisResultCard.vue';
 import AnalysisToolbar from '@/components/analysis/AnalysisToolbar.vue';
 import { useAnalysisRun } from '@/composables/useAnalysisRun';
+import { useMobileDrawerBack } from '@/composables/useMobileDrawerBack';
+import { useMobileEdgeSwipeClose } from '@/composables/useMobileEdgeSwipeClose';
 import { buildAnalysisDisplayContent } from '@/lib/analysis-display';
 import type { AnalysisResult, AnalysisType } from '@/types/analysis';
 import type { AiModelOption } from '@/types/config';
+import type { AnalysisHistorySummary } from '@/types/data';
 
 const route = useRoute();
 const router = useRouter();
 
 const ANALYSIS_MODES: AnalysisType[] = ['deconstruct', 'structure', 'plot'];
+const RESTORE_HISTORY_PAGE_SIZE = 20;
+const MAX_RESTORE_HISTORY_PAGES = 10;
 
 const availableModels = ref<AiModelOption[]>([]);
 const selectedModel = ref('');
+const windowWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth);
+const resultDrawerVisible = ref(false);
+const resultDrawerFullscreen = ref(true);
+const isMobile = computed(() => windowWidth.value <= 768);
+const resultDrawerSize = computed(() => (isMobile.value && resultDrawerFullscreen.value ? '100%' : '92%'));
+const resultDrawerClass = computed(() => (
+  resultDrawerFullscreen.value ? 'analysis-result-drawer is-fullscreen' : 'analysis-result-drawer'
+));
+const resultDrawerSwipe = useMobileEdgeSwipeClose(closeResultDrawer, { mobileWidth: 768 });
+useMobileDrawerBack({
+  isOpen: () => resultDrawerVisible.value,
+  close: closeResultDrawer,
+  mobileWidth: 768,
+  isMobile: () => typeof window !== 'undefined' && window.innerWidth <= 768,
+});
 
 async function loadModelPreferences() {
   try {
@@ -293,6 +314,11 @@ const activePanel = computed(
   () => analysisPanels.value.find((panel) => panel.mode === activeMode.value) ?? analysisPanels.value[0],
 );
 
+const resultReaderAvailable = computed(() => {
+  const panel = activePanel.value;
+  return Boolean(panel && hasModeStarted(panel.mode));
+});
+
 const tabStatuses = computed(
   () =>
     Object.fromEntries(
@@ -354,28 +380,51 @@ async function restorePersistedResults(context: PersistedAnalysisContext) {
   hasStarted.value = false;
 
   try {
-    const response = await dataApi.getHistory({
-      platform: context.platform,
-      bookId: context.bookId,
-      limit: 20,
-    });
-    const historyItems = (response.data.data ?? []).filter((item) => item.chapterCount === context.chapterCount);
     const latestByMode = new Map<AnalysisType, AnalysisResult>();
+    const historyItems: AnalysisHistorySummary[] = [];
+    let page = 1;
+    let hasNext = true;
 
-    for (const item of historyItems) {
-      const mode = parseAnalysisType(item.analysisType);
-      if (latestByMode.has(mode)) {
-        continue;
-      }
-      latestByMode.set(mode, {
-        id: item.id,
-        bookId: item.bookId,
-        analysisType: mode,
-        modelName: item.modelName,
-        resultContent: item.resultContent,
-        resultJson: item.resultJson,
-        tokenUsed: typeof item.resultJson?.tokenUsed === 'number' ? item.resultJson.tokenUsed as number : 0,
+    while (hasNext && page <= MAX_RESTORE_HISTORY_PAGES && latestByMode.size < ANALYSIS_MODES.length) {
+      const response = await dataApi.getHistory({
+        platform: context.platform,
+        bookId: context.bookId,
+        chapterCount: context.chapterCount,
+        page,
+        pageSize: RESTORE_HISTORY_PAGE_SIZE,
       });
+      const pageData = response.data.data;
+      const pageItems = pageData?.items ?? [];
+      historyItems.push(...pageItems);
+
+      for (const item of pageItems) {
+        const mode = parseAnalysisType(item.analysisType);
+        if (latestByMode.has(mode)) {
+          continue;
+        }
+
+        try {
+          const detailResponse = await dataApi.getHistoryDetail(item.id);
+          const detail = detailResponse.data.data;
+          if (!detail) {
+            continue;
+          }
+          latestByMode.set(mode, {
+            id: item.id,
+            bookId: item.bookId,
+            analysisType: mode,
+            modelName: detail.modelName,
+            resultContent: detail.resultContent,
+            resultJson: detail.resultJson,
+            tokenUsed: typeof detail.resultJson?.tokenUsed === 'number' ? detail.resultJson.tokenUsed as number : 0,
+          });
+        } catch {
+          // Ignore a stale or broken detail row and keep restoring other modes.
+        }
+      }
+
+      hasNext = Boolean(pageData?.hasNext) && pageItems.length > 0;
+      page += 1;
     }
 
     if (!latestByMode.size) {
@@ -428,12 +477,26 @@ async function initializeAnalysisPage() {
   }
 }
 
+function updateWindowWidth() {
+  windowWidth.value = window.innerWidth;
+  if (!isMobile.value) {
+    resultDrawerVisible.value = false;
+  }
+}
+
 onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', updateWindowWidth);
+  }
+
   void initializeAnalysisPage();
   void loadModelPreferences();
 });
 
 onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', updateWindowWidth);
+  }
   analysis.stopAllAnalyses();
 });
 
@@ -485,6 +548,22 @@ async function handleRerun(mode: AnalysisType) {
 
 function handleStop(mode: AnalysisType) {
   analysis.stopAnalysis(mode);
+}
+
+function openResultDrawer() {
+  if (!isMobile.value || !resultReaderAvailable.value) {
+    return;
+  }
+  resultDrawerFullscreen.value = true;
+  resultDrawerVisible.value = true;
+}
+
+function closeResultDrawer() {
+  resultDrawerVisible.value = false;
+}
+
+function toggleResultDrawerFullscreen() {
+  resultDrawerFullscreen.value = !resultDrawerFullscreen.value;
 }
 
 async function handleCopy(mode: AnalysisType) {
@@ -568,6 +647,16 @@ async function goBack() {
             <div class="analysis-mode-panel__title-wrap">
               <p class="analysis-mode-panel__eyebrow">{{ activePanel.phaseLabel }}</p>
               <h3 class="analysis-mode-panel__title">{{ activePanel.title }}</h3>
+              <el-button
+                class="analysis-mode-panel__reader-button"
+                type="primary"
+                plain
+                :disabled="!resultReaderAvailable"
+                data-test="analysis-result-open-reader"
+                @click="openResultDrawer"
+              >
+                阅读
+              </el-button>
             </div>
 
             <AnalysisToolbar
@@ -588,6 +677,60 @@ async function goBack() {
             :streaming-text="activePanel.displayStreamingText"
           />
         </article>
+
+        <el-drawer
+          v-model="resultDrawerVisible"
+          :class="resultDrawerClass"
+          :append-to-body="true"
+          :size="resultDrawerSize"
+          direction="rtl"
+          :with-header="false"
+          :close-on-click-modal="true"
+        >
+          <div
+            class="analysis-result-drawer__shell"
+            @touchstart.passive="resultDrawerSwipe.onTouchStart"
+            @touchend.passive="resultDrawerSwipe.onTouchEnd"
+            @pointerdown.passive="resultDrawerSwipe.onPointerStart"
+            @pointerup.passive="resultDrawerSwipe.onPointerEnd"
+          >
+            <div class="analysis-result-drawer__bar">
+              <div class="analysis-result-drawer__title-wrap">
+                <p class="analysis-result-drawer__eyebrow">Reading Mode</p>
+                <h3>{{ activePanel?.title ?? '分析结果' }}</h3>
+              </div>
+              <div class="analysis-result-drawer__actions">
+                <el-button
+                  class="analysis-result-drawer__action"
+                  circle
+                  :aria-label="resultDrawerFullscreen ? '退出全屏阅读' : '全屏阅读'"
+                  data-test="analysis-result-drawer-fullscreen"
+                  @click="toggleResultDrawerFullscreen"
+                >
+                  <el-icon><FullScreen /></el-icon>
+                </el-button>
+                <el-button
+                  class="analysis-result-drawer__action"
+                  circle
+                  aria-label="关闭分析结果"
+                  data-test="analysis-result-drawer-close"
+                  @click="closeResultDrawer"
+                >
+                  <el-icon><Close /></el-icon>
+                </el-button>
+              </div>
+            </div>
+
+            <AnalysisResultCard
+              v-if="activePanel"
+              :error-message="activePanel.state.errorMessage"
+              :phase="activePanel.state.phase"
+              :result-content="activePanel.displayResultContent"
+              :result-meta="activePanel.meta"
+              :streaming-text="activePanel.displayStreamingText"
+            />
+          </div>
+        </el-drawer>
       </section>
     </template>
 
@@ -666,8 +809,20 @@ async function goBack() {
 }
 
 .analysis-page__tab-strip {
+  position: sticky;
+  top: 1rem;
+  z-index: 20;
   display: grid;
   gap: 0.75rem;
+  padding: 0.35rem 0;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface-strong) 96%, transparent),
+      color-mix(in srgb, var(--color-surface) 90%, transparent)
+    );
+  backdrop-filter: blur(14px) saturate(1.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
 }
 
 .analysis-mode-panel {
@@ -704,6 +859,109 @@ async function goBack() {
   font-size: 1.05rem;
 }
 
+.analysis-mode-panel__reader-button {
+  display: none;
+}
+
+.analysis-result-drawer__shell {
+  height: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 1rem;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.analysis-result-drawer__bar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.analysis-result-drawer__title-wrap {
+  min-width: 0;
+}
+
+.analysis-result-drawer__title-wrap h3,
+.analysis-result-drawer__eyebrow {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.analysis-result-drawer__title-wrap h3 {
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.analysis-result-drawer__eyebrow {
+  margin-bottom: 0.2rem;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.analysis-result-drawer__actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.45rem;
+}
+
+.analysis-result-drawer__action {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+:global(.analysis-result-drawer) {
+  max-width: 760px;
+}
+
+:global(.analysis-result-drawer .el-drawer__body) {
+  padding: 0;
+  overflow: hidden;
+}
+
+:global(.analysis-result-drawer .analysis-result-card) {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+:global(.analysis-result-drawer .analysis-result__stream),
+:global(.analysis-result-drawer .analysis-result__done),
+:global(.analysis-result-drawer .analysis-result__partial) {
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  -webkit-overflow-scrolling: touch;
+}
+
+:global(.analysis-result-drawer .analysis-result__done *) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+:global(.analysis-result-drawer .analysis-result__done pre),
+:global(.analysis-result-drawer .analysis-result__done code) {
+  white-space: pre-wrap;
+}
+
+:global(.analysis-result-drawer .analysis-result__done table) {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+}
+
 @media (max-width: 768px) {
   .analysis-page {
     gap: 0.75rem;
@@ -720,8 +978,43 @@ async function goBack() {
     gap: 0.6rem;
   }
 
+  .analysis-page__tab-strip {
+    position: static;
+    z-index: auto;
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .analysis-page__model-select {
     width: 100%;
+  }
+
+  .analysis-mode-panel__title-wrap {
+    align-items: center;
+  }
+
+  .analysis-mode-panel__reader-button {
+    display: inline-flex;
+    min-height: 44px;
+    margin-left: auto;
+  }
+
+  :global(.analysis-result-drawer) {
+    max-width: none;
+  }
+
+  :global(.analysis-result-drawer.is-fullscreen) {
+    width: 100% !important;
+  }
+
+  :global(.analysis-result-drawer:not(.is-fullscreen)) {
+    width: calc(100% - 32px) !important;
+  }
+
+  .analysis-result-drawer__shell {
+    padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(0.9rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
   }
 }
 </style>

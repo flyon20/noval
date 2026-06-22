@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useMobileDrawerBack } from '@/composables/useMobileDrawerBack';
+import { useMobileEdgeSwipeClose } from '@/composables/useMobileEdgeSwipeClose';
 import type { BookDetail } from '@/types/crawler';
 
 const props = defineProps<{
@@ -22,6 +24,14 @@ function closeDrawer() {
   visible.value = false;
 }
 
+const drawerSwipe = useMobileEdgeSwipeClose(closeDrawer, { mobileWidth: 920 });
+useMobileDrawerBack({
+  isOpen: () => visible.value,
+  close: closeDrawer,
+  mobileWidth: 920,
+  isMobile: () => typeof window !== 'undefined' && window.innerWidth <= 920,
+});
+
 const uiText = {
   heading: '简介',
   loadingTitle: '加载中...',
@@ -40,7 +50,14 @@ const uiText = {
     :with-header="false"
     size="440px"
   >
-    <div class="rank-drawer" data-testid="rank-detail-surface">
+    <div
+      class="rank-drawer"
+      data-testid="rank-detail-surface"
+      @touchstart.passive="drawerSwipe.onTouchStart"
+      @touchend.passive="drawerSwipe.onTouchEnd"
+      @pointerdown.passive="drawerSwipe.onPointerStart"
+      @pointerup.passive="drawerSwipe.onPointerEnd"
+    >
       <div class="rank-drawer__topbar">
         <div class="rank-drawer__heading" data-testid="rank-detail-heading">
           <h3 data-testid="rank-detail-title">{{ detail?.bookName ?? uiText.loadingTitle }}</h3>

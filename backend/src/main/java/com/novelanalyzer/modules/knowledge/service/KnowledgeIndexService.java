@@ -34,12 +34,12 @@ public class KnowledgeIndexService {
     private static final String SOURCE_TYPE_INTRO = "INTRO";
     private static final String SOURCE_TYPE_CHAPTER = "CHAPTER";
     private static final String SOURCE_TYPE_ANALYSIS = "ANALYSIS";
+    private static final String SOURCE_TYPE_RANK = "RANK";
     private static final String JOB_TYPE_INDEX_BOOK = "KNOWLEDGE_INDEX_BOOK";
     private static final long INDEX_JOB_LOCK_TTL_SECONDS = 300L;
     private static final String VECTOR_STATUS_INDEXED = "INDEXED";
     private static final String VECTOR_STATUS_PENDING = "PENDING";
-    private static final int CHAPTER_TARGET_CHARS = 1000;
-    private static final int CHAPTER_OVERLAP_CHARS = 160;
+    private static final String DEFAULT_CHUNK_STRATEGY_VERSION = "rag-v2";
 
     private final KnowledgeRepository knowledgeRepository;
     private final EmbeddingClient embeddingClient;
@@ -60,24 +60,44 @@ public class KnowledgeIndexService {
     }
 
     public IndexResult indexBook(Long bookId) {
+        return indexBook(bookId, "ALL");
+    }
+
+    public IndexResult indexBook(Long bookId, String mode) {
         CrawlBookEntity book = knowledgeRepository.findBook(bookId)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
         qdrantClient.ensureCollection();
 
         int createdChunks = 0;
         int indexedChunks = 0;
-        ChunkIndexOutcome introOutcome = indexIntro(book);
-        createdChunks += introOutcome.createdChunks();
-        indexedChunks += introOutcome.indexedChunks();
+        String normalizedMode = mode == null ? "ALL" : mode.trim().toUpperCase();
+        boolean rankOnly = "RANK_MISSING".equals(normalizedMode) || "RANK_INCREMENTAL".equals(normalizedMode);
+        boolean chapterOnly = "CHAPTER_MISSING".equals(normalizedMode);
 
-        List<CrawlChapterEntity> chapters = knowledgeRepository.findChapters(
-            bookId,
-            knowledgeProperties.getIndex().getMaxChapters()
-        );
-        for (CrawlChapterEntity chapter : chapters) {
-            ChunkIndexOutcome outcome = indexChapter(book, chapter);
-            createdChunks += outcome.createdChunks();
-            indexedChunks += outcome.indexedChunks();
+        if (!rankOnly && !chapterOnly) {
+            ChunkIndexOutcome introOutcome = indexIntro(book);
+            createdChunks += introOutcome.createdChunks();
+            indexedChunks += introOutcome.indexedChunks();
+        }
+
+        if (!chapterOnly) {
+            for (KnowledgeRepository.RankEvidence rank : knowledgeRepository.findLatestRankEvidenceForBook(bookId)) {
+                ChunkIndexOutcome outcome = indexRank(book, rank);
+                createdChunks += outcome.createdChunks();
+                indexedChunks += outcome.indexedChunks();
+            }
+        }
+
+        if (!rankOnly) {
+            List<CrawlChapterEntity> chapters = knowledgeRepository.findChapters(
+                bookId,
+                knowledgeProperties.getIndex().getMaxChapters()
+            );
+            for (CrawlChapterEntity chapter : chapters) {
+                ChunkIndexOutcome outcome = indexChapter(book, chapter);
+                createdChunks += outcome.createdChunks();
+                indexedChunks += outcome.indexedChunks();
+            }
         }
         return new IndexResult(bookId, createdChunks, indexedChunks);
     }
@@ -101,10 +121,10 @@ public class KnowledgeIndexService {
             analysis.getId(),
             analysis.getPlatform(),
             analysis.getBookId(),
-            defaultText(analysis.getAnalysisType()) + " 分析结果"
+            defaultText(analysis.getAnalysisType()) + " \u5206\u6790\u7ed3\u679c"
         );
         String chunkText = buildHeader(book, SOURCE_TYPE_ANALYSIS, null, null)
-            + "分析类型：" + defaultText(analysis.getAnalysisType()) + '\n'
+            + "\u5206\u6790\u7c7b\u578b\uff1a" + defaultText(analysis.getAnalysisType()) + '\n'
             + content;
         ChunkIndexOutcome outcome = persistAndVectorizeChunk(
             document,
@@ -120,9 +140,14 @@ public class KnowledgeIndexService {
     }
 
     public AsyncJobSubmitResponse submitBookIndexJob(Long bookId, Long triggerUserId) {
-        String jobKey = "book:" + bookId;
+        return submitBookIndexJob(bookId, triggerUserId, "ALL");
+    }
+
+    public AsyncJobSubmitResponse submitBookIndexJob(Long bookId, Long triggerUserId, String mode) {
+        String normalizedMode = normalizeIndexMode(mode);
+        String jobKey = buildJobKey(bookId, normalizedMode);
         String resourceKey = "book:" + bookId;
-        String requestJson = "{\"bookId\":" + bookId + "}";
+        String requestJson = "{\"bookId\":" + bookId + ",\"mode\":\"" + normalizedMode + "\"}";
         return asyncJobService.submitOrReuse(
             JOB_TYPE_INDEX_BOOK,
             jobKey,
@@ -131,6 +156,49 @@ public class KnowledgeIndexService {
             triggerUserId,
             INDEX_JOB_LOCK_TTL_SECONDS
         );
+    }
+
+    public AsyncJobSubmitResponse submitBookIndexPendingJob(Long bookId, Long triggerUserId) {
+        return submitBookIndexPendingJob(bookId, triggerUserId, "ALL");
+    }
+
+    public AsyncJobSubmitResponse submitBookIndexPendingJob(Long bookId, Long triggerUserId, String mode) {
+        String normalizedMode = normalizeIndexMode(mode);
+        String jobKey = buildJobKey(bookId, normalizedMode);
+        String resourceKey = "book:" + bookId;
+        String requestJson = "{\"bookId\":" + bookId + ",\"mode\":\"" + normalizedMode + "\"}";
+        return asyncJobService.submitOrReusePending(
+            JOB_TYPE_INDEX_BOOK,
+            jobKey,
+            resourceKey,
+            requestJson,
+            triggerUserId,
+            INDEX_JOB_LOCK_TTL_SECONDS
+        );
+    }
+
+    private String normalizeIndexMode(String mode) {
+        String normalized = mode == null ? "ALL" : mode.trim().toUpperCase();
+        if (!"ALL".equals(normalized)
+            && !"FAILED_ONLY".equals(normalized)
+            && !"FULL_REINDEX".equals(normalized)
+            && !"RANK_MISSING".equals(normalized)
+            && !"RANK_INCREMENTAL".equals(normalized)
+            && !"CHAPTER_MISSING".equals(normalized)) {
+            return "ALL";
+        }
+        return normalized;
+    }
+
+    private String buildJobKey(Long bookId, String normalizedMode) {
+        String jobKey = "book:" + bookId;
+        if ("ALL".equals(normalizedMode)) {
+            return jobKey;
+        }
+        if ("FULL_REINDEX".equals(normalizedMode)) {
+            return jobKey + ":" + normalizedMode + ":" + currentEmbeddingModel() + ":" + currentEmbeddingDimension();
+        }
+        return jobKey + ":" + normalizedMode;
     }
 
     private ChunkIndexOutcome indexIntro(CrawlBookEntity book) {
@@ -143,10 +211,52 @@ public class KnowledgeIndexService {
             book.getId(),
             book.getPlatform(),
             book.getId(),
-            book.getBookName() + " 简介"
+            book.getBookName() + " \u7b80\u4ecb"
         );
         String chunkText = buildHeader(book, SOURCE_TYPE_INTRO, null, null) + intro;
         return persistAndVectorizeChunk(document, book, SOURCE_TYPE_INTRO, book.getId(), null, null, "intro-1", chunkText);
+    }
+
+    private ChunkIndexOutcome indexRank(CrawlBookEntity book, KnowledgeRepository.RankEvidence rank) {
+        KnowledgeDocumentEntity document = knowledgeRepository.saveOrUpdateDocument(
+            SOURCE_TYPE_RANK,
+            rank.id(),
+            defaultText(rank.platform()),
+            book.getId(),
+            rankTitle(rank)
+        );
+        String chunkText = buildHeader(book, SOURCE_TYPE_RANK, null, null)
+            + "\u699c\u5355\uff1a" + rankBoardText(rank) + '\n'
+            + "\u699c\u5355\u6807\u8bc6\uff1a" + defaultText(rank.channelCode()) + " / " + defaultText(rank.boardCode()) + '\n'
+            + "\u6392\u540d\uff1a\u7b2c" + defaultRankNo(rank.rankNo()) + "\u540d" + '\n'
+            + "\u5feb\u7167\u65f6\u95f4\uff1a" + defaultTime(rank.snapshotTime(), rank.crawlTime()) + '\n'
+            + "\u4e66\u540d\uff1a" + defaultText(rank.bookName()) + '\n'
+            + "\u4f5c\u8005\uff1a" + defaultText(rank.author()) + '\n'
+            + "\u7b80\u4ecb\uff1a" + defaultText(rank.intro());
+        Map<String, Object> extraPayload = new LinkedHashMap<>();
+        if (rank.rankNo() != null) {
+            extraPayload.put("rankNo", rank.rankNo());
+        }
+        if (rank.channelCode() != null && !rank.channelCode().isBlank()) {
+            extraPayload.put("channelCode", rank.channelCode());
+        }
+        if (rank.boardCode() != null && !rank.boardCode().isBlank()) {
+            extraPayload.put("boardCode", rank.boardCode());
+        }
+        if (rank.snapshotId() != null) {
+            extraPayload.put("snapshotId", rank.snapshotId());
+        }
+        return persistAndVectorizeChunk(
+            document,
+            book,
+            SOURCE_TYPE_RANK,
+            rank.id(),
+            null,
+            null,
+            "rank-" + rank.id(),
+            chunkText,
+            extraPayload
+        );
     }
 
     private ChunkIndexOutcome indexChapter(CrawlBookEntity book, CrawlChapterEntity chapter) {
@@ -161,7 +271,7 @@ public class KnowledgeIndexService {
             book.getId(),
             chapter.getChapterTitle()
         );
-        List<String> contentChunks = splitParagraphAware(content, CHAPTER_TARGET_CHARS, CHAPTER_OVERLAP_CHARS);
+        List<String> contentChunks = splitParagraphAware(content, resolveChunkTargetChars(), resolveChunkOverlapChars());
         int createdChunks = 0;
         int indexedChunks = 0;
         for (int index = 0; index < contentChunks.size(); index++) {
@@ -255,7 +365,7 @@ public class KnowledgeIndexService {
     }
 
     private boolean isSentenceTerminator(char value) {
-        return Set.of('。', '！', '？', '；', '.', '!', '?', ';').contains(value);
+        return Set.of('\u3002', '\uff01', '\uff1f', '\uff1b', '.', '!', '?', ';').contains(value);
     }
 
     private void flushChunk(List<String> chunks, StringBuilder current) {
@@ -280,9 +390,26 @@ public class KnowledgeIndexService {
                                                        String analysisType,
                                                        String chunkKey,
                                                        String chunkText) {
+        return persistAndVectorizeChunk(document, book, sourceType, sourceRefId, chapterNo, analysisType, chunkKey, chunkText, Map.of());
+    }
+
+    private ChunkIndexOutcome persistAndVectorizeChunk(KnowledgeDocumentEntity document,
+                                                       CrawlBookEntity book,
+                                                       String sourceType,
+                                                       Long sourceRefId,
+                                                       Integer chapterNo,
+                                                       String analysisType,
+                                                       String chunkKey,
+                                                       String chunkText,
+                                                       Map<String, Object> extraPayload) {
         String contentHash = sha256(chunkText);
         KnowledgeChunkEntity existing = knowledgeRepository.findChunk(document.getId(), chunkKey).orElse(null);
-        if (existing != null && contentHash.equals(existing.getContentHash()) && VECTOR_STATUS_INDEXED.equals(existing.getVectorStatus())) {
+        if (existing != null
+            && contentHash.equals(existing.getContentHash())
+            && currentChunkStrategyVersion().equals(existing.getChunkStrategyVersion())
+            && currentEmbeddingModel().equals(existing.getEmbeddingModel())
+            && Integer.valueOf(currentEmbeddingDimension()).equals(existing.getEmbeddingDimension())
+            && VECTOR_STATUS_INDEXED.equals(existing.getVectorStatus())) {
             return new ChunkIndexOutcome(0, 0);
         }
 
@@ -297,6 +424,9 @@ public class KnowledgeIndexService {
         chunk.setContentHash(contentHash);
         chunk.setChunkText(chunkText);
         chunk.setTokenCount(estimateTokenCount(chunkText));
+        chunk.setChunkStrategyVersion(currentChunkStrategyVersion());
+        chunk.setEmbeddingModel(currentEmbeddingModel());
+        chunk.setEmbeddingDimension(currentEmbeddingDimension());
         chunk.setVectorStatus(VECTOR_STATUS_PENDING);
         if (existing == null) {
             knowledgeRepository.saveChunk(chunk);
@@ -315,12 +445,13 @@ public class KnowledgeIndexService {
             chunk.getId(),
             embedding == null ? 0 : embedding.size());
         String pointId = String.valueOf(chunk.getId());
-        Map<String, Object> payload = buildPayload(book, chunk);
-        LOGGER.info("knowledge index before qdrant upsert: bookId={}, chunkId={}, pointId={}, payload={}",
+        Map<String, Object> payload = buildPayload(book, chunk, extraPayload);
+        LOGGER.info("knowledge index before qdrant upsert: bookId={}, chunkId={}, pointId={}, payloadKeys={}, payloadSize={}",
             book.getId(),
             chunk.getId(),
             pointId,
-            payload);
+            payload.keySet(),
+            payload.size());
         qdrantClient.upsertPoint(pointId, embedding, payload);
         LOGGER.info("knowledge index after qdrant upsert: bookId={}, chunkId={}, pointId={}",
             book.getId(),
@@ -334,7 +465,7 @@ public class KnowledgeIndexService {
         return new ChunkIndexOutcome(existing == null ? 1 : 0, 1);
     }
 
-    private Map<String, Object> buildPayload(CrawlBookEntity book, KnowledgeChunkEntity chunk) {
+    private Map<String, Object> buildPayload(CrawlBookEntity book, KnowledgeChunkEntity chunk, Map<String, Object> extraPayload) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("chunkId", chunk.getId());
         payload.put("documentId", chunk.getDocumentId());
@@ -342,23 +473,60 @@ public class KnowledgeIndexService {
         payload.put("platform", book.getPlatform());
         payload.put("sourceType", chunk.getSourceType());
         payload.put("sourceRefId", chunk.getSourceRefId());
+        payload.put("chunkStrategyVersion", chunk.getChunkStrategyVersion());
+        payload.put("embeddingModel", chunk.getEmbeddingModel());
+        payload.put("embeddingDimension", chunk.getEmbeddingDimension());
         if (chunk.getChapterNo() != null) {
             payload.put("chapterNo", chunk.getChapterNo());
         }
         if (chunk.getAnalysisType() != null && !chunk.getAnalysisType().isBlank()) {
             payload.put("analysisType", chunk.getAnalysisType());
         }
+        if (extraPayload != null && !extraPayload.isEmpty()) {
+            payload.putAll(extraPayload);
+        }
         return payload;
+    }
+
+    private String rankTitle(KnowledgeRepository.RankEvidence rank) {
+        return rankBoardText(rank) + " #" + defaultRankNo(rank.rankNo());
+    }
+
+    private String rankBoardText(KnowledgeRepository.RankEvidence rank) {
+        String channel = firstNonBlank(rank.channelName(), rank.channelCode(), rank.category());
+        String board = firstNonBlank(rank.boardName(), rank.category(), rank.boardCode());
+        return defaultText(channel) + " / " + defaultText(board);
+    }
+
+    private String defaultRankNo(Integer rankNo) {
+        return rankNo == null ? "\u672a\u77e5" : String.valueOf(rankNo);
+    }
+
+    private String defaultTime(java.time.LocalDateTime preferred, java.time.LocalDateTime fallback) {
+        java.time.LocalDateTime value = preferred == null ? fallback : preferred;
+        return value == null ? "\u672a\u77e5" : value.toString();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String buildHeader(CrawlBookEntity book, String sourceType, Integer chapterNo, String chapterTitle) {
         StringBuilder builder = new StringBuilder();
-        builder.append("书名：").append(defaultText(book.getBookName())).append('\n');
-        builder.append("作者：").append(defaultText(book.getAuthor())).append('\n');
-        builder.append("来源：").append(book.getPlatform()).append('\n');
-        builder.append("类型：").append(sourceType).append('\n');
+        builder.append("\u4e66\u540d\uff1a").append(defaultText(book.getBookName())).append('\n');
+        builder.append("\u4f5c\u8005\uff1a").append(defaultText(book.getAuthor())).append('\n');
+        builder.append("\u6765\u6e90\uff1a").append(defaultText(book.getPlatform())).append('\n');
+        builder.append("\u7c7b\u578b\uff1a").append(sourceType).append('\n');
         if (chapterNo != null) {
-            builder.append("章节：第").append(chapterNo).append("章 ").append(defaultText(chapterTitle)).append('\n');
+            builder.append("\u7ae0\u8282\uff1a\u7b2c").append(chapterNo).append("\u7ae0 ").append(defaultText(chapterTitle)).append('\n');
         }
         builder.append('\n');
         return builder.toString();
@@ -371,12 +539,36 @@ public class KnowledgeIndexService {
         return Math.max(1, text.length() / 2);
     }
 
+    private String currentChunkStrategyVersion() {
+        return DEFAULT_CHUNK_STRATEGY_VERSION;
+    }
+
+    private String currentEmbeddingModel() {
+        String model = knowledgeProperties.getEmbedding() == null ? null : knowledgeProperties.getEmbedding().getModel();
+        return model == null || model.isBlank() ? "unknown" : model.trim();
+    }
+
+    private int currentEmbeddingDimension() {
+        return knowledgeProperties.getEmbedding() == null ? 0 : knowledgeProperties.getEmbedding().getDimension();
+    }
+
+    private int resolveChunkTargetChars() {
+        int configured = knowledgeProperties.getIndex() == null ? 1000 : knowledgeProperties.getIndex().getChunkTargetChars();
+        return Math.max(300, configured);
+    }
+
+    private int resolveChunkOverlapChars() {
+        int configured = knowledgeProperties.getIndex() == null ? 160 : knowledgeProperties.getIndex().getChunkOverlapChars();
+        int maxOverlap = Math.max(20, resolveChunkTargetChars() / 3);
+        return Math.max(0, Math.min(configured, maxOverlap));
+    }
+
     private String normalizeText(String value) {
         return value == null ? "" : value.trim();
     }
 
     private String defaultText(String value) {
-        return value == null || value.isBlank() ? "未知" : value;
+        return value == null || value.isBlank() ? "\u672a\u77e5" : value;
     }
 
     private String sha256(String value) {

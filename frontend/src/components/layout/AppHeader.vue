@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { Moon, Sunny, SwitchButton } from '@element-plus/icons-vue';
+import { Moon, Sunny, SwitchButton, UserFilled } from '@element-plus/icons-vue';
 import { getCurrentTheme, THEME_EVENT_NAME, toggleTheme, type AppTheme } from '@/lib/theme';
 
 defineProps<{
@@ -10,6 +10,7 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
+  changePassword: [];
   logout: [];
 }>();
 
@@ -36,11 +37,6 @@ const pageCopy = computed(() => {
     return { title: '系统配置' };
   }
   return { title: '控制台' };
-});
-
-const userInitial = computed(() => {
-  // props.username not directly accessible in computed without defineProps ref
-  return '';
 });
 
 function syncTheme(theme?: AppTheme) {
@@ -72,8 +68,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="app-header__actions">
-      <!-- Desktop: show username + roles + logout button -->
-      <template class="app-header__desktop-only">
+      <div class="app-header__desktop-only">
         <span class="app-header__user">{{ username }}</span>
         <el-tag
           v-for="role in roles"
@@ -91,11 +86,22 @@ onBeforeUnmount(() => {
           :icon="currentTheme === 'dark' ? Sunny : Moon"
           @click="handleThemeToggle"
         />
+        <el-button plain @click="emit('changePassword')">修改密码</el-button>
         <el-button plain type="primary" @click="emit('logout')">退出登录</el-button>
-      </template>
-      <!-- Mobile: compact avatar + icon button -->
+      </div>
+
       <div class="app-header__mobile-actions">
-        <div class="app-header__avatar">{{ username ? username.charAt(0).toUpperCase() : 'U' }}</div>
+        <el-dropdown trigger="click">
+          <button class="app-header__avatar-button" type="button" aria-label="账户菜单">
+            <span class="app-header__avatar">{{ username ? username.charAt(0).toUpperCase() : 'U' }}</span>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item :icon="UserFilled" @click="emit('changePassword')">修改密码</el-dropdown-item>
+              <el-dropdown-item :icon="SwitchButton" @click="emit('logout')">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button
           class="app-header__mobile-theme"
           circle
@@ -103,14 +109,6 @@ onBeforeUnmount(() => {
           :icon="currentTheme === 'dark' ? Sunny : Moon"
           size="small"
           @click="handleThemeToggle"
-        />
-        <el-button
-          class="app-header__mobile-logout"
-          circle
-          plain
-          :icon="SwitchButton"
-          size="small"
-          @click="emit('logout')"
         />
       </div>
     </div>
@@ -153,9 +151,6 @@ onBeforeUnmount(() => {
 
 .app-header__title {
   margin: 0;
-}
-
-.app-header__title {
   font-size: 1.25rem;
   font-family: var(--font-heading);
 }
@@ -172,13 +167,11 @@ onBeforeUnmount(() => {
 }
 
 .app-header__theme-toggle,
-.app-header__mobile-theme,
-.app-header__mobile-logout {
+.app-header__mobile-theme {
   border-color: color-mix(in srgb, var(--color-border-strong) 76%, transparent);
   background: color-mix(in srgb, var(--color-surface-strong) 88%, transparent);
 }
 
-/* Mobile: hide desktop elements, show compact ones */
 .app-header__desktop-only {
   display: contents;
 }
@@ -187,6 +180,14 @@ onBeforeUnmount(() => {
   display: none;
   align-items: center;
   gap: 0.5rem;
+}
+
+.app-header__avatar-button {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
 .app-header__avatar {
@@ -229,7 +230,6 @@ onBeforeUnmount(() => {
     white-space: nowrap;
   }
 
-  /* Hide desktop actions, show mobile compact actions */
   .app-header__actions > :not(.app-header__mobile-actions) {
     display: none;
   }

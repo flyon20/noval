@@ -1,32 +1,49 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus';
-import { computed, onMounted, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { systemConfigApi } from '@/api/config';
 import type {
   AiModelRegistry,
   AiModelRegistryModel,
   AiModelRegistryUpdateRequest,
   PromptTemplateOption,
-  KnownSystemConfigKey,
+  KnownSystemConfigOption,
   SystemConfig,
   PromptType,
 } from '@/types/config';
 
-const PASSWORD_KEYS = new Set(['ai.openai-compatible.api-key']);
+const PASSWORD_KEYS = new Set([
+  'ai.openai-compatible.api-key',
+  'ai.langgraph-worker.internal-api-key',
+]);
 
-const SYSTEM_CONFIG_KEYS: Array<{ key: KnownSystemConfigKey; label: string; hint: string }> = [
-  { key: 'ai.provider.type', label: 'AI Provider Type', hint: '选择后端分析优先使用的 AI 提供方。' },
-  { key: 'ai.timeout.millis', label: 'AI Timeout (ms)', hint: '控制 AI 请求超时。' },
-  { key: 'ai.openai-compatible.streaming-enabled', label: 'OpenAI-Compatible Streaming', hint: '控制是否启用流式调用。' },
-  { key: 'analysis.chunk.max-input-tokens', label: 'Analysis Chunk Max Tokens', hint: '单次分析允许的估算输入 Token 上限；超过后会自动切换为分段汇总。' },
-  { key: 'analysis.chunk.target-input-tokens', label: 'Analysis Chunk Target Tokens', hint: '分段分析时每段的目标输入 Token 大小；数值越小分段越多。' },
-  { key: 'analysis.chunk.parallelism', label: 'Analysis Chunk Parallelism', hint: '分段分析时的最大并发段数，在降低总耗时与避免请求过多之间取平衡。' },
-  { key: 'auth.bootstrap-admin-phones', label: 'Admin Phones', hint: '逗号分隔的管理员手机号列表，登录/注册/刷新时会自动补齐 ADMIN 角色。' },
-  { key: 'crawler.default.chapter-count', label: 'Default Chapter Count', hint: '扫榜页默认抓章数量。' },
-  { key: 'crawler.http.timeout-seconds', label: 'Crawler HTTP Timeout (s)', hint: 'Python crawler 请求页面时的超时。' },
-  { key: 'crawler.chapter.fetch-workers', label: 'Chapter Fetch Workers', hint: '多章节抓取时的最大并发数。' },
-  { key: 'crawler.chapter.force-refresh.user-max-times', label: 'User Chapter Refresh Limit', hint: '普通用户在当前窗口内的章节重抓上限。' },
-  { key: 'crawler.rank.refresh-days', label: 'Rank Cache Window (days)', hint: '榜单缓存期与章节重抓统计窗口。' },
+const FALLBACK_SYSTEM_CONFIG_KEYS: KnownSystemConfigOption[] = [
+  { key: 'ai.provider.type', label: '兼容提供方', hint: '旧版兼容配置，模型注册表会优先决定实际请求方式。' },
+  { key: 'ai.timeout.millis', label: 'AI 超时毫秒', hint: '控制单书分析等常规 AI 请求超时时间。' },
+  { key: 'analysis.runtime.mode', label: '分析运行模式', hint: '控制单书分析使用 legacy 还是 LangGraph 运行链路。' },
+  { key: 'ai.openai-compatible.base-url', label: '兼容接口地址', hint: '旧版兼容地址，模型注册表为空时作为回落值。' },
+  { key: 'ai.openai-compatible.default-model', label: '兼容默认模型', hint: '旧版默认模型，模型注册表为空时作为回落值。' },
+  { key: 'ai.openai-compatible.api-key', label: '兼容 API Key', hint: '旧版兼容密钥，留空或掩码会保留原密钥。' },
+  { key: 'ai.openai-compatible.streaming-enabled', label: '兼容流式开关', hint: '旧版兼容开关，当前主要由运行链路决定流式表现。' },
+  { key: 'ai.langgraph-worker.base-url', label: '工作流地址', hint: 'LangGraph worker 服务地址，留空时使用环境配置。' },
+  { key: 'ai.langgraph-worker.internal-api-key', label: '工作流内部令牌', hint: '后端调用 LangGraph worker 的内部鉴权令牌。' },
+  { key: 'ai.langgraph-worker.timeout-millis', label: '工作流超时毫秒', hint: '后端等待 LangGraph worker 响应的超时时间。' },
+  { key: 'ai.available-models', label: '旧版模型列表', hint: '旧版逗号分隔模型列表，模型注册表保存后会同步。' },
+  { key: 'analysis.reanalyze.cooldown-hours', label: '重析冷却小时', hint: '已有成功结果且输入未变化时，普通用户的重新分析冷却时间。' },
+  { key: 'analysis.reanalyze.user-max-times', label: '重析次数限制', hint: '已有成功结果且输入未变化时，普通用户在冷却窗口内的次数上限。' },
+  { key: 'analysis.chunk.max-input-tokens', label: '分段最大输入', hint: '单次分析允许的估算输入 Token 上限，超过后自动分段汇总。' },
+  { key: 'analysis.chunk.target-input-tokens', label: '分段目标输入', hint: '分段分析时每段的目标输入 Token 大小。' },
+  { key: 'analysis.chunk.parallelism', label: '分段并发数', hint: '分段分析时的最大并发段数。' },
+  { key: 'auth.bootstrap-admin-phones', label: '管理员手机号', hint: '逗号分隔的管理员手机号列表，登录或刷新时自动补齐 ADMIN 角色。' },
+  { key: 'crawler.default.chapter-count', label: '默认抓章数', hint: '扫榜页默认抓取的章节数量。' },
+  { key: 'crawler.http.timeout-seconds', label: '抓取超时秒数', hint: '爬虫请求页面时的超时时间。' },
+  { key: 'crawler.chapter.fetch-workers', label: '章节抓取并发', hint: '多章节抓取时的最大并发数。' },
+  { key: 'crawler.chapter.force-refresh.user-max-times', label: '章节重抓限制', hint: '普通用户在当前窗口内的章节重抓上限。' },
+  { key: 'crawler.rank.refresh-days', label: '榜单缓存天数', hint: '榜单缓存期与章节重抓统计窗口。' },
+  { key: 'crawler.rank.force-cooldown-days', label: '榜单强刷冷却', hint: '普通用户强制刷新榜单后的冷却天数。' },
+  { key: 'crawler.rank.force-max-times', label: '榜单强刷次数', hint: '普通用户在冷却窗口内可强制刷新榜单的次数。' },
+  { key: 'crawler.book.refresh-days', label: '书籍缓存天数', hint: '书籍详情和章节信息的缓存天数。' },
+  { key: 'security.audit.enabled', label: '审计日志开关', hint: '控制后台操作审计日志是否启用。' },
 ];
 
 type SystemConfigFormItem = SystemConfig & {
@@ -49,6 +66,7 @@ const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
 
 const loading = ref(false);
 const items = ref<SystemConfigFormItem[]>([]);
+const knownConfigOptions = ref<KnownSystemConfigOption[]>(FALLBACK_SYSTEM_CONFIG_KEYS);
 const errorMessage = ref('');
 
 const registryLoading = ref(false);
@@ -119,13 +137,37 @@ function applyModelRegistry(registry: AiModelRegistry) {
   };
 }
 
+function findKnownConfig(configKey: string) {
+  return knownConfigOptions.value.find((config) => config.key === configKey);
+}
+
+function toKnownConfigOption(config: SystemConfig): KnownSystemConfigOption {
+  const fallback = FALLBACK_SYSTEM_CONFIG_KEYS.find((item) => item.key === config.configKey);
+  return {
+    key: config.configKey,
+    label: fallback?.label ?? config.configKey,
+    hint: fallback?.hint ?? config.description ?? '暂无补充说明。',
+  };
+}
+
+async function loadKnownConfigOptions() {
+  try {
+    const response = await systemConfigApi.listKnown();
+    const knownOptions = (response.data.data ?? []).map(toKnownConfigOption);
+    knownConfigOptions.value = knownOptions.length > 0 ? knownOptions : FALLBACK_SYSTEM_CONFIG_KEYS;
+  } catch {
+    knownConfigOptions.value = FALLBACK_SYSTEM_CONFIG_KEYS;
+  }
+}
+
 async function loadConfigs() {
   loading.value = true;
   errorMessage.value = '';
 
   try {
+    await loadKnownConfigOptions();
     const responses = await Promise.all(
-      SYSTEM_CONFIG_KEYS.map(async (item) => {
+      knownConfigOptions.value.map(async (item) => {
         const response = await systemConfigApi.getByKey(item.key);
         const config = response.data.data;
         return {
@@ -158,13 +200,22 @@ async function loadModelRegistry() {
 }
 
 async function loadPromptTemplates() {
-  const results = await Promise.all(
-    PROMPT_TYPES.map(async (item) => {
-      const response = await systemConfigApi.listPromptTemplates(item.value);
-      return [item.value, response.data.data ?? []] as const;
-    }),
-  );
-  templateOptions.value = Object.fromEntries(results) as Record<PromptType, PromptTemplateOption[]>;
+  try {
+    const results = await Promise.all(
+      PROMPT_TYPES.map(async (item) => {
+        const response = await systemConfigApi.listPromptTemplates(item.value);
+        return [item.value, response.data.data ?? []] as const;
+      }),
+    );
+    templateOptions.value = Object.fromEntries(results) as Record<PromptType, PromptTemplateOption[]>;
+  } catch {
+    templateOptions.value = {
+      deconstruct: [],
+      structure: [],
+      plot: [],
+      theme: [],
+    };
+  }
 }
 
 async function saveItem(item: SystemConfigFormItem) {
@@ -268,17 +319,17 @@ onMounted(() => {
 <template>
   <section class="system-config-page">
     <header class="system-config-page__hero">
-      <p class="system-config-page__eyebrow">Current Page</p>
+      <p class="system-config-page__eyebrow">配置中心</p>
       <h2 class="system-config-page__title">系统配置</h2>
     </header>
 
     <section v-loading="registryLoading" class="system-config-page__registry">
       <div class="system-config-page__registry-head">
         <div>
-          <p class="system-config-page__section-eyebrow">Model Registry</p>
+          <p class="system-config-page__section-eyebrow">模型注册表</p>
           <h3 class="system-config-page__section-title">统一模型请求配置</h3>
           <p class="system-config-page__section-copy">
-            所有分析共用这一套模型注册表。用户侧只需要选择模型，实际的 `baseUrl`、`apiKey`、温度默认值和温度 JSON 约束都从这里下发。
+            配置模型、接口地址、密钥、默认参数和提示词模板绑定。
           </p>
         </div>
 
@@ -366,7 +417,7 @@ onMounted(() => {
               />
             </el-form-item>
 
-            <el-form-item label="Provider Type">
+            <el-form-item label="提供方类型">
               <el-input
                 v-model="model.providerType"
                 :data-test="`model-provider-type-${model.modelKey}`"
@@ -382,7 +433,7 @@ onMounted(() => {
               />
             </el-form-item>
 
-            <el-form-item label="Base URL">
+            <el-form-item label="接口地址">
               <el-input
                 v-model="model.baseUrl"
                 :data-test="`model-base-url-${model.modelKey}`"
@@ -390,7 +441,7 @@ onMounted(() => {
               />
             </el-form-item>
 
-            <el-form-item label="API Key">
+            <el-form-item label="接口密钥">
               <el-input
                 v-model="model.draftApiKeyInput"
                 :data-test="`model-api-key-${model.modelKey}`"
@@ -400,7 +451,7 @@ onMounted(() => {
               />
             </el-form-item>
 
-            <el-form-item label="默认 Temperature">
+            <el-form-item label="默认温度">
               <el-input
                 v-model="model.draftDefaultTemperature"
                 :data-test="`model-default-temperature-${model.modelKey}`"
@@ -412,7 +463,7 @@ onMounted(() => {
               />
             </el-form-item>
 
-            <el-form-item label="Max Tokens">
+            <el-form-item label="最大输出 Token">
               <el-input
                 v-model="model.draftMaxTokens"
                 :data-test="`model-max-tokens-${model.modelKey}`"
@@ -447,7 +498,7 @@ onMounted(() => {
             </el-form-item>
           </div>
 
-          <el-form-item label="Temperature JSON 约束">
+          <el-form-item label="温度 JSON 约束">
             <el-input
               v-model="model.temperatureSpecJson"
               :autosize="{ minRows: 3, maxRows: 6 }"
@@ -472,9 +523,9 @@ onMounted(() => {
     <section v-loading="loading" class="system-config-page__list">
       <div class="system-config-page__runtime-head">
         <div>
-          <p class="system-config-page__section-eyebrow">Runtime Config</p>
+          <p class="system-config-page__section-eyebrow">运行参数</p>
           <h3 class="system-config-page__section-title">运行参数</h3>
-          <p class="system-config-page__section-copy">这些配置继续负责超时、分段分析和抓取策略，不与模型注册表重复。</p>
+          <p class="system-config-page__section-copy">配置超时、分段分析、抓取缓存和用户频控。</p>
         </div>
       </div>
 
@@ -488,21 +539,21 @@ onMounted(() => {
             <h3 class="system-config-page__card-title">{{ item.configKey }}</h3>
             <p class="system-config-page__card-subtitle">
               {{
-                SYSTEM_CONFIG_KEYS.find((config) => config.key === item.configKey)?.hint ??
+                findKnownConfig(item.configKey)?.hint ??
                 item.description ??
-                'No extra description.'
+                '暂无补充说明。'
               }}
             </p>
           </div>
           <span class="system-config-page__badge">
-            {{ item.editable ? 'Editable' : 'Read Only' }}
+            {{ item.editable ? '可编辑' : '只读' }}
           </span>
         </div>
 
         <div class="system-config-page__field">
           <label class="system-config-page__label">
             {{
-              SYSTEM_CONFIG_KEYS.find((config) => config.key === item.configKey)?.label ??
+              findKnownConfig(item.configKey)?.label ??
               item.configKey
             }}
           </label>
@@ -517,7 +568,6 @@ onMounted(() => {
 
         <div class="system-config-page__meta">
           <span v-if="item.configType">类型：{{ item.configType }}</span>
-          <span v-if="item.description">说明：{{ item.description }}</span>
         </div>
 
         <div class="system-config-page__actions">

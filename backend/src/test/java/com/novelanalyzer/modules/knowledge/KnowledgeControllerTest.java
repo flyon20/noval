@@ -12,6 +12,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -30,6 +31,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -51,6 +53,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.auth.jwt-secret=test-jwt-secret-with-enough-length-1234567890",
         "app.crawler.internal-api-key=crawler-internal-api-key-with-enough-length-1234567890",
         "app.ai.langgraph-worker.internal-api-key=langgraph-internal-key-with-enough-length-1234567890",
+        "app.knowledge.index.queue-enabled=false",
+        "app.knowledge.index.rank-incremental-enabled=false",
         "app.knowledge.embedding.api-key=test-embedding-key"
     }
 )
@@ -92,7 +96,12 @@ class KnowledgeControllerTest {
     @BeforeEach
     void prepareState() {
         jdbcTemplate.update("UPDATE sys_user SET phone = ? WHERE id = 1", ADMIN_PHONE);
-        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
+        RedisConnection connection;
+        try {
+            connection = stringRedisTemplate.getConnectionFactory().getConnection();
+        } catch (RedisConnectionFailureException ex) {
+            return;
+        }
         try {
             connection.serverCommands().flushDb();
         } finally {
@@ -153,9 +162,101 @@ class KnowledgeControllerTest {
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.jobId").value(66))
             .andExpect(jsonPath("$.data.jobType").value("KNOWLEDGE_INDEX_BOOK"))
-            .andExpect(jsonPath("$.data.jobKey").value("book:1"));
+            .andExpect(jsonPath("$.data.jobKey").value("book:1"))
+            .andExpect(jsonPath("$.data.acquired").doesNotExist())
+            .andExpect(jsonPath("$.data.lockKey").doesNotExist())
+            .andExpect(jsonPath("$.data.lockValue").doesNotExist());
 
         verify(knowledgeIndexJobExecutor).submitAndExecute(1L, 1L);
+    }
+
+    @Test
+    void shouldSubmitKnowledgeRebuildForFailedOnlyMode() throws Exception {
+        com.novelanalyzer.modules.knowledge.dto.KnowledgeRebuildResponse response =
+            new com.novelanalyzer.modules.knowledge.dto.KnowledgeRebuildResponse("FAILED_ONLY", 2, List.of());
+        when(knowledgeIndexJobExecutor.submitRebuild("FAILED_ONLY", 50, 1L)).thenReturn(response);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/rebuild")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mode\":\"FAILED_ONLY\",\"limit\":50}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.mode").value("FAILED_ONLY"))
+            .andExpect(jsonPath("$.data.submittedCount").value(2));
+
+        verify(knowledgeIndexJobExecutor).submitRebuild("FAILED_ONLY", 50, 1L);
+    }
+
+    @Test
+    void shouldSubmitKnowledgeRebuildForRankIncrementalMode() throws Exception {
+        com.novelanalyzer.modules.knowledge.dto.KnowledgeRebuildResponse response =
+            new com.novelanalyzer.modules.knowledge.dto.KnowledgeRebuildResponse("RANK_INCREMENTAL", 3, List.of());
+        when(knowledgeIndexJobExecutor.submitRebuild("RANK_INCREMENTAL", 100, 1L)).thenReturn(response);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/rebuild")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mode\":\"RANK_INCREMENTAL\",\"limit\":100}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.mode").value("RANK_INCREMENTAL"))
+            .andExpect(jsonPath("$.data.submittedCount").value(3));
+
+        verify(knowledgeIndexJobExecutor).submitRebuild("RANK_INCREMENTAL", 100, 1L);
+    }
+
+    @Test
+    void shouldReturnKnowledgeHealthDiagnostics() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update(
+            "INSERT INTO crawl_book(id, platform, platform_book_id, book_name, author, intro, book_url, last_crawl_time, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            501L, "fanqie", "health-501", "健康检查书", "作者H", "简介", "https://fanqienovel.com/page/health-501",
+            Timestamp.valueOf(now), Timestamp.valueOf(now), Timestamp.valueOf(now), 0
+        );
+        jdbcTemplate.update(
+            "INSERT INTO crawl_rank(id, platform, category, channel_code, board_code, snapshot_id, rank_no, book_id, book_name, book_url, author, intro, crawl_time, create_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            7001L, "fanqie", "都市脑洞", "male-new", "urban-brain", 901L, 1, 501L, "健康检查书", "https://fanqienovel.com/page/health-501", "作者H", "简介",
+            Timestamp.valueOf(now), Timestamp.valueOf(now), 0
+        );
+        jdbcTemplate.update(
+            "INSERT INTO crawl_chapter(id, platform, book_id, chapter_no, chapter_title, content, word_count, crawl_time, create_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            8001L, "fanqie", 501L, 1, "第一章", "正文", 2, Timestamp.valueOf(now), Timestamp.valueOf(now), 0
+        );
+        jdbcTemplate.update(
+            "INSERT INTO knowledge_document(id, source_type, source_ref_id, platform, book_id, title, status, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            9001L, "RANK", 7001L, "fanqie", 501L, "榜单证据", "INDEXED", 0
+        );
+        jdbcTemplate.update(
+            "INSERT INTO knowledge_chunk(id, document_id, chunk_key, source_type, source_ref_id, book_id, content_hash, chunk_text, token_count, embedding_model, embedding_dimension, vector_status, qdrant_point_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            9101L, 9001L, "rank-7001", "RANK", 7001L, 501L, "health-rank-hash", "榜单证据", 20, "text-embedding-v4", 1024, "INDEXED", "rank-point", 0
+        );
+        jdbcTemplate.update(
+            "INSERT INTO async_job(id, job_type, job_key, resource_key, request_json, status, trigger_user_id, retry_count, create_time, update_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            9201L, "KNOWLEDGE_INDEX_BOOK", "book:501:RANK_INCREMENTAL", "book:501", "{\"bookId\":501}", "SUCCESS", 1L, 0,
+            Timestamp.valueOf(now), Timestamp.valueOf(now)
+        );
+
+        String token = loginAndGetToken();
+        mockMvc.perform(get("/api/knowledge/health")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.embeddingModel").value("text-embedding-v4"))
+            .andExpect(jsonPath("$.data.embeddingDimension").value(1024))
+            .andExpect(jsonPath("$.data.chunkStats[0].sourceType").value("RANK"))
+            .andExpect(jsonPath("$.data.chunkStats[0].vectorStatus").value("INDEXED"))
+            .andExpect(jsonPath("$.data.chunkStats[0].count").value(1))
+            .andExpect(jsonPath("$.data.rankRows.total").value(1))
+            .andExpect(jsonPath("$.data.rankRows.indexed").value(1))
+            .andExpect(jsonPath("$.data.rankRows.missing").value(0))
+            .andExpect(jsonPath("$.data.chapters.total").value(1))
+            .andExpect(jsonPath("$.data.chapters.indexed").value(0))
+            .andExpect(jsonPath("$.data.chapters.missing").value(1))
+            .andExpect(jsonPath("$.data.jobStats[0].status").value("SUCCESS"))
+            .andExpect(jsonPath("$.data.jobStats[0].count").value(1));
     }
 
     private String loginAndGetToken() throws Exception {

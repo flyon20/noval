@@ -31,9 +31,17 @@ export const promptConfigApi = {
   update(payload: PromptConfigUpdateRequest) {
     return httpClient.put<ApiResponse<PromptConfig>>('/api/config/prompt', payload);
   },
+  remove(promptType: PromptType, promptName: string) {
+    return httpClient.delete<ApiResponse<void>>('/api/config/prompt', {
+      params: { promptType, promptName },
+    });
+  },
 };
 
 export const systemConfigApi = {
+  listKnown() {
+    return httpClient.get<ApiResponse<SystemConfig[]>>('/api/config/system/known');
+  },
   getByKey(configKey: string) {
     return httpClient.get<ApiResponse<SystemConfig>>('/api/config/system', {
       params: { configKey },

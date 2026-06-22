@@ -1,4 +1,6 @@
 import ElementPlus from 'element-plus';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createPinia, setActivePinia } from 'pinia';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -111,6 +113,15 @@ describe('RankView', () => {
         },
       },
     } as never);
+  });
+
+  test('keeps the desktop rank toolbar sticky without forcing mobile sticky layout', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../RankView.vue'), 'utf-8');
+
+    expect(source).toContain('.rank-page__toolbar');
+    expect(source).toContain('position: sticky;');
+    expect(source).toContain('@media (max-width: 768px)');
+    expect(source).toContain('position: static;');
   });
 
   test('requests board catalog and user preference in parallel during initialization', async () => {

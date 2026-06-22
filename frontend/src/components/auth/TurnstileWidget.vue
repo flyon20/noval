@@ -6,6 +6,15 @@ type TurnstileRenderOptions = {
   callback?: (token: string) => void;
   'expired-callback'?: () => void;
   'error-callback'?: () => void;
+  'timeout-callback'?: () => void;
+  'unsupported-callback'?: () => void;
+  appearance?: 'always' | 'execute' | 'interaction-only';
+  execution?: 'render' | 'execute';
+  language?: string;
+  size?: 'normal' | 'compact' | 'flexible';
+  retry?: 'auto' | 'never';
+  'refresh-expired'?: 'auto' | 'manual' | 'never';
+  'refresh-timeout'?: 'auto' | 'manual' | 'never';
 };
 
 type TurnstileApi = {
@@ -22,6 +31,8 @@ const emit = defineEmits<{
   verified: [token: string];
   expired: [];
   error: [];
+  timeout: [];
+  unsupported: [];
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
@@ -94,9 +105,18 @@ async function renderWidget() {
 
   widgetId.value = api.render(containerRef.value, {
     sitekey: props.siteKey,
+    appearance: 'always',
+    execution: 'render',
+    language: 'zh-CN',
+    size: 'flexible',
+    retry: 'auto',
+    'refresh-expired': 'auto',
+    'refresh-timeout': 'auto',
     callback: (token) => emit('verified', token),
     'expired-callback': () => emit('expired'),
     'error-callback': () => emit('error'),
+    'timeout-callback': () => emit('timeout'),
+    'unsupported-callback': () => emit('unsupported'),
   });
 }
 

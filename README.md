@@ -45,6 +45,30 @@ flowchart LR
 
 AI 问答主链路：
 
+```mermaid
+flowchart TD
+    A["用户问题 /knowledge"] --> B["Spring Boot KnowledgeChatService"]
+    B --> C["LangGraph Worker<br/>Thread / Turn / Trace"]
+    C --> D["Intent Router V3<br/>规则优先 + 低置信 LLM fallback"]
+    D --> E{"业务路径"}
+    E -->|榜单/趋势| F["Market Research Subgraph<br/>最新榜单 + snapshotTime gate"]
+    E -->|单书/RAG| G["Book/RAG Subgraph<br/>MySQL + Qdrant evidence"]
+    E -->|创作建议| H["Creative Subgraph<br/>画像 + 项目上下文"]
+    E -->|缺槽/越界| I["Supervisor Gate<br/>澄清 / 选书 / 证据不足"]
+    B --> J["Context Bundle<br/>用户画像 + 项目记忆 + 会话上下文"]
+    J --> C
+    F --> K["Evidence Packs<br/>结构化来源 + 向量来源"]
+    G --> K
+    H --> K
+    K --> L["Supervisor<br/>新鲜度、证据边界、重试一次"]
+    L --> M["Answer Composer<br/>按 sourcePolicy 生成带引用回答"]
+    I --> M
+    M --> N["SSE / blocking response"]
+    N --> O["前端流式展示 + 引用折叠"]
+    M --> P["Trace / Memory Candidates"]
+    P --> B
+```
+
 1. 用户在 `/knowledge` 输入网文相关问题。
 2. 后端把请求发送给 `langgraph-worker`。
 3. Worker 判断问题意图，并把回答范围限制在网文创作、网文分析、榜单趋势和知识库问答内。

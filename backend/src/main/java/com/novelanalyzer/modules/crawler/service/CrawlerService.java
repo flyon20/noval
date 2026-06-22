@@ -60,6 +60,7 @@ public class CrawlerService {
     private static final int DEFAULT_RANK_FETCH_COUNT = 30;
     private static final int MIN_RANK_FETCH_COUNT = 10;
     private static final int MAX_RANK_FETCH_COUNT = 100;
+    private static final int MAX_RANK_PAGE_SIZE = 100;
     private static final long RANK_REFRESH_LOCK_TTL_SECONDS = 120L;
     private static final long CHAPTER_FETCH_LOCK_TTL_SECONDS = 120L;
     private static final int LOCK_RETRY_COUNT = 5;
@@ -123,6 +124,10 @@ public class CrawlerService {
             LOGGER.warn("rank.boardCatalog fallback-db platform={} reason={}", platform, ex.getMessage());
         }
         return toBoardCatalogVosFromEntities(persistedBoards);
+    }
+
+    public List<RankBoardCatalogVO> syncRankBoardCatalog(String platform) {
+        return toBoardCatalogVos(syncBoardCatalog(platform));
     }
 
     public List<BookSearchCandidateVO> searchBooks(CrawlerBookSearchRequest request) {
@@ -255,7 +260,7 @@ public class CrawlerService {
         RankSnapshotEntity snapshot = crawlerRepository.findLatestBoardSnapshot(board.getId())
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found"));
         int safePage = Math.max(page, 1);
-        int safePageSize = Math.max(pageSize, 1);
+        int safePageSize = Math.min(Math.max(pageSize, 1), MAX_RANK_PAGE_SIZE);
         int offset = (safePage - 1) * safePageSize;
         List<RankBookItemVO> items = crawlerRepository.findRankPageBySnapshot(snapshot.getId(), offset, safePageSize).stream()
             .map(this::toRankVo)

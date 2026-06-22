@@ -14,6 +14,9 @@ public class KnowledgeSearchRequest {
     private String sourceType;
     private Integer chapterNo;
     private String analysisType;
+    @Min(0)
+    @Max(1)
+    private Double minScore;
     @Min(1)
     @Max(20)
     private Integer limit = 5;
@@ -73,6 +76,14 @@ public class KnowledgeSearchRequest {
 
     public Integer getLimit() {
         return limit;
+    }
+
+    public Double getMinScore() {
+        return minScore;
+    }
+
+    public void setMinScore(Double minScore) {
+        this.minScore = minScore;
     }
 
     public void setLimit(Integer limit) {

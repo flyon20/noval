@@ -5,6 +5,7 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
 import com.novelanalyzer.modules.auth.dto.LoginRequest;
+import com.novelanalyzer.modules.auth.dto.PasswordChangeRequest;
 import com.novelanalyzer.modules.auth.dto.PasswordResetRequest;
 import com.novelanalyzer.modules.auth.dto.RegisterRequest;
 import com.novelanalyzer.modules.auth.dto.SmsLoginRequest;
@@ -49,6 +50,8 @@ public class AuthService {
     private static final String ADMIN_ROLE_CODE = "ADMIN";
     private static final String USER_ROLE_CODE = "USER";
     private static final String BOOTSTRAP_ADMIN_PHONES_CONFIG_KEY = "auth.bootstrap-admin-phones";
+    private static final String PASSWORD_CHANGE_MODE_OLD_PASSWORD = "OLD_PASSWORD";
+    private static final String PASSWORD_CHANGE_MODE_SMS_CODE = "SMS_CODE";
 
     private final AuthProperties authProperties;
     private final AuthRepository authRepository;
@@ -199,6 +202,55 @@ public class AuthService {
             "password reset",
             LocalDateTime.now()
         );
+    }
+
+    @Transactional
+    public void changePassword(Long userId, String currentSessionId, PasswordChangeRequest request) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "unauthorized");
+        }
+        AuthUserEntity dbUser = authRepository.findActiveUserById(userId)
+            .orElseThrow(() -> new BusinessException(ResultCode.UNAUTHORIZED, "token is invalid or expired"));
+        verifyPasswordChangeAuthority(dbUser, request);
+        validatePasswordRule(request.getNewPassword());
+        authRepository.updatePasswordByUserId(userId, passwordEncoder.encode(request.getNewPassword()));
+        authSessionService.revokeOtherActiveSessions(
+            userId,
+            currentSessionId,
+            AuthSessionStatus.REVOKED,
+            "password changed"
+        );
+    }
+
+    private void verifyPasswordChangeAuthority(AuthUserEntity dbUser, PasswordChangeRequest request) {
+        String verifyMode = normalizePasswordChangeMode(request.getVerifyMode());
+        if (PASSWORD_CHANGE_MODE_SMS_CODE.equals(verifyMode)) {
+            String phone = normalizePhone(dbUser.getPhone());
+            if (phone.isBlank()) {
+                throw new BusinessException(ResultCode.BAD_REQUEST, "phone is required");
+            }
+            smsAuthService.verifyCode(phone, "RESET_PASSWORD", request.getSmsCode(), request.getSmsOutId(), true);
+            return;
+        }
+
+        String oldPassword = request.getOldPassword();
+        if (oldPassword == null || oldPassword.isBlank()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "oldPassword is required");
+        }
+        if (!passwordMatches(oldPassword, dbUser.getPassword())) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, PASSWORD_INCORRECT_MESSAGE);
+        }
+    }
+
+    private String normalizePasswordChangeMode(String verifyMode) {
+        if (verifyMode == null || verifyMode.isBlank()) {
+            return PASSWORD_CHANGE_MODE_OLD_PASSWORD;
+        }
+        String normalized = verifyMode.trim().toUpperCase();
+        if (PASSWORD_CHANGE_MODE_OLD_PASSWORD.equals(normalized) || PASSWORD_CHANGE_MODE_SMS_CODE.equals(normalized)) {
+            return normalized;
+        }
+        throw new BusinessException(ResultCode.BAD_REQUEST, "verifyMode is invalid");
     }
 
     @Transactional

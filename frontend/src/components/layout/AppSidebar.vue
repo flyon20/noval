@@ -13,6 +13,8 @@ const configNavItems = computed(() => {
   ];
 
   if (props.roles.includes('ADMIN')) {
+    items.push({ to: '/knowledge/admin/traces', label: 'Agent Trace', icon: 'Monitor' });
+    items.push({ to: '/knowledge/admin/skills', label: 'Skills', icon: 'Operation' });
     items.push({ to: '/config/system', label: '系统配置', icon: 'Setting' });
   }
 
@@ -76,13 +78,26 @@ function getIcon(name: string) {
 
 <style scoped lang="scss">
 .app-sidebar {
+  position: fixed;
+  z-index: 20;
+  top: 1.35rem;
+  left: 1.35rem;
+  width: 330px;
+  max-height: calc(100dvh - 2.7rem);
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 1.65rem;
   padding: 1.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-soft);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent),
-    rgba(255, 250, 244, 0.7);
+    color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .app-sidebar__brand {
@@ -195,5 +210,14 @@ function getIcon(name: string) {
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: var(--color-accent);
+}
+
+@media (max-width: 980px) and (min-width: 769px) {
+  .app-sidebar {
+    top: 1rem;
+    left: 1rem;
+    width: 280px;
+    max-height: calc(100dvh - 2rem);
+  }
 }
 </style>

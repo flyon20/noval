@@ -70,6 +70,28 @@ ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS input_json_schema CLOB;
 ALTER TABLE prompt_config ADD COLUMN IF NOT EXISTS input_example_json CLOB;
 
 DROP TABLE IF EXISTS async_job;
+DROP TABLE IF EXISTS analysis_result_search_doc;
+
+CREATE TABLE analysis_result_search_doc (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    analysis_result_id BIGINT NOT NULL,
+    user_id BIGINT,
+    platform VARCHAR(20) NOT NULL,
+    book_id BIGINT,
+    book_name VARCHAR(255),
+    analysis_type VARCHAR(50),
+    channel_code VARCHAR(50),
+    board_code VARCHAR(50),
+    chapter_count INT,
+    model_name VARCHAR(100),
+    search_text CLOB NOT NULL,
+    structured_terms CLOB,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted TINYINT DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_history_search_result ON analysis_result_search_doc(analysis_result_id);
+CREATE INDEX IF NOT EXISTS idx_history_search_user_time ON analysis_result_search_doc(user_id, deleted, create_time, id);
 
 CREATE TABLE async_job (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,

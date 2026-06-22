@@ -3,6 +3,7 @@ import { httpClient, rawHttpClient } from '@/lib/http';
 import type { ApiResponse } from '@/types/api';
 import type {
   LoginRequest,
+  PasswordChangeRequest,
   PasswordResetRequest,
   RegisterRequest,
   SmsLoginRequest,
@@ -42,6 +43,9 @@ export const authApi = {
     return rawHttpClient.post<ApiResponse<null>>('/api/auth/password/reset', payload, {
       withCredentials: true,
     });
+  },
+  changePassword(payload: PasswordChangeRequest) {
+    return httpClient.post<ApiResponse<null>>('/api/auth/password/change', payload);
   },
   refresh() {
     return rawHttpClient.post<ApiResponse<TokenResponse>>('/api/auth/refresh', undefined, {

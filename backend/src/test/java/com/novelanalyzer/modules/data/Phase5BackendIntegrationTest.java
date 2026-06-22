@@ -10,6 +10,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -78,11 +79,12 @@ class Phase5BackendIntegrationTest {
 
     @BeforeEach
     void clearRedisCache() {
-        RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
         try {
+            RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
             connection.serverCommands().flushDb();
-        } finally {
             connection.close();
+        } catch (RedisConnectionFailureException ignored) {
+            // Data query tests do not depend on Redis. Keep them runnable in local environments without Redis.
         }
     }
 
@@ -305,12 +307,27 @@ class Phase5BackendIntegrationTest {
         mockMvc.perform(get("/api/data/history")
                 .header("Authorization", "Bearer " + token)
                 .param("platform", "fanqie")
-                .param("limit", "5"))
+                .param("page", "1")
+                .param("pageSize", "2"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.length()").value(4))
-            .andExpect(jsonPath("$.data[0].analysisType").isNotEmpty())
-            .andExpect(jsonPath("$.data[0].resultJson.analysisType").exists());
+            .andExpect(jsonPath("$.data.page").value(1))
+            .andExpect(jsonPath("$.data.pageSize").value(2))
+            .andExpect(jsonPath("$.data.total").value(4))
+            .andExpect(jsonPath("$.data.hasNext").value(true))
+            .andExpect(jsonPath("$.data.items.length()").value(2))
+            .andExpect(jsonPath("$.data.items[0].analysisType").isNotEmpty())
+            .andExpect(jsonPath("$.data.items[0].summaryPreview").isNotEmpty())
+            .andExpect(jsonPath("$.data.items[0].resultContent").doesNotExist())
+            .andExpect(jsonPath("$.data.items[0].resultJson").doesNotExist());
+
+        mockMvc.perform(get("/api/data/history/3004")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.id").value(3004))
+            .andExpect(jsonPath("$.data.resultContent").isNotEmpty())
+            .andExpect(jsonPath("$.data.resultJson.analysisType").value("theme"));
 
         mockMvc.perform(get("/api/data/visual")
                 .header("Authorization", "Bearer " + token)
@@ -338,6 +355,123 @@ class Phase5BackendIntegrationTest {
             .andExpect(jsonPath("$.data.comparisonSummary").isNotEmpty())
             .andExpect(jsonPath("$.data.snapshotComparisons.length()").value(3))
             .andExpect(jsonPath("$.data.snapshotComparisons[0].leadBookName").isNotEmpty());
+    }
+
+    @Test
+    void shouldPageHistoryByUserRoleAndFilters() throws Exception {
+        String adminToken = loginAndGetToken("admin", "admin123");
+        String writerToken = loginAndGetToken("writer", "writer123");
+        jdbcTemplate.update("""
+            INSERT INTO analysis_result
+                (id, user_id, platform, book_id, channel_code, board_code, snapshot_id, analysis_type, chapter_count,
+                 prompt_config_id, model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted)
+            VALUES
+                (3901, 2, 'fanqie', 1002, 'male-new', 'urban-brain', 6001, 'plot', 5,
+                 3, 'deepseek-chat', 'writer private plot result', '{"analysisType":"plot"}', 88, 450,
+                 TIMESTAMP '2026-03-21 13:00:00', TIMESTAMP '2026-03-21 13:00:00', 0)
+            """);
+
+        mockMvc.perform(get("/api/data/history")
+                .header("Authorization", "Bearer " + writerToken)
+                .param("platform", "fanqie")
+                .param("page", "1")
+                .param("pageSize", "20"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.total").value(1))
+            .andExpect(jsonPath("$.data.items[0].id").value(3901))
+            .andExpect(jsonPath("$.data.items[0].chapterCount").value(5));
+
+        mockMvc.perform(get("/api/data/history/3004")
+                .header("Authorization", "Bearer " + writerToken))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value(404));
+
+        mockMvc.perform(get("/api/data/history")
+                .header("Authorization", "Bearer " + adminToken)
+                .param("platform", "fanqie")
+                .param("analysisType", "plot")
+                .param("channelCode", "male-new")
+                .param("boardCode", "urban-brain")
+                .param("chapterCount", "5")
+                .param("modelName", "deepseek-chat")
+                .param("startTime", "2026-03-21 00:00:00")
+                .param("endTime", "2026-03-22 00:00:00"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.total").value(1))
+            .andExpect(jsonPath("$.data.items[0].id").value(3901));
+    }
+
+    @Test
+    void shouldSearchHistoryByIndexedStructuredContentAndRespectUserScope() throws Exception {
+        String adminToken = loginAndGetToken("admin", "admin123");
+        String writerToken = loginAndGetToken("writer", "writer123");
+        jdbcTemplate.update("""
+            INSERT INTO analysis_result_search_doc
+                (analysis_result_id, user_id, platform, book_id, book_name, analysis_type, channel_code, board_code,
+                 chapter_count, model_name, search_text, structured_terms, create_time, update_time, deleted)
+            VALUES
+                (3004, 1, 'fanqie', 1001, 'Brain City King', 'theme', 'male-new', 'urban-brain',
+                 0, 'deepseek-chat',
+                 'Book Brain City King board Urban Brain summary Urban-brain remains the clearest direction across snapshots. Lead lane urban-brain dominates the board history.',
+                 'urban-brain system-flow Brain City King Lead lane',
+                 TIMESTAMP '2026-03-20 12:30:00', TIMESTAMP '2026-03-20 12:30:00', 0)
+            """);
+
+        mockMvc.perform(get("/api/data/history")
+                .header("Authorization", "Bearer " + adminToken)
+                .param("keyword", "Lead lane")
+                .param("page", "1")
+                .param("pageSize", "20"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.total").value(1))
+            .andExpect(jsonPath("$.data.items[0].id").value(3004))
+            .andExpect(jsonPath("$.data.items[0].matchedFields[0]").value("分析正文"))
+            .andExpect(jsonPath("$.data.items[0].matchSnippets[0]").value(org.hamcrest.Matchers.containsString("Lead lane")))
+            .andExpect(jsonPath("$.data.items[0].resultContent").doesNotExist())
+            .andExpect(jsonPath("$.data.items[0].resultJson").doesNotExist());
+
+        mockMvc.perform(get("/api/data/history")
+                .header("Authorization", "Bearer " + writerToken)
+                .param("keyword", "Lead lane")
+                .param("page", "1")
+                .param("pageSize", "20"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.total").value(0))
+            .andExpect(jsonPath("$.data.items.length()").value(0));
+    }
+
+    @Test
+    void shouldNormalizeHistoryPagingAndRejectInvalidTimeFilter() throws Exception {
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(get("/api/data/history")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("page", "0")
+                .param("pageSize", "999"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.page").value(1))
+            .andExpect(jsonPath("$.data.pageSize").value(50))
+            .andExpect(jsonPath("$.data.total").value(4))
+            .andExpect(jsonPath("$.data.hasNext").value(false));
+
+        mockMvc.perform(get("/api/data/history")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("page", "2147483647")
+                .param("pageSize", "50"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.page").value(10000))
+            .andExpect(jsonPath("$.data.items.length()").value(0))
+            .andExpect(jsonPath("$.data.hasNext").value(false));
+
+        mockMvc.perform(get("/api/data/history")
+                .header("Authorization", "Bearer " + token)
+                .param("platform", "fanqie")
+                .param("startTime", "not-a-time"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value(400));
     }
 
     @Test

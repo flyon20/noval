@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import AnalysisResultCard from '@/components/analysis/AnalysisResultCard.vue';
+import { useMobileDrawerBack } from '@/composables/useMobileDrawerBack';
+import { useMobileEdgeSwipeClose } from '@/composables/useMobileEdgeSwipeClose';
 import { buildPreviewText, stripMarkdownToText } from '@/lib/trend-display';
 import { renderAnalysisMarkdown } from '@/lib/markdown';
 
@@ -43,6 +45,14 @@ function syncViewport() {
 function closeDrawer() {
   detailVisible.value = false;
 }
+
+const detailDrawerSwipe = useMobileEdgeSwipeClose(closeDrawer, { mobileWidth: 768 });
+useMobileDrawerBack({
+  isOpen: () => detailVisible.value,
+  close: closeDrawer,
+  mobileWidth: 768,
+  isMobile: () => typeof window !== 'undefined' && window.innerWidth <= 768,
+});
 
 onMounted(() => {
   syncViewport();
@@ -117,7 +127,14 @@ onBeforeUnmount(() => {
       :direction="drawerDirection"
       :size="drawerSize"
     >
-      <div class="trend-result-drawer" data-test="trend-result-detail">
+      <div
+        class="trend-result-drawer"
+        data-test="trend-result-detail"
+        @touchstart.passive="detailDrawerSwipe.onTouchStart"
+        @touchend.passive="detailDrawerSwipe.onTouchEnd"
+        @pointerdown.passive="detailDrawerSwipe.onPointerStart"
+        @pointerup.passive="detailDrawerSwipe.onPointerEnd"
+      >
         <div class="trend-result-drawer__topbar">
           <div class="trend-result-drawer__heading">
             <h3>趋势详情</h3>

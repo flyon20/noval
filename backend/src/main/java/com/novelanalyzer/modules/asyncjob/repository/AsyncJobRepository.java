@@ -58,6 +58,21 @@ public class AsyncJobRepository {
         return Optional.ofNullable(entity);
     }
 
+    public long countByTypeKeyAndUserAfter(String jobType,
+                                           String jobKey,
+                                           Long triggerUserId,
+                                           String status,
+                                           LocalDateTime createdAfter) {
+        LambdaQueryWrapper<AsyncJobEntity> wrapper = new LambdaQueryWrapper<AsyncJobEntity>()
+            .eq(AsyncJobEntity::getJobType, jobType)
+            .eq(AsyncJobEntity::getJobKey, jobKey)
+            .eq(AsyncJobEntity::getDeleted, 0)
+            .eq(triggerUserId != null, AsyncJobEntity::getTriggerUserId, triggerUserId)
+            .eq(status != null, AsyncJobEntity::getStatus, status)
+            .gt(createdAfter != null, AsyncJobEntity::getCreateTime, createdAfter);
+        return asyncJobMapper.selectCount(wrapper);
+    }
+
     public List<AsyncJobEntity> findLatestByResourceKey(String resourceKey, int limit) {
         return asyncJobMapper.selectList(
             new LambdaQueryWrapper<AsyncJobEntity>()

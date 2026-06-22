@@ -46,33 +46,66 @@ public class EmbeddingClient {
         }
         try {
             KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding = runtimeResolver.resolve();
-            Map<String, Object> body = Map.of(
-                "model", embedding.model(),
-                "input", List.of(text),
-                "dimensions", embedding.dimension(),
-                "encoding_format", "float"
-            );
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(trimTrailingSlash(embedding.baseUrl()) + "/embeddings"))
-                .timeout(Duration.ofSeconds(DEFAULT_TIMEOUT_SECONDS))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + embedding.apiKey())
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8))
-                .build();
-            HttpResponse<String> response = sendWithRetry(request);
-            ensureSuccess(response.statusCode(), response.body(), "embedding call failed");
-            Map<String, Object> payload = objectMapper.readValue(response.body(), new TypeReference<>() {});
-            List<Map<String, Object>> data = objectMapper.convertValue(payload.get("data"), new TypeReference<>() {});
-            if (data == null || data.isEmpty()) {
-                throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding response is empty");
+            if ("dashscope-multimodal".equalsIgnoreCase(embedding.provider())) {
+                return embedDashscopeMultimodal(text, embedding);
             }
-            return objectMapper.convertValue(data.get(0).get("embedding"), new TypeReference<List<Double>>() {});
+            return embedOpenAiCompatible(text, embedding);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
             LOGGER.warn("embedding call failed: {}: {}", ex.getClass().getSimpleName(), ex.getMessage());
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding call failed");
         }
+    }
+
+    private List<Double> embedOpenAiCompatible(String text,
+                                               KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding) throws IOException, InterruptedException {
+        Map<String, Object> body = Map.of(
+            "model", embedding.model(),
+            "input", List.of(text),
+            "dimensions", embedding.dimension(),
+            "encoding_format", "float"
+        );
+        HttpResponse<String> response = postJson(trimTrailingSlash(embedding.baseUrl()) + "/embeddings", embedding.apiKey(), body);
+        ensureSuccess(response.statusCode(), response.body(), "embedding call failed");
+        Map<String, Object> payload = objectMapper.readValue(response.body(), new TypeReference<>() {});
+        List<Map<String, Object>> data = objectMapper.convertValue(payload.get("data"), new TypeReference<>() {});
+        if (data == null || data.isEmpty()) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding response is empty");
+        }
+        return objectMapper.convertValue(data.get(0).get("embedding"), new TypeReference<List<Double>>() {});
+    }
+
+    private List<Double> embedDashscopeMultimodal(String text,
+                                                  KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding) throws IOException, InterruptedException {
+        Map<String, Object> body = Map.of(
+            "model", embedding.model(),
+            "input", Map.of("contents", List.of(Map.of("text", text))),
+            "parameters", Map.of("dimension", embedding.dimension())
+        );
+        String url = trimTrailingSlash(embedding.baseUrl()) + "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding";
+        HttpResponse<String> response = postJson(url, embedding.apiKey(), body);
+        ensureSuccess(response.statusCode(), response.body(), "embedding call failed");
+        Map<String, Object> payload = objectMapper.readValue(response.body(), new TypeReference<>() {});
+        Map<String, Object> output = objectMapper.convertValue(payload.get("output"), new TypeReference<>() {});
+        List<Map<String, Object>> embeddings = output == null
+            ? null
+            : objectMapper.convertValue(output.get("embeddings"), new TypeReference<>() {});
+        if (embeddings == null || embeddings.isEmpty()) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding response is empty");
+        }
+        return objectMapper.convertValue(embeddings.get(0).get("embedding"), new TypeReference<List<Double>>() {});
+    }
+
+    private HttpResponse<String> postJson(String url, String apiKey, Map<String, Object> body) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .timeout(Duration.ofSeconds(DEFAULT_TIMEOUT_SECONDS))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer " + apiKey)
+            .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8))
+            .build();
+        return sendWithRetry(request);
     }
 
     private HttpResponse<String> sendWithRetry(HttpRequest request) throws IOException, InterruptedException {

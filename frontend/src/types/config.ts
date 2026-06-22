@@ -93,7 +93,15 @@ export interface AiModelRegistryUpdateRequest {
 export type KnownSystemConfigKey =
   | 'ai.provider.type'
   | 'ai.timeout.millis'
+  | 'analysis.runtime.mode'
+  | 'ai.openai-compatible.base-url'
+  | 'ai.openai-compatible.default-model'
+  | 'ai.openai-compatible.api-key'
   | 'ai.openai-compatible.streaming-enabled'
+  | 'ai.langgraph-worker.base-url'
+  | 'ai.langgraph-worker.internal-api-key'
+  | 'ai.langgraph-worker.timeout-millis'
+  | 'ai.available-models'
   | 'analysis.chunk.max-input-tokens'
   | 'analysis.chunk.target-input-tokens'
   | 'analysis.chunk.parallelism'
@@ -102,7 +110,19 @@ export type KnownSystemConfigKey =
   | 'crawler.http.timeout-seconds'
   | 'crawler.chapter.fetch-workers'
   | 'crawler.chapter.force-refresh.user-max-times'
-  | 'crawler.rank.refresh-days';
+  | 'analysis.reanalyze.cooldown-hours'
+  | 'analysis.reanalyze.user-max-times'
+  | 'crawler.rank.refresh-days'
+  | 'crawler.rank.force-cooldown-days'
+  | 'crawler.rank.force-max-times'
+  | 'crawler.book.refresh-days'
+  | 'security.audit.enabled';
+
+export interface KnownSystemConfigOption {
+  key: string;
+  label: string;
+  hint: string;
+}
 
 export interface SystemConfig {
   id: number;

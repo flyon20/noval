@@ -27,6 +27,10 @@ import java.util.stream.Collectors;
 @Repository
 public class CrawlerRepository {
 
+    private static LocalDateTime toLocalDateTime(Timestamp timestamp) {
+        return timestamp == null ? null : timestamp.toLocalDateTime();
+    }
+
     private final CrawlBookMapper crawlBookMapper;
     private final CrawlRankMapper crawlRankMapper;
     private final CrawlChapterMapper crawlChapterMapper;
@@ -257,6 +261,51 @@ public class CrawlerRepository {
                 .eq(RankBoardEntity::getDeleted, 0)
                 .orderByAsc(RankBoardEntity::getChannelCode)
                 .orderByAsc(RankBoardEntity::getBoardCode)
+        );
+    }
+
+    public List<RankBoardEntity> findBoardsMissingSnapshotBefore(String platform, int refreshDays, int limit) {
+        int safeRefreshDays = Math.max(refreshDays, 1);
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(safeRefreshDays);
+        String sql = """
+                SELECT rb.*
+                FROM rank_board rb
+                LEFT JOIN (
+                    SELECT rank_board_id, MAX(snapshot_time) AS latest_snapshot_time
+                    FROM rank_snapshot
+                    WHERE deleted = 0
+                    GROUP BY rank_board_id
+                ) rs ON rs.rank_board_id = rb.id
+                WHERE rb.platform = ?
+                  AND rb.deleted = 0
+                  AND (
+                    rs.latest_snapshot_time IS NULL
+                    OR rs.latest_snapshot_time < ?
+                  )
+                ORDER BY CASE WHEN rs.latest_snapshot_time IS NULL THEN 0 ELSE 1 END,
+                         rs.latest_snapshot_time ASC,
+                         rb.update_time ASC,
+                         rb.id ASC
+                LIMIT %d
+                """.formatted(safeLimit);
+        return jdbcTemplate.query(
+            sql,
+            (rs, rowNum) -> {
+                RankBoardEntity board = new RankBoardEntity();
+                board.setId(rs.getLong("id"));
+                board.setPlatform(rs.getString("platform"));
+                board.setChannelCode(rs.getString("channel_code"));
+                board.setBoardCode(rs.getString("board_code"));
+                board.setBoardName(rs.getString("board_name"));
+                board.setDescription(rs.getString("description"));
+                board.setCreateTime(toLocalDateTime(rs.getTimestamp("create_time")));
+                board.setUpdateTime(toLocalDateTime(rs.getTimestamp("update_time")));
+                board.setDeleted(rs.getInt("deleted"));
+                return board;
+            },
+            platform,
+            Timestamp.valueOf(cutoff)
         );
     }
 

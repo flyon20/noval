@@ -2,12 +2,17 @@ package com.novelanalyzer.modules.knowledge;
 
 import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
+import com.novelanalyzer.common.context.TraceIdHolder;
 import com.novelanalyzer.modules.analysis.client.LangGraphWorkerClient;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.knowledge.dto.KnowledgeChatRequest;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeChatMemoryStore;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeAgentTraceService;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeChatService;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeIndexJobExecutor;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeMemoryCandidateService;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeProjectService;
 import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -19,12 +24,13 @@ import org.springframework.core.task.SyncTaskExecutor;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -36,6 +42,7 @@ class KnowledgeChatServiceUnitTest {
     @AfterEach
     void clearAuth() {
         AuthUserHolder.clear();
+        TraceIdHolder.clear();
     }
 
     @Test
@@ -248,6 +255,394 @@ class KnowledgeChatServiceUnitTest {
     }
 
     @Test
+    void shouldPassStructuredContextBundleAlongsideLegacyContextToWorkerPayload() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatService service = new KnowledgeChatService(workerClient, indexJobExecutor, crawlerService, taskExecutor());
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("revise opening");
+        request.setConversationId("conv-context");
+        request.setProjectId(99L);
+        request.setBookId(123L);
+        request.setBookName("Book Alpha");
+        request.setMode("outline");
+        request.setContextSummary("legacy summary");
+        KnowledgeChatRequest.ChatMessageDTO userMessage = new KnowledgeChatRequest.ChatMessageDTO();
+        userMessage.setRole("user");
+        userMessage.setContent("old question");
+        KnowledgeChatRequest.ChatMessageDTO assistantMessage = new KnowledgeChatRequest.ChatMessageDTO();
+        assistantMessage.setRole("assistant");
+        assistantMessage.setContent("old answer");
+        request.setHistory(List.of(userMessage, assistantMessage));
+
+        service.chat(request);
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
+        Map<String, Object> payload = payloadCaptor.getValue();
+        assertThat(payload).containsEntry("contextSummary", "legacy summary");
+        assertThat((List<?>) payload.get("history")).hasSize(2);
+        assertThat(payload).containsKey("contextBundle");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> contextBundle = (Map<String, Object>) payload.get("contextBundle");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> systemBaseline = (Map<String, Object>) contextBundle.get("systemBaseline");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> projectProfile = (Map<String, Object>) contextBundle.get("projectProfile");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> threadSummary = (Map<String, Object>) contextBundle.get("threadSummary");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> currentTurn = (Map<String, Object>) contextBundle.get("currentTurn");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> systemContent = (Map<String, Object>) systemBaseline.get("content");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> projectContent = (Map<String, Object>) projectProfile.get("content");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> threadContent = (Map<String, Object>) threadSummary.get("content");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> turnContent = (Map<String, Object>) currentTurn.get("content");
+        assertThat(systemBaseline).containsEntry("scope", "system");
+        assertThat(systemContent).containsEntry("domain", "webnovel");
+        assertThat(projectProfile).containsEntry("scope", "project");
+        assertThat(projectContent)
+            .containsEntry("projectId", 99L)
+            .containsEntry("bookId", 123L)
+            .containsEntry("bookName", "Book Alpha");
+        assertThat(threadSummary).containsEntry("scope", "thread");
+        assertThat(threadContent)
+            .containsEntry("conversationId", "conv-context")
+            .containsEntry("summary", "legacy summary");
+        assertThat(currentTurn).containsEntry("scope", "turn");
+        assertThat(turnContent)
+            .containsEntry("question", "revise opening")
+            .containsEntry("userId", 7L)
+            .containsEntry("projectId", 99L)
+            .containsEntry("conversationId", "conv-context")
+            .containsEntry("mode", "outline");
+    }
+
+    @Test
+    void shouldPassTraceIdToWorkerPayload() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatService service = new KnowledgeChatService(workerClient, indexJobExecutor, crawlerService, taskExecutor());
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+        TraceIdHolder.set("trace-rank-001");
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("最近男频都市脑洞题材趋势是什么？");
+
+        service.chat(request);
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("traceId", "trace-rank-001");
+    }
+
+    @Test
+    void shouldPassProjectIdToWorkerPayloadAndPersistAgentTrace() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeAgentTraceService traceService = mock(KnowledgeAgentTraceService.class);
+        KnowledgeProjectService projectService = mock(KnowledgeProjectService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            indexJobExecutor,
+            crawlerService,
+            taskExecutor(),
+            null,
+            traceService,
+            projectService
+        );
+        AuthUser authUser = AuthUser.of(7L, "writer", Set.of("USER"));
+        AuthUserHolder.set(authUser);
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of(
+            "taskGraph", Map.of("tasks", List.of(Map.of("type", "chapter_outline"))),
+            "toolRuns", List.of()
+        ));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setProjectId(99L);
+        request.setQuestion("帮我做前三章细纲");
+
+        service.chat(request);
+
+        verify(projectService).ensureOwned(99L, 7L);
+        InOrder inOrder = inOrder(projectService, workerClient);
+        inOrder.verify(projectService).ensureOwned(99L, 7L);
+        inOrder.verify(projectService).bindConversation(eq(99L), eq(7L), anyString());
+        inOrder.verify(workerClient).runKnowledgeChat(any());
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("projectId", 99L);
+        verify(traceService).persistFromChat(eq(7L), eq(99L), anyString(), eq("帮我做前三章细纲"), eq(workerResponse));
+    }
+
+    @Test
+    void shouldPersistMemoryCandidatesFromWorkerResult() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeAgentTraceService traceService = mock(KnowledgeAgentTraceService.class);
+        KnowledgeProjectService projectService = mock(KnowledgeProjectService.class);
+        KnowledgeMemoryCandidateService memoryCandidateService = mock(KnowledgeMemoryCandidateService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            indexJobExecutor,
+            crawlerService,
+            taskExecutor(),
+            null,
+            traceService,
+            projectService,
+            memoryCandidateService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+
+        Map<String, Object> candidate = Map.of(
+            "scope", "project",
+            "type", "constraint",
+            "content", "不后宫；前三章快节奏",
+            "confidence", 0.82,
+            "sourceTraceId", "trace-1"
+        );
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of(
+            "memoryCandidates", List.of(candidate),
+            "trace", Map.of("traceId", "trace-1"),
+            "taskGraph", Map.of("tasks", List.of()),
+            "toolRuns", List.of()
+        ));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setProjectId(900L);
+        request.setQuestion("不后宫，前三章快节奏");
+
+        service.chat(request);
+
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<List<Map<String, Object>>> candidatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(memoryCandidateService).persistCandidates(eq(900L), eq(7L), candidatesCaptor.capture(), eq("trace-1"));
+        assertThat(candidatesCaptor.getValue()).containsExactly(candidate);
+    }
+
+    @Test
+    void shouldClampChatPayloadAndWhitelistLimitsBeforeWorkerCall() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatService service = new KnowledgeChatService(workerClient, indexJobExecutor, crawlerService, taskExecutor());
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("q".repeat(70_000));
+        request.setContextSummary("s".repeat(1_100_000));
+        request.setLimits(Map.of(
+            "chapterCount", 99,
+            "evidenceLimit", 999,
+            "chapterLimitPerBook", 99,
+            "timeoutMillis", 999_999,
+            "unexpected", 123
+        ));
+        KnowledgeChatRequest.ChatMessageDTO first = new KnowledgeChatRequest.ChatMessageDTO();
+        first.setRole("assistant");
+        first.setContent("a".repeat(80_000));
+        KnowledgeChatRequest.ChatMessageDTO second = new KnowledgeChatRequest.ChatMessageDTO();
+        second.setRole("system");
+        second.setContent("b");
+        request.setHistory(List.of(first, second));
+
+        service.chat(request);
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
+        Map<String, Object> payload = payloadCaptor.getValue();
+        assertThat((String) payload.get("question")).hasSizeLessThanOrEqualTo(64_000);
+        assertThat((String) payload.get("contextSummary")).hasSizeLessThanOrEqualTo(900_000);
+        assertThat((String) payload.get("question")).hasSizeGreaterThan(8_000);
+        assertThat((String) payload.get("contextSummary")).hasSizeGreaterThan(24_000);
+        assertThat((List<?>) payload.get("history")).hasSize(2);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> history = (List<Map<String, Object>>) payload.get("history");
+        assertThat((String) history.get(0).get("content")).hasSizeLessThanOrEqualTo(64_000);
+        assertThat((String) history.get(0).get("content")).hasSizeGreaterThan(8_000);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> limits = (Map<String, Object>) payload.get("limits");
+        assertThat(limits).containsEntry("chapterCount", 10);
+        assertThat(limits).containsEntry("evidenceLimit", 20);
+        assertThat(limits).containsEntry("chapterLimitPerBook", 5);
+        assertThat(limits).containsEntry("timeoutMillis", 600_000);
+        assertThat(limits).doesNotContainKey("unexpected");
+    }
+
+    @Test
+    void shouldClampLastQuestionToLegacyMemoryColumnWidth() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatMemoryStore memoryStore = mock(KnowledgeChatMemoryStore.class);
+        KnowledgeChatService service = new KnowledgeChatService(workerClient, indexJobExecutor, crawlerService, taskExecutor(), memoryStore);
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("q".repeat(70_000));
+        request.setMode("research");
+
+        service.chat(request);
+
+        ArgumentCaptor<String> lastQuestionCaptor = ArgumentCaptor.forClass(String.class);
+        verify(memoryStore).save(
+            anyString(),
+            eq(7L),
+            anyString(),
+            lastQuestionCaptor.capture(),
+            eq("answer"),
+            org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.isNull()
+        );
+        assertThat(lastQuestionCaptor.getValue()).hasSizeLessThanOrEqualTo(1_000);
+        assertThat(lastQuestionCaptor.getValue()).hasSizeGreaterThan(100);
+    }
+
+    @Test
+    void shouldReturnConversationIdAndReuseServerMemoryOnFollowup() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatService service = new KnowledgeChatService(workerClient, indexJobExecutor, crawlerService, taskExecutor());
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+
+        KnowledgeChatResponseVO firstWorkerResponse = new KnowledgeChatResponseVO();
+        firstWorkerResponse.setStatus("answered");
+        firstWorkerResponse.setAnswer("第一轮回答");
+        firstWorkerResponse.setActions(List.of());
+        firstWorkerResponse.setResultJson(Map.of(
+            "memorySummary", "当前作品：星河旧梦\n上一轮结论：旧星门坐标是核心设定",
+            "bookName", "星河旧梦",
+            "intent", "single_book_research"
+        ));
+        KnowledgeChatResponseVO secondWorkerResponse = new KnowledgeChatResponseVO();
+        secondWorkerResponse.setStatus("answered");
+        secondWorkerResponse.setAnswer("第二轮回答");
+        secondWorkerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(firstWorkerResponse, secondWorkerResponse);
+
+        KnowledgeChatRequest firstRequest = new KnowledgeChatRequest();
+        firstRequest.setQuestion("星河旧梦的设定是什么？");
+        KnowledgeChatResponseVO firstResponse = service.chat(firstRequest);
+
+        String conversationId = (String) firstResponse.getResultJson().get("conversationId");
+        assertThat(conversationId).isNotBlank();
+
+        KnowledgeChatRequest secondRequest = new KnowledgeChatRequest();
+        secondRequest.setQuestion("那它的卖点呢？");
+        secondRequest.setConversationId(conversationId);
+        service.chat(secondRequest);
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient, org.mockito.Mockito.times(2)).runKnowledgeChat(payloadCaptor.capture());
+        Map<String, Object> secondPayload = payloadCaptor.getAllValues().get(1);
+        assertThat(secondPayload).containsEntry("conversationId", conversationId);
+        assertThat(secondPayload.get("contextSummary")).asString().contains("旧星门坐标");
+    }
+
+    @Test
+    void shouldPreferServerMemoryBeforeFrontendContextSummary() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatMemoryStore memoryStore = mock(KnowledgeChatMemoryStore.class);
+        KnowledgeChatService service = new KnowledgeChatService(workerClient, indexJobExecutor, crawlerService, taskExecutor(), memoryStore);
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+
+        doReturn(java.util.Optional.of(new KnowledgeChatMemoryStore.ChatMemory(
+            "conv-memory",
+            7L,
+            "服务端记忆：上一轮已确认男频都市脑洞榜一"
+        ))).when(memoryStore).find("conv-memory", 7L);
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setConversationId("conv-memory");
+        request.setQuestion("继续做大纲");
+        request.setContextSummary("前端摘要：旧浏览器里残留的总结");
+
+        service.chat(request);
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
+        String contextSummary = (String) payloadCaptor.getValue().get("contextSummary");
+        assertThat(contextSummary).startsWith("服务端记忆：上一轮已确认男频都市脑洞榜一");
+        assertThat(contextSummary).contains("前端摘要：旧浏览器里残留的总结");
+    }
+
+    @Test
     void shouldStreamKnowledgeChatAfterCandidateCompletionAndIndexing() {
         LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
         KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
@@ -272,7 +667,7 @@ class KnowledgeChatServiceUnitTest {
         workerResponse.setStatus("answered");
         workerResponse.setAnswer("stream answer[1]");
         workerResponse.setActions(List.of());
-        when(workerClient.streamKnowledgeChat(any(), any(), any())).thenReturn(workerResponse);
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any())).thenReturn(workerResponse);
 
         KnowledgeChatRequest request = new KnowledgeChatRequest();
         request.setQuestion("continue analysis");
@@ -290,7 +685,7 @@ class KnowledgeChatServiceUnitTest {
         service.streamChat(request);
 
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(workerClient).streamKnowledgeChat(payloadCaptor.capture(), any(), any());
+        verify(workerClient).streamKnowledgeChat(payloadCaptor.capture(), any(), any(), any());
         assertThat(payloadCaptor.getValue()).containsEntry("bookId", 808L);
         assertThat(payloadCaptor.getValue()).containsEntry("bookName", "External Book");
         verify(indexJobExecutor).submitAndExecuteBlocking(808L, 7L);
@@ -306,8 +701,39 @@ class KnowledgeChatServiceUnitTest {
             eq(5)
         );
         inOrder.verify(indexJobExecutor).submitAndExecuteBlocking(808L, 7L);
-        inOrder.verify(workerClient).streamKnowledgeChat(any(), any(), any());
+        inOrder.verify(workerClient).streamKnowledgeChat(any(), any(), any(), any());
     }
+
+    @Test
+    void shouldFallbackToBlockingWorkerInsideSseWhenWorkerStreamFailsBeforeFirstDelta() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatService service = new KnowledgeChatService(workerClient, indexJobExecutor, crawlerService, taskExecutor());
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("blocking fallback answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any()))
+            .thenThrow(new RuntimeException("worker stream ended without result"));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("continue analysis");
+
+        service.streamChat(request);
+
+        InOrder inOrder = inOrder(workerClient);
+        inOrder.verify(workerClient).streamKnowledgeChat(any(), any(), any(), any());
+        inOrder.verify(workerClient).runKnowledgeChat(any());
+    }
+
     private AsyncTaskExecutor taskExecutor() {
         return new SyncTaskExecutor()::execute;
     }

@@ -19,6 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "app.auth.jwt-secret=test-jwt-secret-with-enough-length-1234567890",
         "app.crawler.internal-api-key=test-crawler-internal-api-key-1234567890",
         "app.ai.langgraph-worker.internal-api-key=test-langgraph-internal-key-1234567890",
+        "app.knowledge.index.queue-enabled=false",
+        "app.knowledge.index.rank-incremental-enabled=false",
         "app.knowledge.embedding.api-key=test-embedding-key"
     }
 )

@@ -9,6 +9,7 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
+  changePassword: [];
   logout: [];
 }>();
 </script>
@@ -22,7 +23,12 @@ const emit = defineEmits<{
     </div>
 
     <div class="app-shell__surface">
-      <AppHeader :roles="roles" :username="username" @logout="emit('logout')" />
+      <AppHeader
+        :roles="roles"
+        :username="username"
+        @change-password="emit('changePassword')"
+        @logout="emit('logout')"
+      />
       <main class="app-shell__content">
         <slot />
       </main>
@@ -55,7 +61,6 @@ const emit = defineEmits<{
     radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.32), transparent 26%);
 }
 
-.app-shell__sidebar,
 .app-shell__surface {
   position: relative;
   min-width: 0;
@@ -66,19 +71,15 @@ const emit = defineEmits<{
 }
 
 .app-shell__sidebar {
-  position: sticky;
-  top: 1.35rem;
+  position: relative;
+  min-width: 0;
   align-self: start;
-  overflow: hidden;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  background: color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
 }
 
 .app-shell__surface {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   max-width: 100%;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -131,9 +132,6 @@ const emit = defineEmits<{
     padding: 1rem;
   }
 
-  .app-shell__sidebar {
-    position: static;
-  }
 }
 
 /* Mobile breakpoint */

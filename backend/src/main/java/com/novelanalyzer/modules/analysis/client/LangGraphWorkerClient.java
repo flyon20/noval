@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 @Component
@@ -78,6 +79,13 @@ public class LangGraphWorkerClient {
     public KnowledgeChatResponseVO streamKnowledgeChat(Map<String, Object> requestPayload,
                                                         Consumer<String> onDelta,
                                                         BooleanSupplier cancelledSupplier) {
+        return streamKnowledgeChat(requestPayload, onDelta, null, cancelledSupplier);
+    }
+
+    public KnowledgeChatResponseVO streamKnowledgeChat(Map<String, Object> requestPayload,
+                                                        Consumer<String> onDelta,
+                                                        BiConsumer<String, String> onProgress,
+                                                        BooleanSupplier cancelledSupplier) {
         try {
             HttpRequest request = buildRequest("/internal/knowledge/chat/stream", requestPayload);
             HttpResponse<java.io.InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -97,7 +105,8 @@ public class LangGraphWorkerClient {
                             currentEvent,
                             currentData.toString(),
                             accumulatedContent,
-                            onDelta
+                            onDelta,
+                            onProgress
                         );
                         if (done != null) {
                             if ((done.getAnswer() == null || done.getAnswer().isBlank()) && !accumulatedContent.isEmpty()) {
@@ -201,13 +210,6 @@ public class LangGraphWorkerClient {
             return null;
         }
         if ("progress".equalsIgnoreCase(effectiveEvent)) {
-            String message = firstNonBlank(asString(payload.get("message")), asString(payload.get("delta")));
-            if (message != null && !message.isBlank()) {
-                accumulatedContent.append(message);
-                if (onDelta != null) {
-                    onDelta.accept(message);
-                }
-            }
             return null;
         }
         if ("delta".equalsIgnoreCase(effectiveEvent)) {
@@ -242,13 +244,20 @@ public class LangGraphWorkerClient {
     private KnowledgeChatResponseVO processKnowledgeEvent(String eventName,
                                                           String rawData,
                                                           StringBuilder accumulatedContent,
-                                                          Consumer<String> onDelta) throws Exception {
+                                                          Consumer<String> onDelta,
+                                                          BiConsumer<String, String> onProgress) throws Exception {
         if (rawData == null || rawData.isBlank()) {
             return null;
         }
         Map<String, Object> payload = objectMapper.readValue(rawData, new TypeReference<Map<String, Object>>() {});
         String effectiveEvent = firstNonBlank(asString(payload.get("event")), eventName);
         if ("start".equalsIgnoreCase(effectiveEvent)) {
+            return null;
+        }
+        if ("progress".equalsIgnoreCase(effectiveEvent)) {
+            if (onProgress != null) {
+                onProgress.accept(asString(payload.get("phase")), asString(payload.get("message")));
+            }
             return null;
         }
         if ("delta".equalsIgnoreCase(effectiveEvent)) {

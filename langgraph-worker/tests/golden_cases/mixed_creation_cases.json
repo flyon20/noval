@@ -1,0 +1,53 @@
+[
+  {
+    "case_id": "mixed-creation-001",
+    "question": "根据当前男频都市脑洞新书榜第一的书，模仿题材并给前三章细纲。",
+    "request_payload": {
+      "mode": "research",
+      "limits": {"rankLimit": 1, "chapterLimit": 3}
+    },
+    "expected_intent": "mixed_creation_research",
+    "expected_answer_mode": "mixed_creation",
+    "expected_sub_intents": ["market_scan", "book_breakdown", "opening_strategy", "chapter_outline"],
+    "relevant_source_ids": ["rank:101", "chapter:1001", "chapter:1002", "intro:101"],
+    "forbidden_claims": ["完全照搬", "一定会成功"],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.7,
+      "min_context_recall_at_k": 0.6
+    }
+  },
+  {
+    "case_id": "mixed-creation-002",
+    "question": "看一下最近男频都市脑洞风向，参考榜一卖点，给我一个不撞车的新题材。",
+    "request_payload": {
+      "mode": "research",
+      "limits": {"rankLimit": 10, "chapterLimit": 3}
+    },
+    "expected_intent": "mixed_creation_research",
+    "expected_answer_mode": "mixed_creation",
+    "expected_sub_intents": ["market_scan", "book_breakdown", "opening_strategy"],
+    "relevant_source_ids": ["rank:101", "rank:102", "chapter:1001"],
+    "forbidden_claims": ["绝对不撞车", "肯定火"],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.6,
+      "min_context_recall_at_k": 0.5
+    }
+  },
+  {
+    "case_id": "mixed-creation-003",
+    "question": "参考番茄男频都市脑洞榜前三，设计一个主角、金手指和世界观，再指出可能的毒点。",
+    "request_payload": {
+      "mode": "research",
+      "limits": {"rankLimit": 3, "chapterLimit": 3}
+    },
+    "expected_intent": "mixed_creation_research",
+    "expected_answer_mode": "mixed_creation",
+    "expected_sub_intents": ["market_scan", "book_breakdown", "character_design", "worldbuilding"],
+    "relevant_source_ids": ["rank:101", "rank:102", "rank:103"],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.7,
+      "min_context_recall_at_k": 0.6
+    }
+  }
+]

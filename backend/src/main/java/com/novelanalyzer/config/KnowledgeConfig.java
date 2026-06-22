@@ -13,9 +13,14 @@ public class KnowledgeConfig {
     @Bean(name = "knowledgeIndexTaskExecutor")
     public TaskExecutor knowledgeIndexTaskExecutor(KnowledgeProperties properties) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        int maxActiveJobs = Math.max(1, properties.getIndex().getMaxActiveJobs());
+        int queueWorkers = properties.getIndex().isQueueEnabled()
+            ? Math.max(1, properties.getIndex().getWorkerConcurrency())
+            : 0;
+        int poolSize = maxActiveJobs + queueWorkers;
         executor.setThreadNamePrefix("knowledge-index-");
-        executor.setCorePoolSize(1);
-        executor.setMaxPoolSize(Math.max(1, properties.getIndex().getMaxActiveJobs()));
+        executor.setCorePoolSize(poolSize);
+        executor.setMaxPoolSize(poolSize);
         executor.setQueueCapacity(16);
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.initialize();

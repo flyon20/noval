@@ -58,4 +58,47 @@ describe('BookDetailDrawer', () => {
     expect(wrapper.emitted('update:modelValue')).toEqual([[false]]);
     wrapper.unmount();
   });
+
+  test('wires the mobile edge-swipe close affordance on the drawer surface', async () => {
+    const source = await import('../BookDetailDrawer.vue?raw');
+
+    expect(source.default).toContain('useMobileEdgeSwipeClose');
+    expect(source.default).toContain('useMobileDrawerBack');
+    expect(source.default).toContain('drawerSwipe.onTouchStart');
+    expect(source.default).toContain('drawerSwipe.onTouchEnd');
+    expect(source.default).toContain('drawerSwipe.onPointerStart');
+    expect(source.default).toContain('drawerSwipe.onPointerEnd');
+  });
+
+  test('closes from mobile browser back before navigating away', async () => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 390,
+    });
+    const wrapper = mount(BookDetailDrawer, {
+      attachTo: document.body,
+      props: {
+        modelValue: true,
+        detail: {
+          bookId: 1001,
+          platform: 'fanqie',
+          bookName: 'Mobile Book',
+          author: 'Author',
+          intro: 'Intro',
+          bookUrl: 'https://book.test/1001',
+        },
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    });
+    await flushPromises();
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await flushPromises();
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([[false]]);
+    wrapper.unmount();
+  });
 });

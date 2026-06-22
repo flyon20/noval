@@ -1,0 +1,53 @@
+[
+  {
+    "case_id": "book-breakdown-001",
+    "question": "拆解《重生之都市修仙》前三章为什么能留人。",
+    "request_payload": {
+      "bookName": "重生之都市修仙",
+      "mode": "research",
+      "limits": {"chapterLimit": 3}
+    },
+    "expected_intent": "book_breakdown",
+    "expected_answer_mode": "single_book",
+    "relevant_source_ids": ["chapter:2001", "chapter:2002", "chapter:2003", "intro:201"],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.8,
+      "min_context_recall_at_k": 0.7
+    }
+  },
+  {
+    "case_id": "book-breakdown-002",
+    "question": "分析《都市神医》的爽点节奏和卖点。",
+    "request_payload": {
+      "bookName": "都市神医",
+      "mode": "research",
+      "limits": {"chapterLimit": 5, "analysisLimit": 3}
+    },
+    "expected_intent": "book_breakdown",
+    "expected_answer_mode": "single_book",
+    "relevant_source_ids": ["chapter:3001", "analysis:301", "intro:301"],
+    "forbidden_claims": [],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.7,
+      "min_context_recall_at_k": 0.6
+    }
+  },
+  {
+    "case_id": "book-breakdown-003",
+    "question": "这本书《豪门弃少归来》的主角金手指是什么？可借鉴和不可照搬的分别是什么？",
+    "request_payload": {
+      "bookName": "豪门弃少归来",
+      "mode": "research",
+      "limits": {"chapterLimit": 3}
+    },
+    "expected_intent": "book_breakdown",
+    "expected_answer_mode": "single_book",
+    "relevant_source_ids": ["chapter:4001", "intro:401"],
+    "forbidden_claims": ["完全可以照搬"],
+    "retrieval_thresholds": {
+      "min_hit_rate_at_k": 0.8,
+      "min_context_recall_at_k": 0.7
+    }
+  }
+]

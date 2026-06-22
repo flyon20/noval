@@ -386,6 +386,126 @@ class Phase4AnalysisIntegrationTest {
     }
 
     @Test
+    void shouldThrottleNormalUserForceReanalyzeWhenInputSignatureIsUnchanged() throws Exception {
+        updateSystemConfig("analysis.reanalyze.cooldown-hours", "24");
+        updateSystemConfig("analysis.reanalyze.user-max-times", "1");
+        String token = loginAndGetToken("writer", "writer123");
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(jsonPath("$.code").value(429))
+            .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("reanalyze cooldown")));
+    }
+
+    @Test
+    void shouldAllowAdminForceReanalyzeWhenInputSignatureIsUnchanged() throws Exception {
+        updateSystemConfig("analysis.reanalyze.cooldown-hours", "24");
+        updateSystemConfig("analysis.reanalyze.user-max-times", "1");
+        String token = loginAndGetToken("admin", "admin123");
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+    }
+
+    @Test
+    void shouldAllowNormalUserForceReanalyzeWhenChapterContentChanges() throws Exception {
+        updateSystemConfig("analysis.reanalyze.cooldown-hours", "24");
+        updateSystemConfig("analysis.reanalyze.user-max-times", "1");
+        String token = loginAndGetToken("writer", "writer123");
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        jdbcTemplate.update(
+            "UPDATE crawl_chapter SET content = ?, word_count = ?, source_word_count = ?, crawl_time = CURRENT_TIMESTAMP WHERE book_id = ? AND chapter_no = ?",
+            "changed chapter content",
+            23,
+            23,
+            1001L,
+            1
+        );
+        crawlerCacheService.evict("chapter:1001:3");
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+    }
+
+    @Test
+    void shouldAllowNormalUserForceReanalyzeWhenLatestSameSignatureForceJobFailed() throws Exception {
+        updateSystemConfig("analysis.reanalyze.cooldown-hours", "24");
+        updateSystemConfig("analysis.reanalyze.user-max-times", "1");
+        String token = loginAndGetToken("writer", "writer123");
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        jdbcTemplate.update("""
+            UPDATE async_job
+            SET status = 'FAILED', error_message = 'test force retry failure', update_time = CURRENT_TIMESTAMP
+            WHERE job_type = 'book_analysis'
+              AND job_key LIKE '%:force:%'
+            ORDER BY id DESC
+            LIMIT 1
+            """);
+
+        mockMvc.perform(post("/api/analysis/deconstruct")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+    }
+
+    @Test
     void shouldAnalyzeLegacySingleBookViaWorkerAndPreserveMetadata() throws Exception {
         updateSystemConfig("analysis.runtime.mode", "legacy");
         String token = loginAndGetToken("admin", "admin123");
@@ -642,6 +762,47 @@ class Phase4AnalysisIntegrationTest {
         assertThat(body).contains("\"source\":\"cached-history\"");
         assertThat(LANGGRAPH_REQUEST_COUNT.get()).isZero();
         assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).isBlank();
+    }
+
+    @Test
+    void shouldBypassCachedDeconstructStreamWhenForceReanalyzeIsTrue() throws Exception {
+        updateSystemConfig("analysis.runtime.mode", "langgraph");
+        clearCrawlerLocalCache();
+        LANGGRAPH_REQUEST_COUNT.set(0);
+        LAST_LANGGRAPH_REQUEST_BODY.set("");
+        jdbcTemplate.update("""
+            INSERT INTO analysis_result (
+                user_id, platform, book_id, analysis_type, chapter_count, prompt_config_id,
+                model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted
+            ) VALUES (
+                1, 'fanqie', 1001, 'deconstruct', 3, 2001,
+                'langgraph-worker:deepseek-chat',
+                'cached deconstruct content',
+                '{"analysisType":"deconstruct","summary":"cached summary","detailContent":"cached deconstruct content","source":"cached-history"}',
+                101, 12, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), 0
+            )
+            """);
+        String token = loginAndGetToken("admin", "admin123");
+
+        MvcResult streamStart = mockMvc.perform(post("/api/analysis/deconstruct/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","bookId":1001,"chapterCount":3,"forceReanalyze":true}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+            .andReturn();
+
+        streamStart.getAsyncResult(10000);
+        String body = streamStart.getResponse().getContentAsString();
+
+        assertThat(body).contains("mock langgraph stream");
+        assertThat(body).contains("\"source\":\"mock-langgraph\"");
+        assertThat(body).doesNotContain("cached deconstruct content");
+        assertThat(body).doesNotContain("\"source\":\"cached-history\"");
+        assertThat(LANGGRAPH_REQUEST_COUNT.get()).isEqualTo(1);
+        assertThat(LAST_LANGGRAPH_REQUEST_BODY.get()).isNotBlank();
     }
 
     @Test

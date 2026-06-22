@@ -47,15 +47,18 @@ public class PromptGovernanceService {
     private final PromptPublishRepository promptPublishRepository;
     private final UserPromptBindingRepository userPromptBindingRepository;
     private final UserPromptEffectiveHistoryRepository userPromptEffectiveHistoryRepository;
+    private final SystemConfigService systemConfigService;
 
     public PromptGovernanceService(PromptConfigRepository promptConfigRepository,
                                    PromptPublishRepository promptPublishRepository,
                                    UserPromptBindingRepository userPromptBindingRepository,
-                                   UserPromptEffectiveHistoryRepository userPromptEffectiveHistoryRepository) {
+                                   UserPromptEffectiveHistoryRepository userPromptEffectiveHistoryRepository,
+                                   SystemConfigService systemConfigService) {
         this.promptConfigRepository = promptConfigRepository;
         this.promptPublishRepository = promptPublishRepository;
         this.userPromptBindingRepository = userPromptBindingRepository;
         this.userPromptEffectiveHistoryRepository = userPromptEffectiveHistoryRepository;
+        this.systemConfigService = systemConfigService;
     }
 
     public List<PromptConfigVO> listPublishedSystemTemplates(String promptType) {
@@ -128,6 +131,9 @@ public class PromptGovernanceService {
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "prompt config not found"));
         if (isDefaultTemplate(entity)) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "default template cannot be deleted");
+        }
+        if (systemConfigService.isPromptTemplateBound(promptType, entity.getPromptName())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "template is bound to model");
         }
         promptConfigRepository.softDeleteById(entity.getId());
     }

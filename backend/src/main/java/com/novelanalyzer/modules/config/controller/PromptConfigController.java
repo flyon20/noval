@@ -10,6 +10,7 @@ import com.novelanalyzer.modules.config.dto.UserPromptCopyCreateRequest;
 import com.novelanalyzer.modules.config.dto.UserPromptCopyUpdateRequest;
 import com.novelanalyzer.modules.config.service.PromptConfigService;
 import com.novelanalyzer.modules.config.service.PromptGovernanceService;
+import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.config.vo.PromptConfigVO;
 import com.novelanalyzer.modules.config.vo.PromptPublishVersionVO;
 import com.novelanalyzer.modules.config.vo.UserPromptBindingVO;
@@ -37,11 +38,14 @@ public class PromptConfigController {
 
     private final PromptConfigService promptConfigService;
     private final PromptGovernanceService promptGovernanceService;
+    private final SystemConfigService systemConfigService;
 
     public PromptConfigController(PromptConfigService promptConfigService,
-                                  PromptGovernanceService promptGovernanceService) {
+                                  PromptGovernanceService promptGovernanceService,
+                                  SystemConfigService systemConfigService) {
         this.promptConfigService = promptConfigService;
         this.promptGovernanceService = promptGovernanceService;
+        this.systemConfigService = systemConfigService;
     }
 
     // Legacy compatibility endpoints
@@ -69,7 +73,7 @@ public class PromptConfigController {
     @RequireRole({"ADMIN"})
     public Result<Void> deletePromptTemplate(@RequestParam("promptType") @NotBlank String promptType,
                                              @RequestParam("promptName") @NotBlank String promptName) {
-        promptConfigService.deleteTemplate(promptType, promptName, null);
+        promptConfigService.deleteTemplate(promptType, promptName, systemConfigService.getModelRegistry().getModels());
         return Result.success();
     }
 

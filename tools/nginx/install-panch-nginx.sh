@@ -137,6 +137,25 @@ server {
         proxy_send_timeout 3600s;
     }
 
+    location = /api/knowledge/chat/stream {
+        proxy_pass http://noval_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$realip_remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        gzip off;
+        add_header X-Accel-Buffering no always;
+
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
     location /api/ {
         proxy_pass http://noval_backend;
         proxy_http_version 1.1;

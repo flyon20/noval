@@ -1,6 +1,8 @@
 const DEFAULT_CHARS_PER_TICK = 32;
 const DEFAULT_TICK_MILLIS = 24;
 const DEFAULT_TARGET_DURATION_MS = 1400;
+const LARGE_DELTA_IMMEDIATE_CHARS = 4096;
+const LARGE_BACKLOG_IMMEDIATE_RATIO = 0.25;
 
 export interface StreamingPlaybackController {
   append(delta: string): void;
@@ -82,10 +84,17 @@ export function createStreamingPlaybackController(
         return;
       }
 
+      const previousLength = fullText.length;
       fullText += delta;
 
       if (visibleLength === 0) {
         visibleLength = Math.min(fullText.length, charsPerTick);
+        applyVisible();
+      }
+
+      if (delta.length >= LARGE_DELTA_IMMEDIATE_CHARS) {
+        const immediateTarget = previousLength + Math.ceil(delta.length * LARGE_BACKLOG_IMMEDIATE_RATIO);
+        visibleLength = Math.max(visibleLength, Math.min(fullText.length, immediateTarget));
         applyVisible();
       }
 

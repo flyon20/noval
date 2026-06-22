@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
     content_hash CHAR(64) NOT NULL COMMENT 'sha256 content hash',
     chunk_text MEDIUMTEXT NOT NULL COMMENT 'chunk text for embedding and citations',
     token_count INT DEFAULT 0 COMMENT 'estimated token count',
+    chunk_strategy_version VARCHAR(50) NOT NULL DEFAULT 'rag-v2' COMMENT 'chunk splitting strategy version',
+    embedding_model VARCHAR(100) COMMENT 'embedding model used for vector',
+    embedding_dimension INT DEFAULT 0 COMMENT 'embedding vector dimension',
     vector_status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING / INDEXED / FAILED',
     qdrant_point_id VARCHAR(100) COMMENT 'qdrant point id',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
@@ -39,5 +42,6 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
     UNIQUE KEY uk_knowledge_chunk_qdrant_point (qdrant_point_id),
     INDEX idx_knowledge_chunk_book_source (book_id, source_type, chapter_no),
     INDEX idx_knowledge_chunk_hash_status (content_hash, vector_status),
+    INDEX idx_knowledge_chunk_strategy_status (chunk_strategy_version, embedding_model, embedding_dimension, vector_status),
     INDEX idx_knowledge_chunk_document_status (document_id, vector_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='knowledge chunk';
