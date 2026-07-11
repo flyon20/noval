@@ -19,6 +19,7 @@ public class KnowledgeChatRequest {
     @Valid
     private CandidateDTO selectedCandidate;
     private String mode;
+    private String reasoningMode;
     private String contextSummary;
     @Valid
     private List<ChatMessageDTO> history = List.of();
@@ -85,6 +86,14 @@ public class KnowledgeChatRequest {
         this.mode = mode;
     }
 
+    public String getReasoningMode() {
+        return reasoningMode;
+    }
+
+    public void setReasoningMode(String reasoningMode) {
+        this.reasoningMode = reasoningMode;
+    }
+
     public String getContextSummary() {
         return contextSummary;
     }
@@ -118,6 +127,9 @@ public class KnowledgeChatRequest {
         private String intro;
         private String bookUrl;
         private Boolean local;
+        private String contentType;
+        private Boolean readableNovel;
+        private String unavailableReason;
 
         public Long getBookId() {
             return bookId;
@@ -181,6 +193,30 @@ public class KnowledgeChatRequest {
 
         public void setLocal(Boolean local) {
             this.local = local;
+        }
+
+        public String getContentType() {
+            return contentType;
+        }
+
+        public void setContentType(String contentType) {
+            this.contentType = contentType;
+        }
+
+        public Boolean getReadableNovel() {
+            return readableNovel;
+        }
+
+        public void setReadableNovel(Boolean readableNovel) {
+            this.readableNovel = readableNovel;
+        }
+
+        public String getUnavailableReason() {
+            return unavailableReason;
+        }
+
+        public void setUnavailableReason(String unavailableReason) {
+            this.unavailableReason = unavailableReason;
         }
     }
 

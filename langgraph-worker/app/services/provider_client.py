@@ -27,6 +27,9 @@ class OpenAICompatibleProviderClient:
         api_key: str | None = None,
         timeout_millis: int | None = None,
         request: RunRequest | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        reasoning_mode: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict:
         if request is None:
             return await self._invoke_openai_compatible(
@@ -38,6 +41,9 @@ class OpenAICompatibleProviderClient:
                 base_url=base_url,
                 api_key=api_key,
                 timeout_millis=timeout_millis,
+                tools=tools,
+                reasoning_mode=reasoning_mode,
+                reasoning_effort=reasoning_effort,
             )
 
         failures: list[dict[str, str]] = []
@@ -59,6 +65,9 @@ class OpenAICompatibleProviderClient:
                     base_url=base_url,
                     api_key=api_key,
                     timeout_millis=timeout_millis,
+                    tools=tools,
+                    reasoning_mode=reasoning_mode,
+                    reasoning_effort=reasoning_effort,
                 )
             except Exception as exc:
                 failures.append({"provider": provider, "reason": str(exc) or exc.__class__.__name__})
@@ -81,8 +90,19 @@ class OpenAICompatibleProviderClient:
         base_url: str | None = None,
         api_key: str | None = None,
         timeout_millis: int | None = None,
+        reasoning_mode: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncGenerator[dict, None]:
-        payload = self._build_payload(messages, model, temperature, max_tokens, require_json, stream=True)
+        payload = self._build_payload(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            require_json,
+            stream=True,
+            reasoning_mode=reasoning_mode,
+            reasoning_effort=reasoning_effort,
+        )
         for attempt in range(1, self._MAX_TRANSPORT_ATTEMPTS + 1):
             yielded_chunk = False
             try:
@@ -109,7 +129,14 @@ class OpenAICompatibleProviderClient:
                             if choice.get("finish_reason"):
                                 yielded_chunk = True
                                 usage = item.get("usage") or {}
-                                yield {"event": "done", "tokenUsed": int(usage.get("total_tokens") or 0)}
+                                usage_summary = self._usage_summary(usage)
+                                yield {
+                                    "event": "done",
+                                    "tokenUsed": int(usage_summary.get("totalTokens") or 0),
+                                    "promptCacheHitTokens": int(usage_summary.get("promptCacheHitTokens") or 0),
+                                    "promptCacheMissTokens": int(usage_summary.get("promptCacheMissTokens") or 0),
+                                    "usage": usage_summary,
+                                }
                 return
             except self._RETRYABLE_ERRORS:
                 if yielded_chunk or attempt >= self._MAX_TRANSPORT_ATTEMPTS:
@@ -127,8 +154,21 @@ class OpenAICompatibleProviderClient:
         base_url: str | None = None,
         api_key: str | None = None,
         timeout_millis: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        reasoning_mode: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict:
-        payload = self._build_payload(messages, model, temperature, max_tokens, require_json, stream=False)
+        payload = self._build_payload(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            require_json,
+            stream=False,
+            tools=tools,
+            reasoning_mode=reasoning_mode,
+            reasoning_effort=reasoning_effort,
+        )
         data = await self._invoke_with_retry(
             payload=payload,
             base_url=base_url,
@@ -138,10 +178,17 @@ class OpenAICompatibleProviderClient:
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         usage = data.get("usage") or {}
+        usage_summary = self._usage_summary(usage)
         return {
             "model_name": data.get("model", model),
             "content": message.get("content", "") or "",
-            "token_used": int(usage.get("total_tokens") or 0),
+            "reasoning_content": message.get("reasoning_content"),
+            "raw_tool_calls": message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else [],
+            "tool_calls": self._normalize_tool_calls(message.get("tool_calls")),
+            "token_used": int(usage_summary.get("totalTokens") or 0),
+            "prompt_cache_hit_tokens": usage_summary.get("promptCacheHitTokens", 0),
+            "prompt_cache_miss_tokens": usage_summary.get("promptCacheMissTokens", 0),
+            "usage": usage_summary,
         }
 
     async def _invoke_dify_blocking(
@@ -219,19 +266,84 @@ class OpenAICompatibleProviderClient:
         max_tokens: int | None,
         require_json: bool,
         stream: bool,
+        tools: list[dict[str, Any]] | None = None,
+        reasoning_mode: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict:
         payload: dict[str, Any] = {
             "model": model or settings.default_model,
             "messages": messages,
             "stream": stream,
         }
-        if temperature is not None:
+        normalized_reasoning_mode = self._normalize_reasoning_mode(reasoning_mode)
+        if normalized_reasoning_mode == "deep":
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = self._normalize_reasoning_effort(reasoning_effort) or "max"
+        elif normalized_reasoning_mode == "fast":
+            payload["thinking"] = {"type": "disabled"}
+
+        if temperature is not None and normalized_reasoning_mode != "deep":
             payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if require_json:
             payload["response_format"] = {"type": "json_object"}
+        if tools:
+            payload["tools"] = tools
         return payload
+
+    def _normalize_reasoning_mode(self, reasoning_mode: str | None) -> str | None:
+        value = (reasoning_mode or "").strip().lower()
+        if value in {"deep", "reasoning", "think", "thinking", "max"}:
+            return "deep"
+        if value in {"fast", "quick", "normal", "disabled", "none"}:
+            return "fast"
+        return None
+
+    def _normalize_reasoning_effort(self, reasoning_effort: str | None) -> str | None:
+        value = (reasoning_effort or "").strip().lower()
+        if value in {"high", "max"}:
+            return value
+        return None
+
+    def _normalize_tool_calls(self, raw_tool_calls: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_tool_calls, list):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for item in raw_tool_calls:
+            if not isinstance(item, dict):
+                continue
+            function = item.get("function") if isinstance(item.get("function"), dict) else {}
+            name = item.get("name") or function.get("name")
+            arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            normalized.append({
+                "id": item.get("id") or name,
+                "name": name,
+                "arguments": arguments,
+            })
+        return normalized
+
+    def _usage_summary(self, usage: dict[str, Any]) -> dict[str, int]:
+        def as_int(key: str) -> int:
+            try:
+                return max(0, int(usage.get(key) or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "promptTokens": as_int("prompt_tokens"),
+            "completionTokens": as_int("completion_tokens"),
+            "totalTokens": as_int("total_tokens"),
+            "promptCacheHitTokens": as_int("prompt_cache_hit_tokens"),
+            "promptCacheMissTokens": as_int("prompt_cache_miss_tokens"),
+        }
 
     def _headers(self, api_key: str | None = None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

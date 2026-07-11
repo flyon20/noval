@@ -6,6 +6,8 @@ from app.services.agents.base import BaseSpecialistAgent
 class OutlineAgent(BaseSpecialistAgent):
     agent_name = "outline"
     answer_mode = "outline"
+    llm_enabled = True
+    tool_route = "mixed_creation_research"
     generation_instructions = (
         "围绕主线、卷/阶段目标、关键反转和阶段性爽点生成大纲。",
         "保持目标、阻力、升级收益和读者期待逐阶段递进。",

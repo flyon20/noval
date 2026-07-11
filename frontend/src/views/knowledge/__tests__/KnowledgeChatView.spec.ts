@@ -2,11 +2,19 @@ import ElementPlus from 'element-plus';
 import { flushPromises, mount } from '@vue/test-utils';
 import KnowledgeChatView from '../KnowledgeChatView.vue';
 import { knowledgeApi } from '@/api/knowledge';
+import {
+  KNOWLEDGE_ACTIVE_PROJECT_STORAGE_KEY,
+  KNOWLEDGE_PROJECT_CHANGE_EVENT,
+} from '@/composables/useKnowledgeProjectSelection';
 import type { KnowledgeChatResponse } from '@/types/knowledge';
 
 vi.mock('@/api/knowledge', () => ({
   knowledgeApi: {
     streamChat: vi.fn(),
+    startChatRun: vi.fn(),
+    getChatRun: vi.fn(),
+    listConversationRuns: vi.fn(),
+    cancelChatRun: vi.fn(),
     listProjects: vi.fn(),
     createProject: vi.fn(),
   },
@@ -48,9 +56,64 @@ describe('KnowledgeChatView', () => {
     vi.mocked(knowledgeApi.createProject).mockResolvedValue({
       data: { code: 200, message: 'success', data: { projectId: 99, name: '新书项目' } },
     } as never);
+    vi.mocked(knowledgeApi.startChatRun).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: 'run-default',
+          conversationId: 'conv-default',
+          question: 'default',
+          status: 'ANSWERED',
+          answer: finalResponse.answer,
+          resultJson: '{}',
+        },
+      },
+    } as never);
+    vi.mocked(knowledgeApi.getChatRun).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: 'run-default',
+          conversationId: 'conv-default',
+          question: 'default',
+          status: 'ANSWERED',
+          answer: finalResponse.answer,
+          resultJson: '{}',
+        },
+      },
+    } as never);
   });
 
-  test('creates a project and sends chat with selected project id', async () => {
+  test('sends chat with the first loaded project id', async () => {
+    let resolveResult!: (response: KnowledgeChatResponse) => void;
+    vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, _streamCallbacks) => ({
+      abort: vi.fn(),
+      result: new Promise<KnowledgeChatResponse>((resolve) => {
+        resolveResult = resolve;
+      }),
+    }) as never);
+    vi.mocked(knowledgeApi.listProjects).mockResolvedValue({
+      data: { code: 200, message: 'success', data: [{ projectId: 99, name: '新书项目' }] },
+    } as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('帮我做前三章细纲');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+
+    expect(vi.mocked(knowledgeApi.streamChat).mock.calls[0][0]).toMatchObject({
+      projectId: 99,
+      question: '帮我做前三章细纲',
+    });
+
+    resolveResult(finalResponse);
+    await flushPromises();
+  });
+
+  test('uses project selected from the project space event when sending chat', async () => {
     let resolveResult!: (response: KnowledgeChatResponse) => void;
     vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, _streamCallbacks) => ({
       abort: vi.fn(),
@@ -62,16 +125,50 @@ describe('KnowledgeChatView', () => {
     const wrapper = mountView();
     await flushPromises();
 
-    await wrapper.find('[data-test="knowledge-project-name"] input').setValue('新书项目');
-    await wrapper.find('[data-test="knowledge-create-project"]').trigger('click');
+    window.dispatchEvent(new CustomEvent(KNOWLEDGE_PROJECT_CHANGE_EVENT, {
+      detail: { projectId: 42 },
+    }));
     await flushPromises();
-    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('帮我做前三章细纲');
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('继续做题材定位');
     await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
 
-    expect(knowledgeApi.createProject).toHaveBeenCalledWith({ name: '新书项目' });
+    expect(vi.mocked(knowledgeApi.streamChat).mock.calls[0][0]).toMatchObject({
+      projectId: 42,
+      question: '继续做题材定位',
+    });
+
+    resolveResult(finalResponse);
+    await flushPromises();
+  });
+
+  test('restores the last selected project after remounting', async () => {
+    let resolveResult!: (response: KnowledgeChatResponse) => void;
+    vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, _streamCallbacks) => ({
+      abort: vi.fn(),
+      result: new Promise<KnowledgeChatResponse>((resolve) => {
+        resolveResult = resolve;
+      }),
+    }) as never);
+    window.localStorage.setItem(KNOWLEDGE_ACTIVE_PROJECT_STORAGE_KEY, '99');
+    vi.mocked(knowledgeApi.listProjects).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [
+          { projectId: 7, name: '旧项目' },
+          { projectId: 99, name: '新书项目' },
+        ],
+      },
+    } as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('继续做世界观');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+
     expect(vi.mocked(knowledgeApi.streamChat).mock.calls[0][0]).toMatchObject({
       projectId: 99,
-      question: '帮我做前三章细纲',
+      question: '继续做世界观',
     });
 
     resolveResult(finalResponse);
@@ -115,6 +212,152 @@ describe('KnowledgeChatView', () => {
     vi.useRealTimers();
   });
 
+  test('shows degraded fallback state on assistant answers', async () => {
+    let callbacks: any;
+    let resolveResult!: (response: KnowledgeChatResponse) => void;
+    vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, streamCallbacks) => {
+      callbacks = streamCallbacks;
+      return {
+        abort: vi.fn(),
+        result: new Promise<KnowledgeChatResponse>((resolve) => {
+          resolveResult = resolve;
+        }),
+      } as never;
+    });
+    const degradedResponse: KnowledgeChatResponse = {
+      ...finalResponse,
+      answer: '模型失败后的降级回答 [1]',
+      resultJson: {
+        answerStatus: 'degraded_model_fallback',
+        fallbackUsed: true,
+        degraded: true,
+        degradationReasons: ['provider_exception'],
+      },
+    };
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('测试降级回答');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+    callbacks.onDone({ event: 'done', data: degradedResponse });
+    resolveResult(degradedResponse);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('模型失败后的降级回答');
+    expect(wrapper.text()).toContain('降级回答');
+    expect(wrapper.text()).toContain('provider_exception');
+  });
+
+  test('shows Chinese context budget status after the final response', async () => {
+    let resolveResult!: (response: KnowledgeChatResponse) => void;
+    vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, _streamCallbacks) => ({
+      abort: vi.fn(),
+      result: new Promise<KnowledgeChatResponse>((resolve) => {
+        resolveResult = resolve;
+      }),
+    }) as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('继续扩写上一轮大纲');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+    resolveResult({
+      ...finalResponse,
+      resultJson: {
+        conversationId: 'conv-context-budget',
+        traceId: 'trace-context-1',
+        contextBudget: {
+          maxInputTokens: 1000000,
+          estimatedUsedTokens: 1234,
+          remainingTokens: 998766,
+          remainingRatio: 0.998766,
+          compressionThresholdTokens: 900000,
+          compressed: false,
+          memoryLayers: [
+            { name: 'conversation', status: 'loaded', itemCount: 1 },
+            { name: 'project', status: 'empty', itemCount: 0 },
+          ],
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="knowledge-context-budget"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('1,000,000 tokens');
+    expect(wrapper.text()).toContain('0.12%');
+    expect(wrapper.text()).toContain('998,766 tokens');
+    expect(wrapper.text()).toContain('900,000 tokens');
+    expect(wrapper.text()).toContain('conversation loaded');
+    expect(wrapper.text()).toContain('project empty');
+    expect(wrapper.text()).toContain('上下文容量');
+    expect(wrapper.text()).toContain('已用 1,234 tokens');
+    expect(wrapper.text()).toContain('剩余 99.88%');
+    expect(wrapper.text()).toContain('记忆层 2');
+    expect(wrapper.text()).toContain('Trace trace-context-1');
+
+    const saved = JSON.parse(window.localStorage.getItem('noval:knowledge-chat:draft:v1') || '{}');
+    expect(saved.messages.at(-1).contextBudget.remainingRatio).toBeCloseTo(0.998766);
+  });
+
+  test('clears the composer after sending while preserving candidate continuation question', async () => {
+    let resolveFirst!: (response: KnowledgeChatResponse) => void;
+    let resolveSecond!: (response: KnowledgeChatResponse) => void;
+    vi.mocked(knowledgeApi.streamChat)
+      .mockImplementationOnce((_payload, _streamCallbacks) => ({
+        abort: vi.fn(),
+        result: new Promise<KnowledgeChatResponse>((resolve) => {
+          resolveFirst = resolve;
+        }),
+      }) as never)
+      .mockImplementationOnce((_payload, _streamCallbacks) => ({
+        abort: vi.fn(),
+        result: new Promise<KnowledgeChatResponse>((resolve) => {
+          resolveSecond = resolve;
+        }),
+      }) as never);
+
+    const wrapper = mountView();
+    const input = wrapper.find<HTMLTextAreaElement>('[data-test="knowledge-question-input"] textarea');
+
+    await input.setValue('分析《测试书》的开篇卖点');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+
+    expect(input.element.value).toBe('');
+
+    resolveFirst({
+      status: 'candidates_required',
+      answer: '请选择正确作品后继续。',
+      candidates: [{
+        bookId: 101,
+        platform: 'fanqie',
+        platformBookId: '101',
+        bookName: '测试书',
+        author: '测试作者',
+        local: true,
+      }],
+      sources: [],
+      actions: ['select_candidate'],
+      resultJson: {},
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-test="candidate-select-button"]').trigger('click');
+
+    expect(vi.mocked(knowledgeApi.streamChat).mock.calls[1][0]).toMatchObject({
+      question: '分析《测试书》的开篇卖点',
+      bookName: '测试书',
+      selectedCandidate: {
+        bookId: 101,
+        bookName: '测试书',
+      },
+    });
+
+    resolveSecond(finalResponse);
+    await flushPromises();
+  });
+
   test('persists and reuses server conversation id', async () => {
     let resolveResult!: (response: KnowledgeChatResponse) => void;
     vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, _streamCallbacks) => ({
@@ -128,6 +371,9 @@ describe('KnowledgeChatView', () => {
 
     await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('第一轮问题');
     await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+    const firstPayload = vi.mocked(knowledgeApi.streamChat).mock.calls[0][0];
+    expect(firstPayload.conversationId).toEqual(expect.any(String));
+    expect(String(firstPayload.conversationId)).not.toHaveLength(0);
     resolveResult({
       ...finalResponse,
       resultJson: { conversationId: 'conv-frontend-1' },
@@ -168,6 +414,220 @@ describe('KnowledgeChatView', () => {
 
     resolveResult(finalResponse);
     await flushPromises();
+  });
+
+  test('keeps rank limit independent from selected chapter count', async () => {
+    let resolveResult!: (response: KnowledgeChatResponse) => void;
+    vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, _streamCallbacks) => ({
+      abort: vi.fn(),
+      result: new Promise<KnowledgeChatResponse>((resolve) => {
+        resolveResult = resolve;
+      }),
+    }) as never);
+
+    const wrapper = mountView();
+
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('最近男频都市脑洞题材趋势是什么？');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+
+    const payload = vi.mocked(knowledgeApi.streamChat).mock.calls[0][0];
+    expect(payload.limits).toMatchObject({
+      chapterCount: 3,
+      evidenceLimit: 5,
+      rankLimit: 30,
+    });
+
+    resolveResult(finalResponse);
+    await flushPromises();
+  });
+
+  test('uses a durable background run for deep reasoning answers', async () => {
+    const wrapper = mountView();
+
+    await wrapper
+      .find('[data-test="knowledge-reasoning-mode"] .el-segmented__group label:nth-of-type(2) input')
+      .setValue(true);
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('deep reasoning question');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+
+    expect(vi.mocked(knowledgeApi.startChatRun).mock.calls[0][0]).toMatchObject({
+      question: 'deep reasoning question',
+      reasoningMode: 'deep',
+    });
+    expect(vi.mocked(knowledgeApi.streamChat)).not.toHaveBeenCalled();
+
+    const saved = JSON.parse(window.localStorage.getItem('noval:knowledge-chat:draft:v1') || '{}');
+    expect(saved.reasoningMode).toBe('deep');
+    expect(saved.pendingRunId).toBe('');
+    expect(wrapper.text()).toContain('第一段 第二段[1]');
+    await flushPromises();
+  });
+
+  test('shows durable run progress and partial answer before the final result', async () => {
+    vi.useFakeTimers();
+    vi.mocked(knowledgeApi.startChatRun).mockResolvedValueOnce({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: 'run-progress',
+          conversationId: 'conv-progress',
+          question: 'deep progress question',
+          status: 'RUNNING',
+          progressPhase: 'intent',
+          progressMessage: '正在识别写作意图',
+          answer: '第一段部分答案',
+          traceId: 'trace-progress',
+          resultJson: '{}',
+        },
+      },
+    } as never);
+    vi.mocked(knowledgeApi.getChatRun).mockResolvedValueOnce({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: 'run-progress',
+          conversationId: 'conv-progress',
+          question: 'deep progress question',
+          status: 'ANSWERED',
+          progressPhase: 'done',
+          progressMessage: '后台回答已完成',
+          answer: '最终完整答案[1]',
+          traceId: 'trace-progress',
+          resultJson: '{"traceId":"trace-progress","conversationId":"conv-progress"}',
+        },
+      },
+    } as never);
+
+    try {
+      const wrapper = mountView();
+
+      await wrapper
+        .find('[data-test="knowledge-reasoning-mode"] .el-segmented__group label:nth-of-type(2) input')
+        .setValue(true);
+      await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('deep progress question');
+      await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+      await flushPromises();
+
+      expect(wrapper.text()).toContain('正在识别写作意图');
+      expect(wrapper.text()).toContain('第一段部分答案');
+      expect(wrapper.text()).toContain('trace-progress');
+
+      await vi.runOnlyPendingTimersAsync();
+      await flushPromises();
+
+      expect(wrapper.text()).toContain('最终完整答案');
+      expect(window.localStorage.getItem('noval:knowledge-chat:draft:v1')).not.toContain('run-progress');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('normalizes raw durable run status before rendering it to users', async () => {
+    vi.useFakeTimers();
+    vi.mocked(knowledgeApi.startChatRun).mockResolvedValueOnce({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: 'run-raw-status',
+          conversationId: 'conv-raw-status',
+          question: 'deep raw status question',
+          status: 'RUNNING',
+          resultJson: '{}',
+        },
+      },
+    } as never);
+
+    try {
+      const wrapper = mountView();
+
+      await wrapper
+        .find('[data-test="knowledge-reasoning-mode"] .el-segmented__group label:nth-of-type(2) input')
+        .setValue(true);
+      await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('deep raw status question');
+      await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+      await flushPromises();
+
+      expect(wrapper.text()).not.toContain('RUNNING');
+      expect(wrapper.text()).toContain('正在后台执行');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('restores an answered durable run after remounting the page', async () => {
+    window.localStorage.setItem('noval:knowledge-chat:draft:v1', JSON.stringify({
+      conversationId: 'conv-resume',
+      pendingRunId: 'run-resume',
+      messages: [
+        { role: 'user', content: '闀垮洖绛旈棶棰?' },
+        { role: 'assistant', content: '', status: 'RUNNING', sources: [] },
+      ],
+      status: 'RUNNING',
+      reasoningMode: 'deep',
+    }));
+    vi.mocked(knowledgeApi.getChatRun).mockResolvedValueOnce({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: 'run-resume',
+          conversationId: 'conv-resume',
+          question: '闀垮洖绛旈棶棰?',
+          status: 'ANSWERED',
+          answer: '恢复式后台回答 [1]',
+          resultJson: '{"traceId":"trace-resume","conversationId":"conv-resume"}',
+          traceId: 'trace-resume',
+        },
+      },
+    } as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+    await flushPromises();
+
+    expect(vi.mocked(knowledgeApi.getChatRun)).toHaveBeenCalledWith('run-resume');
+    expect(wrapper.text()).toContain('恢复式后台回答');
+    expect(window.localStorage.getItem('noval:knowledge-chat:draft:v1')).not.toContain('run-resume');
+  });
+
+  test('restores a pending durable run even when the assistant draft is missing', async () => {
+    window.localStorage.setItem('noval:knowledge-chat:draft:v1', JSON.stringify({
+      conversationId: 'conv-missing-assistant',
+      pendingRunId: 'run-missing-assistant',
+      messages: [
+        { role: 'user', content: '给出完整的大纲设计' },
+      ],
+      status: 'RUNNING',
+      reasoningMode: 'deep',
+    }));
+    vi.mocked(knowledgeApi.getChatRun).mockResolvedValueOnce({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: 'run-missing-assistant',
+          conversationId: 'conv-missing-assistant',
+          question: '给出完整的大纲设计',
+          status: 'ANSWERED',
+          answer: '恢复后的完整大纲回答[1]',
+          resultJson: '{"traceId":"trace-missing-assistant","conversationId":"conv-missing-assistant"}',
+          traceId: 'trace-missing-assistant',
+        },
+      },
+    } as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+    await flushPromises();
+
+    expect(vi.mocked(knowledgeApi.getChatRun)).toHaveBeenCalledWith('run-missing-assistant');
+    expect(wrapper.text()).toContain('恢复后的完整大纲回答');
+    const saved = window.localStorage.getItem('noval:knowledge-chat:draft:v1') || '';
+    expect(saved).toContain('trace-missing-assistant');
+    expect(saved).not.toContain('run-missing-assistant');
   });
 
   test('sends expanded context and recent history for long outline followups', async () => {
@@ -391,14 +851,18 @@ describe('KnowledgeChatView', () => {
     expect(messageText.indexOf('new question')).toBeLessThan(messageText.indexOf('new answer'));
   });
 
-  test('keeps large stream chunks progressive and applies shorter final answer correction', async () => {
+  test('keeps complete streamed answer when done payload only contains a shorter summary', async () => {
     vi.useFakeTimers();
     let callbacks: any;
     let resolveResult!: (response: KnowledgeChatResponse) => void;
-    const staleStreamText = 'old stale rank answer that should not survive final correction';
-    const correctedResponse: KnowledgeChatResponse = {
+    const completeStreamText = '## Complete outline\nFirst arc keeps the full streamed draft.\nSecond arc should still be visible after done.';
+    const summaryOnlyResponse: KnowledgeChatResponse = {
       ...finalResponse,
-      answer: 'correct current rank answer [1]',
+      answer: 'Short summary only.',
+      resultJson: {
+        answerStatus: 'partial_answer',
+        domainIntent: 'mixed_creation_research',
+      },
     };
     vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, streamCallbacks) => {
       callbacks = streamCallbacks;
@@ -413,26 +877,73 @@ describe('KnowledgeChatView', () => {
     try {
       const wrapper = mountView();
 
-      await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('rank trend question');
+      await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('urban outline question');
       await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
-      callbacks.onDelta({ event: 'delta', delta: staleStreamText });
+      callbacks.onDelta({ event: 'delta', delta: completeStreamText });
       await flushPromises();
 
-      expect(wrapper.text()).toContain(staleStreamText.slice(0, 8));
-      expect(wrapper.text()).not.toContain(staleStreamText);
+      expect(wrapper.text()).toContain('Compl');
+      expect(wrapper.text()).not.toContain(completeStreamText);
 
-      callbacks.onDone({ event: 'done', data: correctedResponse });
+      callbacks.onDone({ event: 'done', data: summaryOnlyResponse });
       await flushPromises();
 
-      expect(wrapper.text()).not.toContain(staleStreamText);
-      expect(wrapper.text()).not.toContain(correctedResponse.answer);
+      expect(wrapper.text()).toContain('Compl');
+      expect(wrapper.text()).not.toContain(summaryOnlyResponse.answer);
 
       await vi.runAllTimersAsync();
-      resolveResult(correctedResponse);
+      resolveResult(summaryOnlyResponse);
       await flushPromises();
 
-      expect(wrapper.text()).toContain(correctedResponse.answer);
-      expect(wrapper.text()).not.toContain(staleStreamText);
+      expect(wrapper.text()).toContain('Second arc should still be visible after done.');
+      expect(wrapper.text()).not.toContain(summaryOnlyResponse.answer);
+      expect(wrapper.text()).toContain('部分证据');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('keeps streamed answer visible when citation repair returns a shorter final answer', async () => {
+    vi.useFakeTimers();
+    let callbacks: any;
+    let resolveResult!: (response: KnowledgeChatResponse) => void;
+    const streamedAnswer = '## Streamed Answer\nFull outline with market analysis [1]\nThird beat stays visible.';
+    const repairedFallback: KnowledgeChatResponse = {
+      ...finalResponse,
+      answer: '## Final Answer\nShort repaired summary [1]',
+      resultJson: {
+        citationRepairUsed: true,
+      },
+    };
+    vi.mocked(knowledgeApi.streamChat).mockImplementation((_payload, streamCallbacks) => {
+      callbacks = streamCallbacks;
+      return {
+        abort: vi.fn(),
+        result: new Promise<KnowledgeChatResponse>((resolve) => {
+          resolveResult = resolve;
+        }),
+      } as never;
+    });
+
+    try {
+      const wrapper = mountView();
+
+      await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('最近男频都市脑洞题材趋势是什么？');
+      await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+      callbacks.onDelta({ event: 'delta', delta: streamedAnswer });
+      await flushPromises();
+
+      callbacks.onDone({ event: 'done', data: repairedFallback });
+      resolveResult(repairedFallback);
+      await flushPromises();
+      await vi.runAllTimersAsync();
+      await flushPromises();
+
+      expect(wrapper.text()).toContain('Full outline with market analysis');
+      expect(wrapper.text()).toContain('Third beat stays visible.');
+      expect(wrapper.text()).not.toContain('Short repaired summary');
+      expect(wrapper.html()).toContain('<h2>Streamed Answer</h2>');
+      expect(wrapper.text()).toContain('引用来源 1');
     } finally {
       vi.useRealTimers();
     }
@@ -458,7 +969,8 @@ describe('KnowledgeChatView', () => {
     callbacks.onProgress({ event: 'progress', phase: 'retrieve', message: 'searching knowledge' });
     await flushPromises();
 
-    expect(wrapper.text()).toContain('searching knowledge');
+    expect(wrapper.text()).toContain('正在检索资料');
+    expect(wrapper.text()).not.toContain('searching knowledge');
 
     callbacks.onDone({ event: 'done', data: finalResponse });
     resolveResult(finalResponse);
@@ -486,6 +998,48 @@ describe('KnowledgeChatView', () => {
     expect(wrapper.text()).not.toContain('旧回答[1]');
     expect(wrapper.text()).toContain('网文 AI 问答');
     expect(window.localStorage.getItem('noval:knowledge-chat:draft:v1')).toContain('"messages":[]');
+  });
+
+  test('starts a new chat session without carrying the old conversation id or history', async () => {
+    window.localStorage.setItem(KNOWLEDGE_ACTIVE_PROJECT_STORAGE_KEY, '99');
+    window.localStorage.setItem('noval:knowledge-chat:project:v1:99', JSON.stringify({
+      messages: [
+        { role: 'user', content: '旧问题' },
+        { role: 'assistant', content: '旧回答[1]', status: 'answered', sources: [] },
+      ],
+      contextSummary: '旧摘要',
+      conversationId: 'conv-old',
+      answer: '旧回答[1]',
+      reasoningMode: 'deep',
+      chapterCount: 5,
+      activeProjectId: 99,
+    }));
+    vi.mocked(knowledgeApi.listProjects).mockResolvedValue({
+      data: { code: 200, message: 'success', data: [{ projectId: 99, name: '新书项目' }] },
+    } as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('旧回答[1]');
+
+    await wrapper.find('[data-test="knowledge-new-chat"]').trigger('click');
+    await flushPromises();
+    await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue('新会话问题');
+    await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+
+    const payload = vi.mocked(knowledgeApi.startChatRun).mock.calls[0][0];
+    expect(payload).toMatchObject({
+      projectId: 99,
+      question: '新会话问题',
+      reasoningMode: 'deep',
+    });
+    expect(payload.conversationId).toEqual(expect.any(String));
+    expect(payload.conversationId).not.toBe('conv-old');
+    expect(payload.contextSummary).toBe('');
+    expect(payload.history).toEqual([{ role: 'user', content: '新会话问题' }]);
+
+    await flushPromises();
   });
 
   test('deletes a single message without clearing the whole conversation', async () => {
@@ -627,6 +1181,15 @@ describe('KnowledgeChatView', () => {
     expect(wrapper.text()).toContain('入伍两次！我被原部队拉进黑名单');
     expect(wrapper.text()).toContain('朝朝和');
   });
+  test('keeps mobile project entry out of the chat content and keeps the composer mounted', async () => {
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="knowledge-mobile-project-open"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="knowledge-question-input"] textarea').exists()).toBe(true);
+    expect(wrapper.find('.knowledge-chat__composer').exists()).toBe(true);
+  });
+
   test('tracks mobile keyboard offset through visual viewport for the composer', async () => {
     const addEventListener = vi.fn();
     const removeEventListener = vi.fn();

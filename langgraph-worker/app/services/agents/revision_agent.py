@@ -6,6 +6,9 @@ from app.services.agents.base import BaseSpecialistAgent
 class RevisionAgent(BaseSpecialistAgent):
     agent_name = "revision_advice"
     answer_mode = "revision"
+    llm_enabled = True
+    tool_route = "mixed_creation_research"
+    deep_reasoning_effort = "high"
     generation_instructions = (
         "先诊断问题属于钩子、节奏、爽点、信息量还是人物动机。",
         "给出可执行修改方案，并说明每处修改要提升的读者反馈。",

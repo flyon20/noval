@@ -44,8 +44,22 @@ const router = createRouter({
           },
         },
         {
+          path: 'knowledge/admin/agent-governance',
+          component: () => import('@/views/knowledge/AdminAgentGovernanceView.vue'),
+          meta: {
+            roles: ['ADMIN'],
+          },
+        },
+        {
           path: 'knowledge/admin/skills',
           component: () => import('@/views/knowledge/AdminSkillGovernanceView.vue'),
+          meta: {
+            roles: ['ADMIN'],
+          },
+        },
+        {
+          path: 'knowledge/admin/memories',
+          component: () => import('@/views/knowledge/AdminMemoryView.vue'),
           meta: {
             roles: ['ADMIN'],
           },

@@ -209,6 +209,7 @@ class FanqieCrawler(BaseCrawler):
         safe_limit: int,
     ) -> List[BookSearchItem]:
         items: List[BookSearchItem] = []
+        unreadable_items: List[BookSearchItem] = []
         seen_book_ids: set[str] = set()
         for item in raw_books:
             if not isinstance(item, dict):
@@ -235,20 +236,53 @@ class FanqieCrawler(BaseCrawler):
                 ),
                 css,
             )
-            items.append(
-                BookSearchItem(
-                    bookName=book_name,
-                    author=author,
-                    intro=intro,
-                    bookUrl=f"{settings.fanqie_base_url}/page/{book_id}",
-                    platformBookId=book_id,
-                )
+            content_type = self._classify_search_content_type(item)
+            readable_novel = content_type in {"novel", "unknown"}
+            search_item = BookSearchItem(
+                bookName=book_name,
+                author=author,
+                intro=intro,
+                bookUrl=f"{settings.fanqie_base_url}/page/{book_id}",
+                platformBookId=book_id,
+                contentType=content_type,
+                readableNovel=readable_novel,
+                unavailableReason=None if readable_novel else f"search_result_is_{content_type}",
             )
+            if readable_novel:
+                items.append(search_item)
+            else:
+                unreadable_items.append(search_item)
             if len(items) >= safe_limit:
                 break
+        if not items and unreadable_items:
+            return unreadable_items[:safe_limit]
         if not items:
             raise ValueError("book search result parse failed")
         return items
+
+    def _classify_search_content_type(self, item: dict[str, Any]) -> str:
+        marker_keys = (
+            "content_type",
+            "type",
+            "item_type",
+            "book_type",
+            "media_type",
+            "resource_type",
+            "biz_type",
+            "card_type",
+            "category",
+            "genre",
+        )
+        markers = " ".join(str(item.get(key) or "").lower() for key in marker_keys)
+        keys = " ".join(str(key).lower() for key in item.keys())
+        combined = f"{markers} {keys}"
+        if any(marker in combined for marker in ("video", "aweme", "short_video", "短视频", "视频")):
+            return "video"
+        if any(marker in combined for marker in ("audiobook", "audio", "listen", "album", "tts", "有声", "听书")):
+            return "audiobook"
+        if any(marker in markers for marker in ("novel", "book", "reader", "text", "小说")):
+            return "novel"
+        return "unknown"
 
     def _fetch_search_books_via_api(self, keyword: str, limit: int) -> list[dict[str, Any]]:
         try:

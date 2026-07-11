@@ -17,12 +17,24 @@ class DomainTaskToolExecutor:
         plans: list[ToolPlan],
         *,
         context: dict[str, Any] | None = None,
+        allowed_tools: set[str] | list[str] | tuple[str, ...] | None = None,
+        max_tool_calls: int | None = None,
+        reserved_required_tools: set[str] | list[str] | tuple[str, ...] | None = None,
     ) -> list[ToolRun]:
         task_by_id = {task.id: task for task in graph.tasks}
+        allowed = {str(tool) for tool in allowed_tools} if allowed_tools is not None else None
+        reserved = {str(tool) for tool in reserved_required_tools or []}
+        remaining_calls = None if max_tool_calls is None else max(0, int(max_tool_calls))
         runs: list[ToolRun] = []
         for plan in plans:
             task = task_by_id.get(plan.taskId)
             for tool_name in plan.tools:
+                if allowed is not None and tool_name not in allowed:
+                    runs.append(self._policy_failure(tool_name, "ToolNotAllowed", f"tool {tool_name} is not allowed by runtime policy"))
+                    continue
+                if remaining_calls is not None and remaining_calls <= 0 and tool_name not in reserved:
+                    runs.append(self._policy_failure(tool_name, "ToolBudgetExceeded", "tool call budget exhausted"))
+                    continue
                 payload = self._payload_for_tool(
                     tool_name,
                     plan,
@@ -30,7 +42,18 @@ class DomainTaskToolExecutor:
                     task_goal=task.goal if task is not None else "",
                 )
                 runs.append(await self._dispatch_with_timeout(tool_name, payload, context=context or {}))
+                if remaining_calls is not None and remaining_calls > 0:
+                    remaining_calls -= 1
         return runs
+
+    def _policy_failure(self, tool_name: str, error_type: str, message: str) -> ToolRun:
+        return ToolRun(
+            name=tool_name,
+            status="failed",
+            input={},
+            output={"message": message},
+            errorType=error_type,
+        )
 
     def _payload_for_tool(
         self,

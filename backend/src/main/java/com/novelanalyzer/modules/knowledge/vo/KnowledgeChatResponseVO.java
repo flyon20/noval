@@ -146,10 +146,20 @@ public class KnowledgeChatResponseVO {
         private String platform;
         private String sourceType;
         private Long sourceRefId;
+        private Long snapshotId;
+        private String snapshotTime;
+        private String channelCode;
+        private String boardCode;
+        private String channelName;
+        private String boardName;
         private Integer chapterNo;
         private String analysisType;
+        private Integer rankNo;
+        private String author;
+        private String category;
         private String title;
         private String preview;
+        private String retrievalBackend;
 
         public Long getChunkId() {
             return chunkId;
@@ -215,6 +225,54 @@ public class KnowledgeChatResponseVO {
             this.sourceRefId = sourceRefId;
         }
 
+        public Long getSnapshotId() {
+            return snapshotId;
+        }
+
+        public void setSnapshotId(Long snapshotId) {
+            this.snapshotId = snapshotId;
+        }
+
+        public String getSnapshotTime() {
+            return snapshotTime;
+        }
+
+        public void setSnapshotTime(String snapshotTime) {
+            this.snapshotTime = snapshotTime;
+        }
+
+        public String getChannelCode() {
+            return channelCode;
+        }
+
+        public void setChannelCode(String channelCode) {
+            this.channelCode = channelCode;
+        }
+
+        public String getBoardCode() {
+            return boardCode;
+        }
+
+        public void setBoardCode(String boardCode) {
+            this.boardCode = boardCode;
+        }
+
+        public String getChannelName() {
+            return channelName;
+        }
+
+        public void setChannelName(String channelName) {
+            this.channelName = channelName;
+        }
+
+        public String getBoardName() {
+            return boardName;
+        }
+
+        public void setBoardName(String boardName) {
+            this.boardName = boardName;
+        }
+
         public Integer getChapterNo() {
             return chapterNo;
         }
@@ -231,6 +289,30 @@ public class KnowledgeChatResponseVO {
             this.analysisType = analysisType;
         }
 
+        public Integer getRankNo() {
+            return rankNo;
+        }
+
+        public void setRankNo(Integer rankNo) {
+            this.rankNo = rankNo;
+        }
+
+        public String getAuthor() {
+            return author;
+        }
+
+        public void setAuthor(String author) {
+            this.author = author;
+        }
+
+        public String getCategory() {
+            return category;
+        }
+
+        public void setCategory(String category) {
+            this.category = category;
+        }
+
         public String getTitle() {
             return title;
         }
@@ -245,6 +327,14 @@ public class KnowledgeChatResponseVO {
 
         public void setPreview(String preview) {
             this.preview = preview;
+        }
+
+        public String getRetrievalBackend() {
+            return retrievalBackend;
+        }
+
+        public void setRetrievalBackend(String retrievalBackend) {
+            this.retrievalBackend = retrievalBackend;
         }
     }
 }

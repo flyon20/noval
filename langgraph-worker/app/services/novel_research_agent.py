@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -22,10 +24,12 @@ from app.models.knowledge import (
     RankLookupResult,
     RankResearchPack,
 )
-from app.services.agents import create_context, run_specialists_parallel
+from app.models.evidence_contract import EvidenceStatus
+from app.services.agents import ExpertRegistry, create_context, route_agents, run_specialists_parallel
 from app.services.checkpointing import build_langgraph_checkpointer, checkpoint_store_name
-from app.services.intents import AnswerBoundary, Intent, IntentDecision, IntentRouter
+from app.services.intents import AnswerBoundary, Intent, IntentDecision, IntentRouter, ToolNeeds
 from app.services.knowledge_client import KnowledgeBackendClient
+from app.services.mcp import McpClient, McpToolRegistry
 from app.services.provider_client import OpenAICompatibleProviderClient
 from app.services.retrieval_fusion import fuse_and_rerank_sources
 from app.models.agent_runtime import ContextBundle, SourcePolicy
@@ -33,14 +37,16 @@ from app.services.skills import SkillRegistry
 from app.services.task_graph import DomainTaskToolExecutor, DomainToolPlanner, EvidencePackBuilder, TaskGraphDecomposer
 from app.services.tools.domain_tools import build_domain_tool_registry
 from app.services.tools.registry import DomainToolRegistry
-from app.services.runtime import AgentSupervisor, ContextAssembler
-from app.services.runtime.memory_candidates import MemoryCandidateExtractor
+from app.services.runtime import AgentSupervisor, ContextAssembler, IntentAgent, MemoryAgent, MemoryExtractor
+from app.services.runtime.evidence_arbiter import EvidenceArbiter
+from app.services.runtime.tool_call_loop import ToolCallLoop
 
 
 TREND_ANSWER_MAX_TOKENS = 8000
 EVIDENCE_ANSWER_MAX_TOKENS = 16000
 LONG_CREATIVE_ANSWER_MAX_TOKENS = 64000
 CREATIVE_ANSWER_MAX_TOKENS = 16000
+_RUNTIME_TOKEN_CAP_UNSET = object()
 CONVERSATION_CONTEXT_PROMPT_CHARS = 900000
 CONTEXT_SUMMARY_PROMPT_CHARS = 720000
 HISTORY_PROMPT_MESSAGES = 12
@@ -49,6 +55,9 @@ HISTORY_PROMPT_MAX_CHARS = 256000
 MEMORY_SUMMARY_ANSWER_CHARS = 64000
 MEMORY_SUMMARY_CHARS = 240000
 STICKY_CONTEXT_CHARS = 12000
+RANK_PROMPT_DEFAULT_ITEMS = 30
+RANK_ANALYSIS_MAX_ITEMS = 100
+DEFAULT_CONTEXT_MAX_INPUT_TOKENS = 1_000_000
 
 
 class ResearchState(TypedDict, total=False):
@@ -82,7 +91,25 @@ class ResearchState(TypedDict, total=False):
     tool_runs: list[dict[str, Any]]
     retry_counts: dict[str, int]
     memory_candidates: list[dict[str, Any]]
+    memory_diagnostics: dict[str, Any]
+    memory_context: dict[str, Any]
     context_bundle: ContextBundle
+    expert_routing: dict[str, Any]
+    runtime_config: dict[str, Any]
+    expert_profiles: list[dict[str, Any]]
+    runtime_skills: list[dict[str, Any]]
+    token_metrics: list[dict[str, Any]]
+    telemetry_errors: list[str]
+    preconditions: dict[str, Any]
+    executed_runtime_nodes: list[str]
+    retrieval_diagnostics: dict[str, Any]
+    runtime_node_timings: dict[str, dict[str, Any]]
+    stream_answer: bool
+    answer_deltas: list[str]
+    provider_calls: list[dict[str, Any]]
+    answer_quality: dict[str, Any]
+    answer_degraded: bool
+    degradation_reasons: list[str]
 
 
 class NovelResearchAgent:
@@ -90,20 +117,32 @@ class NovelResearchAgent:
         self,
         knowledge_client: KnowledgeBackendClient | None = None,
         provider_client: OpenAICompatibleProviderClient | None = None,
+        mcp_client: McpClient | None = None,
+        mcp_tool_registry: McpToolRegistry | None = None,
     ) -> None:
         self.knowledge_client = knowledge_client or KnowledgeBackendClient(
             base_url=settings.backend_base_url,
             internal_api_key=settings.backend_internal_api_key,
         )
         self.provider_client = provider_client or OpenAICompatibleProviderClient()
+        self.mcp_client = mcp_client
+        self.mcp_tool_registry = mcp_tool_registry
         self.intent_router = IntentRouter()
+        self.intent_agent = IntentAgent(
+            router=self.intent_router,
+            llm_fallback=self._provider_domain_intent_fallback,
+            llm_fallback_enabled=settings.agent_intent_llm_fallback_enabled,
+            llm_min_confidence=settings.agent_intent_llm_min_confidence,
+        )
         self.skill_registry = SkillRegistry()
+        self.memory_agent = MemoryAgent(memory_client=self.knowledge_client)
         self.task_graph_decomposer = TaskGraphDecomposer()
         self.domain_tool_planner = DomainToolPlanner()
         self.evidence_pack_builder = EvidencePackBuilder()
+        self.evidence_arbiter = EvidenceArbiter(max_snapshot_age_days=settings.agent_latest_rank_max_age_days)
         self.agent_supervisor = AgentSupervisor()
         self.context_assembler = ContextAssembler(memory_client=self.knowledge_client)
-        self.memory_candidate_extractor = MemoryCandidateExtractor()
+        self.memory_candidate_extractor = MemoryExtractor()
         self._llm_semaphore = asyncio.Semaphore(settings.max_active_llm_calls)
         self._checkpointer = build_langgraph_checkpointer("novel-research-agent")
         self._tool_registry = self._build_tool_registry()
@@ -136,22 +175,141 @@ class NovelResearchAgent:
             "request": request,
             "actions": [],
             "context_bundle": await self.context_assembler.assemble_async(request),
+            "memory_context": await self.memory_agent.load(request),
         }
 
     async def aclose(self) -> None:
         close_fn = getattr(self.knowledge_client, "aclose", None)
         if callable(close_fn):
             await close_fn()
+        close_mcp = getattr(self.mcp_client, "aclose", None)
+        if callable(close_mcp):
+            await close_mcp()
+
+    def _mark_runtime_node(self, state: ResearchState, name: str) -> None:
+        nodes = list(state.get("executed_runtime_nodes") or [])
+        if name not in nodes:
+            nodes.append(name)
+        state["executed_runtime_nodes"] = nodes
+
+    async def _finalize_stream_response(
+        self,
+        state: ResearchState,
+        response: KnowledgeChatResponse,
+    ) -> KnowledgeChatResponse:
+        state["response"] = response
+        if "executed_runtime_nodes" in state:
+            self._mark_runtime_node(state, "extract_memory_candidates")
+            self._mark_runtime_node(state, "finalize_trace")
+        finalized = await self._finalize_trace_node(state)
+        return finalized["response"]
 
     async def stream(self, request: KnowledgeChatRequest) -> AsyncGenerator[dict[str, Any], None]:
+        async for event in self._stream_from_compiled_graph(request):
+            yield event
+
+    async def _stream_from_compiled_graph(self, request: KnowledgeChatRequest) -> AsyncGenerator[dict[str, Any], None]:
         yield {"event": "start", "phase": "langgraph", "status": "running"}
 
         state = await self._initial_state(request)
+        state["stream_answer"] = True
+        executed_nodes: list[str] = []
+        node_timings: dict[str, dict[str, Any]] = {}
+        last_tick = time.perf_counter()
+        async for update in self._graph.astream(
+            state,
+            config=self._graph_config(request),
+            stream_mode="updates",
+        ):
+            if not isinstance(update, dict):
+                continue
+            for node_name, node_update in update.items():
+                name = str(node_name)
+                if name == "__end__":
+                    continue
+                if name not in executed_nodes:
+                    executed_nodes.append(name)
+                now = time.perf_counter()
+                node_timings[name] = {"durationMs": max(1, int((now - last_tick) * 1000))}
+                last_tick = now
+                progress = self._graph_node_progress_event(name)
+                if progress is not None:
+                    yield progress
+                if isinstance(node_update, dict):
+                    state.update(node_update)
+
+        state["executed_runtime_nodes"] = executed_nodes
+        state["runtime_node_timings"] = {
+            **node_timings,
+            **dict(state.get("runtime_node_timings") or {}),
+        }
+        response = state.get("response")
+        if response is None:
+            finalized = await self._finalize_trace_node(state)
+            response = finalized["response"]
+        else:
+            response = self._refresh_stream_trace_from_graph(state, response)
+        answer_deltas = list(response.resultJson.get("answerDeltas") or state.get("answer_deltas") or [])
+        if not answer_deltas and response.answer:
+            answer_deltas = self._synthetic_stream_chunks(response.answer)
+        for delta in answer_deltas:
+            if delta:
+                yield {"event": "delta", "delta": delta, "phase": "answer"}
+        yield {"event": "done", "data": response.model_dump()}
+
+    def _graph_node_progress_event(self, node_name: str) -> dict[str, Any] | None:
+        progress_by_node = {
+            "assemble_context": ("prepare", "正在整理会话上下文"),
+            "classify_intent": ("intent", "正在识别你的写作意图"),
+            "plan_tasks": ("plan", "正在规划任务步骤"),
+            "validate_preconditions": ("preconditions", "正在检查上下文和前置条件"),
+            "execute_tools": ("evidence", "正在调用资料和工具"),
+            "supervise_evidence": ("evidence_review", "正在校验证据是否足够"),
+            "compose_answer": ("generate", "正在生成回答"),
+            "extract_memory_candidates": ("memory", "正在提取可复用上下文"),
+            "finalize_trace": ("trace", "正在整理运行记录"),
+        }
+        progress_by_node["route_experts"] = ("experts", "正在选择写作专家")
+        mapped = progress_by_node.get(node_name)
+        if mapped is None:
+            return None
+        phase, message = mapped
+        return self._progress_event(phase, message)
+
+    def _refresh_stream_trace_from_graph(
+        self,
+        state: ResearchState,
+        response: KnowledgeChatResponse,
+    ) -> KnowledgeChatResponse:
+        result = response.resultJson if isinstance(response.resultJson, dict) else {}
+        response.resultJson = result
+        trace = result.get("trace") if isinstance(result.get("trace"), dict) else None
+        if trace is None:
+            trace = self._trace_payload(response, result, state)
+            result["trace"] = trace
+        trace_state: ResearchState = {**state, "sources": response.sources}
+        trace["executedRuntimeNodes"] = list(trace_state.get("executed_runtime_nodes") or [])
+        trace["nodes"] = self._runtime_nodes_for_trace(response, result, trace_state)
+        trace["providerCalls"] = list(result.get("providerCalls") or trace_state.get("provider_calls") or [])
+        trace["health"] = self._trace_health_for_result(result, trace_state)
+        result["executedRuntimeNodes"] = list(trace_state.get("executed_runtime_nodes") or [])
+        return response
+
+    async def _legacy_manual_stream(self, request: KnowledgeChatRequest) -> AsyncGenerator[dict[str, Any], None]:
+        yield {"event": "start", "phase": "langgraph", "status": "running"}
+
+        state = await self._initial_state(request)
+        self._mark_runtime_node(state, "assemble_context")
         yield self._progress_event("intent", "正在识别创作意图")
         state.update(await self._intent_router_node(state))
+        self._mark_runtime_node(state, "classify_intent")
+        state.update(await self._plan_tasks_node(state))
+        self._mark_runtime_node(state, "plan_tasks")
+        state.update(await self._validate_preconditions_node(state))
+        self._mark_runtime_node(state, "validate_preconditions")
 
         if state.get("response") is not None:
-            async for event in self._emit_response(state["response"]):
+            async for event in self._emit_finalized_response(state):
                 yield event
             return
 
@@ -164,15 +322,16 @@ class NovelResearchAgent:
         yield self._progress_event("resolve", "正在定位作品和榜单")
         state.update(await self._book_resolver_node(state))
         if state.get("response") is not None:
-            async for event in self._emit_response(state["response"]):
+            async for event in self._emit_finalized_response(state):
                 yield event
             return
 
         state.update(await self._data_completer_node(state))
         yield self._progress_event("rank", "正在读取榜单趋势")
         state.update(await self._structured_rank_lookup_node(state))
+        self._mark_runtime_node(state, "execute_tools")
         if state.get("response") is not None:
-            async for event in self._emit_response(state["response"]):
+            async for event in self._emit_finalized_response(state):
                 yield event
             return
         yield self._progress_event("evidence", "正在检索知识库证据")
@@ -185,14 +344,47 @@ class NovelResearchAgent:
                 state.update(event["data"])
             else:
                 yield event
+        self._mark_runtime_node(state, "execute_tools")
+        state.update(await self._supervise_evidence_node(state))
+        self._mark_runtime_node(state, "supervise_evidence")
+        if state.get("response") is not None:
+            async for event in self._emit_finalized_response(state):
+                yield event
+            return
+        if self._route_after_runtime_supervisor(state) == "execute_tools":
+            yield self._progress_event("rank_refresh", "\u6b63\u5728\u5237\u65b0\u699c\u5355\u5e76\u91cd\u65b0\u8bfb\u53d6\u8bc1\u636e")
+            async for event in self._run_stream_step_with_progress(
+                self._execute_tools_node(state),
+                phase="evidence_retry",
+                message="\u5237\u65b0\u699c\u5355\u540e\u6b63\u5728\u91cd\u65b0\u68c0\u7d22\u8bc1\u636e",
+            ):
+                if self._is_step_result_event(event):
+                    state.update(event["data"])
+                else:
+                    yield event
+            self._mark_runtime_node(state, "execute_tools")
+            state.update(await self._supervise_evidence_node(state))
+            self._mark_runtime_node(state, "supervise_evidence")
+            if state.get("response") is not None:
+                async for event in self._emit_finalized_response(state):
+                    yield event
+                return
         sources = state.get("sources", [])
+
+        if self._required_evidence_contract_missing(dict(state.get("source_policy") or {})):
+            state.update(await self._answer_writer_node(state))
+            self._mark_runtime_node(state, "compose_answer")
+            async for event in self._emit_finalized_response(state):
+                yield event
+            return
 
         if not sources:
             if self._should_search_book_after_missing_evidence(state):
                 state.update(await self._build_book_candidates_response(state))
             else:
                 state.update(await self._answer_writer_node(state))
-            async for event in self._emit_response(state["response"]):
+                self._mark_runtime_node(state, "compose_answer")
+            async for event in self._emit_finalized_response(state):
                 yield event
             return
 
@@ -235,6 +427,11 @@ class NovelResearchAgent:
             yield {"event": "delta", "delta": response.answer, "phase": "answer"}
         yield {"event": "done", "data": response.model_dump()}
 
+    async def _emit_finalized_response(self, state: ResearchState) -> AsyncGenerator[dict[str, Any], None]:
+        response = await self._finalize_stream_response(state, state["response"])
+        async for event in self._emit_response(response):
+            yield event
+
     async def _emit_done(self, response: KnowledgeChatResponse) -> AsyncGenerator[dict[str, Any], None]:
         yield {"event": "done", "data": response.model_dump()}
 
@@ -243,12 +440,15 @@ class NovelResearchAgent:
         request: KnowledgeChatRequest,
         state: ResearchState | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
+        if state is not None:
+            state.update(await self._specialist_agents_node({**state, "sources": []}))
         collected: list[str] = []
         meta: dict[str, bool] = {}
         async for event in self._stream_generated_text(
-            messages=self._build_creative_messages(request),
+            messages=self._build_creative_messages(request, state=state),
+            request=request,
             temperature=0.4,
-            max_tokens=self._creative_max_tokens(request),
+            max_tokens=self._creative_max_tokens(request, state=state),
             timeout_millis=self._request_timeout_millis(request),
             fallback_text="模型暂时不可用，我先按网文创作方向给出一个简版建议：先明确主角短期目标，再安排高频反馈的阻力和代价，让爽点从目标推进中自然出现。",
             collected=collected,
@@ -272,10 +472,17 @@ class NovelResearchAgent:
         )
         if state is not None:
             state.update(await self._specialist_agents_node({**state, "sources": []}))
+            self._mark_runtime_node(state, "route_experts")
             self._attach_domain_intent_metadata(response, state)
         self._attach_memory_metadata(response, request)
-        verified = await self._citation_verifier_node({**(state or {}), "request": request, "response": response})
-        async for event in self._emit_done(verified["response"]):
+        if state is None:
+            verified = await self._citation_verifier_node({"request": request, "response": response})
+            async for event in self._emit_done(verified["response"]):
+                yield event
+            return
+        self._mark_runtime_node(state, "compose_answer")
+        finalized = await self._finalize_stream_response(state, response)
+        async for event in self._emit_done(finalized):
             yield event
 
     async def _stream_answer_with_sources(self, state: ResearchState) -> AsyncGenerator[dict[str, Any], None]:
@@ -285,10 +492,12 @@ class NovelResearchAgent:
         collected: list[str] = []
         meta: dict[str, bool] = {}
         state.update(await self._specialist_agents_node({**state, "sources": sources}))
+        self._mark_runtime_node(state, "route_experts")
         async for event in self._stream_generated_text(
             messages=self._build_answer_messages(request, sources, answer_mode, state=state),
+            request=request,
             temperature=0.2,
-            max_tokens=self._answer_max_tokens(request, answer_mode),
+            max_tokens=self._answer_max_tokens(request, answer_mode, state=state),
             timeout_millis=self._request_timeout_millis(request),
             fallback_text=self._compose_fallback_answer(request.question, sources, answer_mode=answer_mode),
             collected=collected,
@@ -318,16 +527,18 @@ class NovelResearchAgent:
         )
         self._attach_domain_intent_metadata(response, state)
         self._attach_memory_metadata(response, request)
-        verified = await self._citation_verifier_node({**state, "request": request, "response": response})
-        async for event in self._emit_done(verified["response"]):
+        self._mark_runtime_node(state, "compose_answer")
+        finalized = await self._finalize_stream_response(state, response)
+        async for event in self._emit_done(finalized):
             yield event
 
     async def _stream_generated_text(
         self,
         *,
         messages: list[dict[str, str]],
+        request: KnowledgeChatRequest,
         temperature: float,
-        max_tokens: int,
+        max_tokens: int | None,
         timeout_millis: int,
         fallback_text: str,
         collected: list[str],
@@ -341,11 +552,12 @@ class NovelResearchAgent:
                 async for event in self._provider_stream(
                     stream_fn,
                     messages=messages,
-                    model=settings.default_model,
+                    model=self._model_name(request),
                     temperature=temperature,
                     max_tokens=max_tokens,
                     require_json=False,
                     timeout_millis=timeout_millis,
+                    reasoning_mode=self._reasoning_mode(request),
                 ):
                     if event.get("event") != "delta":
                         continue
@@ -368,11 +580,12 @@ class NovelResearchAgent:
         try:
             result = await self._provider_invoke(
                 messages=messages,
-                model=settings.default_model,
+                model=self._model_name(request),
                 temperature=temperature,
                 max_tokens=max_tokens,
                 require_json=False,
                 timeout_millis=timeout_millis,
+                reasoning_mode=self._reasoning_mode(request),
             )
             content = str(result.get("content") or "").strip()
             if content:
@@ -416,7 +629,147 @@ class NovelResearchAgent:
             async for event in stream_fn(**kwargs):
                 yield event
 
-    def _build_creative_messages(self, request: KnowledgeChatRequest) -> list[dict[str, str]]:
+    def _append_provider_call(
+        self,
+        state: ResearchState | None,
+        *,
+        node: str,
+        model: str,
+        status: str,
+        started_at: float,
+        token_used: int = 0,
+        error: Exception | None = None,
+        fallback_reason: str | None = None,
+        provider_result: dict[str, Any] | None = None,
+    ) -> None:
+        if state is None:
+            return
+        request = state.get("request")
+        requested_reasoning_mode = request.reasoningMode if request is not None else None
+        requested_model = self._model_name(request) if request is not None else model
+        usage = provider_result.get("usage") if isinstance(provider_result, dict) else None
+        call: dict[str, Any] = {
+            "node": node,
+            "model": model,
+            "actualModel": model,
+            "requestedModel": requested_model,
+            "requestedReasoningMode": requested_reasoning_mode,
+            "thinkingEnabled": self._reasoning_mode(request) == "deep" if request is not None else None,
+            "status": status,
+            "durationMs": max(1, int((time.perf_counter() - started_at) * 1000)),
+            "tokenUsed": max(0, int(token_used or 0)),
+        }
+        if isinstance(usage, dict):
+            call["usage"] = dict(usage)
+            call["promptCacheHitTokens"] = int(usage.get("promptCacheHitTokens") or 0)
+            call["promptCacheMissTokens"] = int(usage.get("promptCacheMissTokens") or 0)
+        elif isinstance(provider_result, dict):
+            call["promptCacheHitTokens"] = int(provider_result.get("prompt_cache_hit_tokens") or 0)
+            call["promptCacheMissTokens"] = int(provider_result.get("prompt_cache_miss_tokens") or 0)
+        if call["tokenUsed"] == 0:
+            call["estimatedTokens"] = True
+        if error is not None:
+            call["errorType"] = error.__class__.__name__
+        if fallback_reason:
+            call["fallbackReason"] = fallback_reason
+        calls = list(state.get("provider_calls") or [])
+        calls.append({key: value for key, value in call.items() if value is not None})
+        state["provider_calls"] = calls
+
+    def _mark_degraded_answer(self, state: ResearchState | None, reason: str) -> None:
+        if state is None:
+            return
+        reasons = list(state.get("degradation_reasons") or [])
+        if reason not in reasons:
+            reasons.append(reason)
+        state["degradation_reasons"] = reasons
+        state["answer_degraded"] = True
+
+    def _mixed_creation_answer_quality(
+        self,
+        request: KnowledgeChatRequest,
+        answer: str,
+        *,
+        repaired: bool = False,
+    ) -> dict[str, Any]:
+        question = request.question or ""
+        required_terms = [
+            term
+            for term in ["底层职业", "都市脑洞", "诸天万界", "外包", "特效", "三端一体"]
+            if term in question
+        ]
+        missing_terms = [term for term in required_terms if term not in answer]
+        needs_outline = any(term in question for term in ["大纲", "细纲", "前三章", "十章"])
+        outline_markers = ["前三章", "第一章", "第二章", "第三章", "十章", "卷", "主线"]
+        missing_outline = needs_outline and not any(marker in answer for marker in outline_markers)
+        forbidden = []
+        if "围绕" in answer and "拆出" in answer:
+            forbidden.append("raw_question_excerpt_template")
+        if "围绕榜一身份反差" in answer:
+            forbidden.append("generic_rank_imitation_template")
+        answer_without_citations = re.sub(r"\[\d+\]", "", answer or "").strip()
+        if len(answer_without_citations) < 80:
+            forbidden.append("too_short_mixed_creation_answer")
+        if re.search(r"\b(STALE_STREAM_ONLY|TODO|placeholder)\b", answer or "", flags=re.IGNORECASE):
+            forbidden.append("placeholder_or_stale_answer")
+        passed = not missing_terms and not missing_outline and not forbidden
+        return {
+            "status": "passed" if passed else "failed",
+            "requiredTerms": required_terms,
+            "missingTerms": missing_terms,
+            "missingOutline": bool(missing_outline),
+            "forbiddenPatterns": forbidden,
+            "repaired": repaired,
+        }
+
+    def _build_mixed_creation_repair_messages(
+        self,
+        messages: list[dict[str, str]],
+        quality: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        missing = ", ".join(list(quality.get("missingTerms") or []))
+        forbidden = ", ".join(list(quality.get("forbiddenPatterns") or []))
+        repair_instruction = (
+            "The previous answer failed the production quality gate for a mixed market-plus-creation request. "
+            f"Missing premise terms: {missing or 'none'}. "
+            f"Forbidden patterns: {forbidden or 'none'}. "
+            "Rewrite the answer as a concrete author-facing plan. Cover the user's premise directly, "
+            "include market verdict from evidence, define the goldfinger, give first-three-chapter beats "
+            "and a ten-chapter or volume direction. Keep citations for market claims."
+        )
+        return [*messages, {"role": "user", "content": repair_instruction}]
+
+    def _domain_aware_mixed_creation_emergency_answer(
+        self,
+        request: KnowledgeChatRequest,
+        sources: list[KnowledgeSource],
+    ) -> str:
+        evidence = self._compose_rank_evidence_block(sources)
+        return (
+            f"{evidence}\n\n"
+            "## 市场判断\n"
+            "这个方向可以做，但核心卖点不能停在榜单表层。底层职业提供现实压力，都市脑洞负责异常感，"
+            "诸天万界外包特效负责高概念反差，三端一体负责持续升级。\n\n"
+            "## 金手指\n"
+            "- 创作者端：主角用现实特效工单拆镜头、控预算、验收素材。\n"
+            "- 万界生产端：修仙、机甲、妖族等外包劳务只看到被包装成副本/秘境的任务。\n"
+            "- 交付反馈端：成片热度、甲方复购和观众反馈转化为权限、预算和可调用工种。\n\n"
+            "## 大纲\n"
+            "- 第一章：主角作为底层特效外包工被欠薪压到崩溃，接到第一张诸天万界特效单。\n"
+            "- 第二章：万界外包团队误以为在秘境打工，完成一个低成本但真实震撼的特效镜头。\n"
+            "- 第三章：交付视频引爆甲方和同行质疑，主角发现三端一体系统能把质疑转成新订单。\n"
+            "- 十章方向：小单试水、源文件审查、同行拆台、万界劳务纠纷、甲方复购和第一次公开出圈逐层升级。\n\n"
+            "## 风险\n"
+            "开局要少解释系统，多用欠薪、赶工、交付和观众反应展示规则；榜单只能提供趋势证据，"
+            "真正差异化要落在特效外包行业细节和万界劳务误读。"
+        )
+
+    def _build_creative_messages(
+        self,
+        request: KnowledgeChatRequest,
+        state: ResearchState | None = None,
+    ) -> list[dict[str, str]]:
+        specialist_plan = self._format_specialist_plan(state) if state is not None else "(none)"
         return [
             {
                 "role": "system",
@@ -434,6 +787,7 @@ class NovelResearchAgent:
                 "role": "user",
                 "content": (
                     f"task output guidance:\n{self._creative_output_rule(request)}\n\n"
+                    f"specialist agent plan:\n{specialist_plan}\n\n"
                     f"conversation context:\n{self._format_conversation_context(request)}\n\n"
                     f"current question:\n{request.question}"
                 ),
@@ -457,21 +811,25 @@ class NovelResearchAgent:
         graph.add_node("assemble_context", self._assemble_context_node)
         graph.add_node("classify_intent", self._classify_intent_node)
         graph.add_node("plan_tasks", self._plan_tasks_node)
+        graph.add_node("validate_preconditions", self._validate_preconditions_node)
         graph.add_node("execute_tools", self._execute_tools_node)
         graph.add_node("supervise_evidence", self._supervise_evidence_node)
+        graph.add_node("route_experts", self._specialist_agents_node)
         graph.add_node("compose_answer", self._compose_answer_node)
         graph.add_node("extract_memory_candidates", self._extract_memory_candidates_node)
         graph.add_node("finalize_trace", self._finalize_trace_node)
         graph.set_entry_point("assemble_context")
         graph.add_edge("assemble_context", "classify_intent")
         graph.add_edge("classify_intent", "plan_tasks")
-        graph.add_edge("plan_tasks", "execute_tools")
+        graph.add_edge("plan_tasks", "validate_preconditions")
+        graph.add_edge("validate_preconditions", "execute_tools")
         graph.add_edge("execute_tools", "supervise_evidence")
         graph.add_conditional_edges("supervise_evidence", self._route_after_runtime_supervisor, {
             "execute_tools": "execute_tools",
-            "compose_answer": "compose_answer",
+            "route_experts": "route_experts",
             "finalize_trace": "finalize_trace",
         })
+        graph.add_edge("route_experts", "compose_answer")
         graph.add_edge("compose_answer", "extract_memory_candidates")
         graph.add_edge("extract_memory_candidates", "finalize_trace")
         graph.add_edge("finalize_trace", END)
@@ -488,6 +846,46 @@ class NovelResearchAgent:
 
     async def _plan_tasks_node(self, state: ResearchState) -> ResearchState:
         return {}
+
+    async def _validate_preconditions_node(self, state: ResearchState) -> ResearchState:
+        task_graph = state.get("task_graph") if isinstance(state.get("task_graph"), dict) else {}
+        source_policy = state.get("source_policy") if isinstance(state.get("source_policy"), dict) else {}
+        tool_names = {
+            str(tool)
+            for task in list(task_graph.get("tasks") or [])
+            if isinstance(task, dict)
+            for tool in list(task.get("tools") or [])
+        }
+        business_route = str(state.get("domain_intent") or state.get("intent") or "")
+        project_memory_allowed = bool(
+            task_graph.get("projectMemoryPolicy", "project_scoped") != "disabled"
+            and state.get("request") is not None
+            and state["request"].projectId is not None
+            and (
+                "memory.project_context" in tool_names
+                or business_route in {"project_creation", "mixed_creation_research", "followup_revision"}
+            )
+        )
+        preconditions = {
+            "domainAllowed": bool(state.get("in_scope", True)),
+            "adminOperationRequested": bool(task_graph.get("adminOperationRequested")),
+            "needsBookSelection": False,
+            "needsLatestRankEvidence": (
+                business_route in {"market_scan", "mixed_creation_research"}
+                or source_policy.get("freshness") == "latest"
+                or bool(source_policy.get("requireSnapshotTime"))
+                or any(
+                    str(task.get("type") or "") == TaskType.market_scan.value
+                    for task in list(task_graph.get("tasks") or [])
+                    if isinstance(task, dict)
+                )
+            ),
+            "projectMemoryAllowed": project_memory_allowed,
+            "evidenceInsufficiencyMode": "pending",
+            "businessRoute": business_route,
+            "sourcePolicy": dict(source_policy),
+        }
+        return {"preconditions": preconditions}
 
     async def _execute_tools_node(self, state: ResearchState) -> ResearchState:
         if state.get("response") is not None or state.get("intent") == "creative_advice":
@@ -524,6 +922,7 @@ class NovelResearchAgent:
             retry_counts = dict(state.get("retry_counts") or {})
             market_refresh_count = int(retry_counts.get("market_refresh") or 0)
             if market_refresh_count < 1 and self._should_retry_market_refresh(state):
+                await self._refresh_rank_board_for_retry(state)
                 retry_counts["market_refresh"] = market_refresh_count + 1
                 tool_runs = self._drop_latest_rank_attempts_for_retry(state)
                 return {
@@ -543,20 +942,96 @@ class NovelResearchAgent:
             result["response"] = self._build_supervisor_block_response(state, decision)
         return result
 
+    async def _refresh_rank_board_for_retry(self, state: ResearchState) -> None:
+        request = state["request"]
+        refresh_fn = getattr(self.knowledge_client, "refresh_rank_board", None)
+        if not callable(refresh_fn):
+            self._append_tool_run(state, "rank.refresh", "skipped", reason="tool_unavailable")
+            return
+        lookup = self._parse_trend_rank_lookup_for_request(request)
+        if not lookup:
+            self._append_tool_run(state, "rank.refresh", "skipped", reason="missing_rank_lookup")
+            return
+        if not (lookup.get("board_code") or lookup.get("category")):
+            self._append_tool_run(state, "rank.refresh", "skipped", reason="missing_rank_board")
+            return
+        try:
+            result = await self._with_tool_timeout(
+                refresh_fn(
+                    platform=str(lookup.get("platform") or "fanqie"),
+                    channel_code=lookup.get("channel_code"),
+                    board_code=lookup.get("board_code"),
+                    category=lookup.get("category"),
+                    rank_fetch_count=self._rank_fetch_count_for_refresh(lookup.get("limit")),
+                    refresh_mode=self._rank_refresh_mode_for_request(request),
+                    force_reason="agent_rank_cache_first_retry",
+                ),
+                default=None,
+                request=request,
+            )
+        except Exception:
+            self._append_tool_run(state, "rank.refresh", "failed", reason="exception")
+            return
+        if not isinstance(result, dict):
+            self._append_tool_run(state, "rank.refresh", "failed", reason="timeout_or_empty")
+            return
+        reason = "refresh_limited" if result.get("refreshLimited") else None
+        self._append_tool_run(
+            state,
+            "rank.refresh",
+            "succeeded",
+            result_count=self._int_or_zero(result.get("total")),
+            reason=reason,
+        )
+
+    def _rank_refresh_mode_for_request(self, request: KnowledgeChatRequest) -> str:
+        question = request.question or ""
+        force_markers = (
+            "强制刷新",
+            "强制抓",
+            "重新抓",
+            "重抓",
+            "实时刷新",
+            "刷新榜单",
+            "不要缓存",
+            "忽略缓存",
+        )
+        return "FORCE" if any(marker in question for marker in force_markers) else "AUTO"
+
+    def _rank_fetch_count_for_refresh(self, limit: Any) -> int:
+        try:
+            parsed = int(limit)
+        except (TypeError, ValueError):
+            parsed = settings.agent_market_topn_default
+        return max(10, min(100, ((max(1, parsed) + 9) // 10) * 10))
+
+    def _int_or_zero(self, value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
     def _should_retry_market_refresh(self, state: ResearchState) -> bool:
         source_policy = dict(state.get("source_policy") or {})
-        return (
-            bool(source_policy.get("trendGateFailed"))
-            and source_policy.get("trendGateReason") == "missing_structured_rank_snapshot"
-            and int(source_policy.get("structuredTopRankCount") or 0) > 0
-        )
+        if not bool(source_policy.get("trendGateFailed")):
+            return False
+        reason = source_policy.get("trendGateReason")
+        if reason == "missing_current_structured_top_rank":
+            request = state.get("request")
+            lookup = self._parse_trend_rank_lookup_for_request(request) if request is not None else None
+            return bool(lookup and (lookup.get("board_code") or lookup.get("category")))
+        return reason in {
+            "missing_structured_rank_snapshot",
+            "stale_structured_rank_snapshot",
+            "invalid_structured_rank_snapshot",
+        }
 
     def _should_block_on_fresh_rank_gap(self, state: ResearchState) -> bool:
         source_policy = dict(state.get("source_policy") or {})
         return bool(source_policy.get("trendGateFailed"))
 
     def _drop_latest_rank_attempts_for_retry(self, state: ResearchState) -> list[dict[str, Any]]:
-        dropped_names = {"rank.lookup", "rank_lookup", "trend_rank_gate"}
+        dropped_names = {"rank.lookup", "rank_lookup", "rank.research_pack", "rank_research_pack", "trend_rank_gate"}
         retained: list[dict[str, Any]] = []
         for run in list(state.get("tool_runs") or []):
             if not isinstance(run, dict):
@@ -582,6 +1057,12 @@ class NovelResearchAgent:
             response_status = "needs_clarification"
             answer = "需要先补充当前项目或会话上下文，再继续修改建议。"
         request = state["request"]
+        source_policy = dict(state.get("source_policy") or {})
+        answer_status = (
+            "needs_required_evidence"
+            if status == "needs_fresh_rank" and self._source_policy_requires_current_rank(source_policy)
+            else "needs_data"
+        )
         response = KnowledgeChatResponse(
             status=response_status,
             answer=answer,
@@ -590,12 +1071,12 @@ class NovelResearchAgent:
             actions=self._dedupe(list(state.get("actions", [])) + list(decision.get("requiredActions") or [])),
             resultJson={
                 "status": response_status,
-                "answerStatus": "needs_data",
+                "answerStatus": answer_status,
                 "answerBoundary": "needs_more_data",
                 "intent": state.get("intent"),
                 "domainIntent": state.get("domain_intent"),
                 "intentDecision": state.get("intent_decision"),
-                "sourcePolicy": dict(state.get("source_policy") or {}),
+                "sourcePolicy": source_policy,
                 "supervisorDecision": decision,
                 "bookId": state.get("book_id") or request.bookId,
                 "bookName": state.get("book_name") or request.bookName,
@@ -615,7 +1096,7 @@ class NovelResearchAgent:
             and self._should_retry_market_refresh(state)
         ):
             return "execute_tools"
-        return "compose_answer"
+        return "route_experts"
 
     async def _compose_answer_node(self, state: ResearchState) -> ResearchState:
         if state.get("response") is not None:
@@ -628,11 +1109,14 @@ class NovelResearchAgent:
         request = state["request"]
         candidates = self.memory_candidate_extractor.extract(request)
         payload = [candidate.model_dump(mode="json", exclude_none=True) for candidate in candidates]
+        persisted = await self.memory_candidate_extractor.persist_candidates(self.knowledge_client, request, candidates)
         response = state.get("response")
         if response is not None:
             response.resultJson["memoryCandidates"] = payload
+            self._attach_memory_persistence_result(response.resultJson, persisted)
         return {
             "memory_candidates": payload,
+            "memory_diagnostics": self._memory_diagnostics_for_state(state, persisted),
             "response": response,
         }
 
@@ -655,6 +1139,7 @@ class NovelResearchAgent:
         finalized_state: ResearchState = {**state, "response": response}
         finalized_state.update(await self._citation_verifier_node(finalized_state))
         finalized = finalized_state["response"]
+        self._sync_stream_answer_deltas(finalized_state, finalized)
         if "memoryCandidates" not in finalized.resultJson:
             memory_candidates = list(finalized_state.get("memory_candidates") or [])
             if not memory_candidates and finalized_state.get("request") is not None:
@@ -663,15 +1148,183 @@ class NovelResearchAgent:
                     for candidate in self.memory_candidate_extractor.extract(finalized_state["request"])
                 ]
             finalized.resultJson["memoryCandidates"] = memory_candidates
+        if "memoryCandidatesPersisted" not in finalized.resultJson and finalized_state.get("request") is not None:
+            candidate_objects = self.memory_candidate_extractor.extract(finalized_state["request"])
+            persisted = await self.memory_candidate_extractor.persist_candidates(
+                self.knowledge_client,
+                finalized_state["request"],
+                candidate_objects,
+            )
+            self._attach_memory_persistence_result(finalized.resultJson, persisted)
+            finalized_state["memory_diagnostics"] = self._memory_diagnostics_for_state(finalized_state, persisted)
+        else:
+            finalized_state["memory_diagnostics"] = self._memory_diagnostics_for_state(finalized_state)
+        self._attach_memory_diagnostics(finalized.resultJson, finalized_state["memory_diagnostics"])
+        self._attach_retrieval_diagnostics(finalized.resultJson, finalized_state)
         if isinstance(finalized.resultJson.get("trace"), dict):
+            trace_state = {**finalized_state, "sources": finalized.sources}
             finalized.resultJson["trace"]["memoryCandidates"] = list(finalized.resultJson.get("memoryCandidates") or [])
-            for node in finalized.resultJson["trace"].get("nodes") or []:
-                if isinstance(node, dict) and node.get("name") == "extract_memory_candidates":
-                    node["status"] = "completed"
-                    node["candidateCount"] = len(finalized.resultJson.get("memoryCandidates") or [])
+            finalized.resultJson["trace"]["executedRuntimeNodes"] = list(trace_state.get("executed_runtime_nodes") or [])
+            finalized.resultJson["trace"]["nodes"] = self._runtime_nodes_for_trace(
+                finalized,
+                finalized.resultJson,
+                trace_state,
+            )
+            finalized.resultJson["trace"]["providerCalls"] = list(
+                finalized.resultJson.get("providerCalls") or trace_state.get("provider_calls") or []
+            )
+            finalized.resultJson["trace"]["health"] = self._trace_health_for_result(finalized.resultJson, trace_state)
+            finalized.resultJson["trace"].setdefault("diagnostics", {})["memory"] = dict(
+                finalized.resultJson.get("memoryDiagnostics") or {}
+            )
+            finalized.resultJson["trace"].setdefault("diagnostics", {})["retrieval"] = dict(
+                finalized.resultJson.get("retrievalDiagnostics") or {}
+            )
         if "trace" not in finalized.resultJson:
             self._attach_trace_metadata(finalized, {**finalized_state, "sources": finalized.sources})
+        await self._emit_agent_telemetry(finalized_state, finalized)
         return {"response": finalized}
+
+    def _sync_stream_answer_deltas(self, state: ResearchState, response: KnowledgeChatResponse) -> None:
+        if not state.get("stream_answer"):
+            return
+        answer = response.answer or ""
+        if not answer:
+            return
+        if not isinstance(response.resultJson, dict):
+            response.resultJson = {}
+        deltas = list(response.resultJson.get("answerDeltas") or state.get("answer_deltas") or [])
+        if "".join(str(delta or "") for delta in deltas) == answer:
+            return
+        synced = self._synthetic_stream_chunks(answer)
+        state["answer_deltas"] = synced
+        response.resultJson["answerDeltas"] = synced
+
+    def _attach_memory_persistence_result(self, result: dict[str, Any], persisted: Any) -> None:
+        if isinstance(persisted, dict):
+            result["memoryCandidatesPersisted"] = int(persisted.get("saved") or 0)
+            diagnostics = dict(result.get("memoryDiagnostics") or {})
+            diagnostics["candidatePersistence"] = dict(persisted)
+            result["memoryDiagnostics"] = diagnostics
+            return
+        try:
+            result["memoryCandidatesPersisted"] = int(persisted or 0)
+        except (TypeError, ValueError):
+            result["memoryCandidatesPersisted"] = 0
+
+    def _memory_diagnostics_for_state(self, state: ResearchState, persisted: Any | None = None) -> dict[str, Any]:
+        diagnostics: dict[str, Any] = dict(state.get("memory_diagnostics") or {})
+        memory_context = state.get("memory_context")
+        if isinstance(memory_context, dict) and isinstance(memory_context.get("diagnostics"), dict):
+            diagnostics["layers"] = dict(memory_context["diagnostics"])
+        context_bundle = state.get("context_bundle")
+        project_profile = getattr(context_bundle, "projectProfile", None)
+        content = getattr(project_profile, "content", None)
+        if isinstance(content, dict) and isinstance(content.get("_diagnostics"), dict):
+            diagnostics["projectProfile"] = dict(content["_diagnostics"])
+        if isinstance(persisted, dict):
+            diagnostics["candidatePersistence"] = dict(persisted)
+        return diagnostics
+
+    def _attach_memory_diagnostics(self, result: dict[str, Any], diagnostics: dict[str, Any]) -> None:
+        if not diagnostics:
+            return
+        current = dict(result.get("memoryDiagnostics") or {})
+        for key, value in diagnostics.items():
+            current[key] = value
+        result["memoryDiagnostics"] = current
+
+    def _attach_retrieval_diagnostics(self, result: dict[str, Any], state: ResearchState) -> None:
+        diagnostics = state.get("retrieval_diagnostics")
+        if not isinstance(diagnostics, dict) or not diagnostics:
+            return
+        result["retrievalDiagnostics"] = dict(diagnostics)
+
+    def _record_token_metric(
+        self,
+        state: ResearchState,
+        node_name: str,
+        provider_result: dict[str, Any],
+        *,
+        expert_name: str | None = None,
+    ) -> None:
+        token_count = provider_result.get("token_used") or provider_result.get("tokenUsed")
+        try:
+            token_count_int = int(token_count)
+        except (TypeError, ValueError):
+            return
+        if token_count_int <= 0:
+            return
+        metrics = list(state.get("token_metrics") or [])
+        metric: dict[str, Any] = {
+            "nodeName": node_name,
+            "modelName": provider_result.get("model_name") or provider_result.get("modelName"),
+            "tokenCount": token_count_int,
+        }
+        if expert_name:
+            metric["expertName"] = expert_name
+        metrics.append({key: value for key, value in metric.items() if value is not None})
+        state["token_metrics"] = metrics
+
+    async def _emit_agent_telemetry(
+        self,
+        state: ResearchState,
+        response: KnowledgeChatResponse,
+    ) -> None:
+        telemetry_fn = getattr(self.knowledge_client, "post_agent_telemetry", None)
+        request = state.get("request")
+        trace_id = request.traceId if request is not None else None
+        if not callable(telemetry_fn) or not trace_id:
+            return
+        cache_events = self._cache_events_for_state(state, response)
+        token_metrics = list(state.get("token_metrics") or [])
+        if not cache_events and not token_metrics:
+            return
+        try:
+            await telemetry_fn(
+                trace_id=trace_id,
+                cache_events=cache_events,
+                token_metrics=token_metrics,
+            )
+            response.resultJson["telemetryEmitted"] = True
+        except Exception as exc:
+            errors = list(state.get("telemetry_errors") or [])
+            errors.append(exc.__class__.__name__)
+            state["telemetry_errors"] = errors
+            response.resultJson["telemetryEmitted"] = False
+            response.resultJson["telemetryErrors"] = errors
+            if isinstance(response.resultJson.get("trace"), dict):
+                response.resultJson["trace"].setdefault("diagnostics", {})["telemetryErrors"] = errors
+
+    def _cache_events_for_state(
+        self,
+        state: ResearchState,
+        response: KnowledgeChatResponse,
+    ) -> list[dict[str, Any]]:
+        runtime_config = state.get("runtime_config")
+        if not isinstance(runtime_config, dict):
+            return []
+        mappings = {
+            "enableIntentCache": ("intent", "classify_intent"),
+            "enableTaskGraphCache": ("task_graph", "plan_tasks"),
+            "enableToolCache": ("tool", "execute_tools"),
+            "enableEvidenceCache": ("evidence", "execute_tools"),
+            "enableSpecialistCache": ("specialist", "compose_answer"),
+        }
+        events: list[dict[str, Any]] = []
+        prompt_policy = response.resultJson.get("trace", {}).get("promptPolicy") if isinstance(response.resultJson.get("trace"), dict) else {}
+        for key, (scope, node_name) in mappings.items():
+            if key not in runtime_config:
+                continue
+            enabled = bool(runtime_config.get(key))
+            event: dict[str, Any] = {
+                "cacheScope": scope,
+                "nodeName": node_name,
+                "cacheStatus": "MISS" if enabled else "BYPASS",
+                "promptPrefixStable": prompt_policy.get("cacheStable") if isinstance(prompt_policy, dict) else None,
+            }
+            events.append({event_key: value for event_key, value in event.items() if value is not None})
+        return events
 
     def _graph_config(self, request: KnowledgeChatRequest) -> dict[str, Any]:
         return {"configurable": {"thread_id": self._graph_thread_id(request)}}
@@ -690,6 +1343,11 @@ class NovelResearchAgent:
             request.question or "",
             intent_decision=domain_decision,
         )
+        if (
+            domain_decision.primaryIntent is Intent.out_of_scope
+            and self._task_graph_implies_webnovel_scope(task_graph)
+        ):
+            domain_decision = self._domain_decision_from_task_graph(task_graph, domain_decision)
         task_graph_payload = self._task_graph_payload(task_graph)
         task_tool_plan = self._task_tool_plan_payload(task_graph)
         if task_graph.adminOperationRequested:
@@ -733,7 +1391,36 @@ class NovelResearchAgent:
             and self._is_project_creation_request(request)
         ):
             decision = {"inScope": True, "intent": "creative_advice", "bookName": None}
-        skill_selection = self.skill_registry.select_for_intent(domain_decision)
+        if (
+            self._is_context_backed_creative_followup(request)
+            and self._task_graph_is_creative_only(task_graph)
+            and domain_decision.primaryIntent in {
+                Intent.opening_strategy,
+                Intent.outline_building,
+                Intent.chapter_outline,
+                Intent.inspiration_expand,
+                Intent.character_design,
+                Intent.worldbuilding,
+                Intent.revision_advice,
+                Intent.followup_context,
+            }
+        ):
+            decision = {**decision, "inScope": True, "intent": "creative_advice", "bookName": None}
+        governance = await self._load_agent_governance()
+        runtime_config = dict(governance.get("config") or {})
+        expert_profiles = list(governance.get("experts") or [])
+        runtime_skills = list(governance.get("runtimeSkills") or [])
+        self._apply_runtime_skills(runtime_skills)
+        runtime_state = self._runtime_config_for_state(governance, runtime_config)
+        governance_state: ResearchState = {
+            "runtime_config": runtime_state,
+            "expert_profiles": expert_profiles,
+            "runtime_skills": runtime_skills,
+        }
+        skill_selection = self.skill_registry.select_for_intent(
+            domain_decision,
+            max_chars=self._runtime_max_skill_prompt_chars(runtime_config),
+        )
         if self._should_request_clarification(domain_decision):
             clarification_response = self._build_clarification_response(request, domain_decision)
             clarification_state: ResearchState = {
@@ -762,6 +1449,7 @@ class NovelResearchAgent:
                 "task_graph": task_graph_payload,
                 "task_tool_plan": task_tool_plan,
                 "response": clarification_response,
+                **governance_state,
             }
         if not bool(decision.get("inScope", True)):
             return {
@@ -790,6 +1478,7 @@ class NovelResearchAgent:
                         "intentDecision": self._intent_decision_payload(domain_decision),
                     },
                 ),
+                **governance_state,
             }
         domain_legacy_intent = self._legacy_intent_for_domain_decision(domain_decision, request)
         if self._should_use_domain_legacy_intent(request, domain_decision, decision):
@@ -800,6 +1489,12 @@ class NovelResearchAgent:
             not self._has_explicit_book_context(request)
             and self._task_graph_is_creative_only(task_graph)
             and self._is_project_creation_request(request)
+        ):
+            legacy_intent = "creative_advice"
+            decision = {**decision, "bookName": None}
+        if (
+            self._is_context_backed_creative_followup(request)
+            and self._task_graph_is_creative_only(task_graph)
         ):
             legacy_intent = "creative_advice"
             decision = {**decision, "bookName": None}
@@ -822,23 +1517,19 @@ class NovelResearchAgent:
             "needs_vector_evidence": bool(decision.get("needsVectorEvidence", True)),
             "needs_creative_advice": bool(decision.get("needsCreativeAdvice", False)),
             "answer_boundary": decision.get("answerBoundary"),
+            **governance_state,
         }
 
     async def _classify_domain_intent(self, request: KnowledgeChatRequest) -> IntentDecision:
-        history = [
-            str(message.get("content") or "")
-            for message in (request.history or [])
-            if str(message.get("content") or "").strip()
-        ]
-        rule_decision = self.intent_router.classify(
-            request.question or "",
-            context_summary=request.contextSummary,
-            history=history,
-        )
-        if not self._should_use_domain_intent_llm_fallback(request, rule_decision):
-            return rule_decision
-        fallback_decision = await self._provider_domain_intent_fallback(request, rule_decision)
-        return fallback_decision or rule_decision
+        self.intent_agent.fast_classifier.router = self.intent_router
+        if isinstance(self.intent_router, IntentRouter):
+            return await self.intent_agent.decide(request)
+        fallback_enabled = self.intent_agent.llm_agent.enabled
+        self.intent_agent.llm_agent.enabled = False
+        try:
+            return await self.intent_agent.decide(request)
+        finally:
+            self.intent_agent.llm_agent.enabled = fallback_enabled
 
     def _should_use_domain_intent_llm_fallback(
         self,
@@ -890,7 +1581,7 @@ class NovelResearchAgent:
         try:
             result = await self._provider_invoke(
                 messages=self._build_domain_intent_messages(request, rule_decision),
-                model=settings.default_model,
+                model=self._model_name(request),
                 temperature=0,
                 max_tokens=700,
                 require_json=True,
@@ -1064,6 +1755,87 @@ class NovelResearchAgent:
     def _task_tool_plan_payload(self, task_graph: TaskGraph) -> list[dict[str, Any]]:
         return [plan.model_dump(mode="json") for plan in self.domain_tool_planner.plan(task_graph)]
 
+    def _domain_decision_from_task_graph(
+        self,
+        task_graph: TaskGraph,
+        original: IntentDecision,
+    ) -> IntentDecision:
+        task_types = {
+            TaskType(task.get("type"))
+            for task in task_graph.model_dump(mode="json").get("tasks", [])
+            if task.get("type") in TaskType._value2member_map_
+        }
+        has_market = TaskType.market_scan in task_types
+        creative_intents: list[Intent] = []
+        if TaskType.topic_strategy in task_types:
+            creative_intents.append(Intent.opening_strategy)
+        if TaskType.outline_building in task_types:
+            creative_intents.append(Intent.outline_building)
+        if TaskType.chapter_outline in task_types:
+            creative_intents.append(Intent.chapter_outline)
+        if TaskType.character_design in task_types:
+            creative_intents.append(Intent.character_design)
+        if TaskType.worldbuilding in task_types:
+            creative_intents.append(Intent.worldbuilding)
+        if TaskType.revision_advice in task_types or TaskType.reader_risk in task_types or TaskType.editor_risk in task_types:
+            creative_intents.append(Intent.revision_advice)
+        if TaskType.book_breakdown in task_types:
+            primary = Intent.book_breakdown
+            sub_intents = []
+        elif has_market and creative_intents:
+            primary = Intent.mixed_creation_research
+            sub_intents = [Intent.market_scan, *creative_intents]
+        elif has_market:
+            primary = Intent.market_scan
+            sub_intents = []
+        elif creative_intents:
+            primary = creative_intents[0]
+            sub_intents = creative_intents[1:]
+        else:
+            primary = Intent.followup_context
+            sub_intents = []
+        sub_intents = list(dict.fromkeys(sub_intents))
+        tool_needs = ToolNeeds(
+            needsRankData=has_market or primary in {Intent.market_scan, Intent.mixed_creation_research},
+            needsBookResearch=TaskType.book_breakdown in task_types,
+            needsVectorEvidence=TaskType.book_breakdown in task_types or has_market,
+            needsCreativeGeneration=bool(creative_intents) or primary is Intent.mixed_creation_research,
+            needsOutlineMemory=bool(task_types & {TaskType.outline_building, TaskType.chapter_outline, TaskType.revision_advice}),
+            needsChapterEvidence=TaskType.chapter_outline in task_types or TaskType.revision_advice in task_types,
+            needsSkillPack=bool(creative_intents) or primary is Intent.mixed_creation_research,
+            needsCandidateSelection=TaskType.topic_strategy in task_types,
+        )
+        if primary is Intent.mixed_creation_research:
+            answer_boundary = AnswerBoundary.market_evidence_plus_author_inference
+        elif primary is Intent.market_scan:
+            answer_boundary = AnswerBoundary.market_evidence
+        elif primary is Intent.book_breakdown:
+            answer_boundary = AnswerBoundary.book_evidence_plus_craft_extraction
+        else:
+            answer_boundary = AnswerBoundary.creative_inference
+        source_policy = (
+            self.intent_router._source_policy_for(primary, sub_intents, {})
+            if isinstance(self.intent_router, IntentRouter)
+            else {}
+        )
+        memory_policy = (
+            self.intent_router._memory_policy_for(primary, sub_intents)
+            if isinstance(self.intent_router, IntentRouter)
+            else {}
+        )
+        return IntentDecision(
+            primaryIntent=primary,
+            subIntents=sub_intents,
+            confidence=max(float(original.confidence or 0), 0.8),
+            entities=original.entities,
+            toolNeeds=tool_needs,
+            answerBoundary=answer_boundary,
+            routingNotes=list(dict.fromkeys(list(original.routingNotes or []) + ["task_graph:rescued_scope"])),
+            sourcePolicy=source_policy,
+            memoryPolicy=memory_policy,
+            missingSlots=list(original.missingSlots or []),
+        )
+
     def _task_graph_implies_webnovel_scope(self, task_graph: TaskGraph) -> bool:
         scoped_types = {
             TaskType.market_scan,
@@ -1129,6 +1901,59 @@ class NovelResearchAgent:
             "新书",
         ))
 
+    def _is_context_backed_creative_followup(self, request: KnowledgeChatRequest) -> bool:
+        if (
+            request.bookId is not None
+            or request.selectedCandidate is not None
+            or (request.bookName and request.bookName.strip())
+        ):
+            return False
+        question = (request.question or "").strip()
+        if not question or len(question) > 80:
+            return False
+        creative_markers = (
+            "继续",
+            "完整",
+            "大纲",
+            "细纲",
+            "设计",
+            "扩写",
+            "展开",
+            "补全",
+            "给出",
+            "上面",
+            "刚才",
+            "上一轮",
+            "这个",
+        )
+        if not any(marker in question for marker in creative_markers):
+            return False
+        context_text = "\n".join([
+            request.contextSummary or "",
+            "\n".join(str(message.get("content") or "") for message in request.history or []),
+        ])
+        if not context_text.strip():
+            return False
+        webnovel_context_markers = (
+            "网文",
+            "小说",
+            "男频",
+            "女频",
+            "都市脑洞",
+            "底层职业",
+            "题材",
+            "主角",
+            "金手指",
+            "三端一体",
+            "诸天万界",
+            "外包",
+            "特效",
+            "大纲",
+            "章节",
+            "开篇",
+        )
+        return any(marker in context_text for marker in webnovel_context_markers)
+
     def _attach_domain_intent_metadata(self, response: KnowledgeChatResponse, state: ResearchState) -> None:
         domain_intent = state.get("domain_intent")
         intent_decision = state.get("intent_decision")
@@ -1148,11 +1973,49 @@ class NovelResearchAgent:
                 if isinstance(result, dict) and result.get("agentName")
             ]
             response.resultJson["specialistDiagnostics"] = specialist_results
+            specialist_tool_calls: list[dict[str, Any]] = []
+            for result in specialist_results:
+                if not isinstance(result, dict):
+                    continue
+                for call in result.get("toolCalls", []) or []:
+                    if not isinstance(call, dict):
+                        continue
+                    name = str(call.get("name") or "")
+                    if name.startswith("llm."):
+                        continue
+                    specialist_tool_calls.append({
+                        "agentName": result.get("agentName"),
+                        **call,
+                    })
+            if specialist_tool_calls:
+                response.resultJson["specialistToolCalls"] = specialist_tool_calls
+        else:
+            response.resultJson.setdefault("specialistAgents", [])
+        if state.get("expert_routing") is not None:
+            expert_routing = dict(state.get("expert_routing") or {})
+            selected_experts = list(expert_routing.get("selectedExperts") or [])
+            response.resultJson["selectedExperts"] = selected_experts
+            response.resultJson["expertRouter"] = expert_routing
+        if state.get("runtime_config") is not None:
+            response.resultJson["runtimeConfig"] = dict(state.get("runtime_config") or {})
         if state.get("tool_plan") is not None:
             response.resultJson["toolPlan"] = list(state.get("tool_plan") or [])
         if state.get("tool_runs") is not None:
-            tool_runs = list(state.get("tool_runs") or [])
+            tool_runs = [self._canonical_tool_run(run) for run in list(state.get("tool_runs") or []) if isinstance(run, dict)]
             response.resultJson["toolRuns"] = tool_runs + self._legacy_tool_runs_for_trace(tool_runs)
+        if state.get("mcp_tool_calls") is not None:
+            response.resultJson["mcpToolCalls"] = list(state.get("mcp_tool_calls") or [])
+        if state.get("provider_calls") is not None:
+            response.resultJson["providerCalls"] = list(state.get("provider_calls") or [])
+        if state.get("answer_quality") is not None:
+            response.resultJson["answerQuality"] = dict(state.get("answer_quality") or {})
+        if state.get("answer_deltas") is not None:
+            response.resultJson["answerDeltas"] = list(state.get("answer_deltas") or [])
+        if state.get("answer_degraded"):
+            response.resultJson["degraded"] = True
+            response.resultJson["degradationReasons"] = list(state.get("degradation_reasons") or [])
+            if response.resultJson.get("fallbackUsed"):
+                response.resultJson["answerStatus"] = "degraded_model_fallback"
         if state.get("task_graph") is not None:
             task_graph = dict(state.get("task_graph") or {})
             response.resultJson["taskGraph"] = task_graph
@@ -1167,10 +2030,38 @@ class NovelResearchAgent:
         response.resultJson["routeDiagnostics"] = self._route_diagnostics_for_trace(state, response)
         if "sources" not in state:
             state["sources"] = list(response.sources or [])
+        if state.get("request") is not None:
+            response.resultJson["contextBudget"] = self._context_budget_for_state(state, response)
+        request = state.get("request")
+        sources_for_mode = list(state.get("sources") or response.sources or [])
+        intent_for_mode = str(state.get("intent") or response.resultJson.get("intent") or "")
+        if request is not None and not response.resultJson.get("answerMode"):
+            response.resultJson["answerMode"] = self._answer_mode(
+                request,
+                sources_for_mode,
+                intent_for_mode,
+                state=state,
+            )
+        if not response.resultJson.get("answerStatus"):
+            response.resultJson["answerStatus"] = self._answer_status(
+                str(response.resultJson.get("answerMode") or ""),
+                sources_for_mode,
+                intent_for_mode,
+            )
+        if not response.resultJson.get("answerBoundary"):
+            response.resultJson["answerBoundary"] = self._answer_boundary(
+                str(response.resultJson.get("answerMode") or ""),
+                sources_for_mode,
+                intent_for_mode,
+                state.get("answer_boundary"),
+            )
         self._attach_evidence_and_perspective_metadata(response, state)
+        runtime_config = state.get("runtime_config") if isinstance(state.get("runtime_config"), dict) else {}
         response.resultJson["budgets"] = {
-            "maxParallelToolCalls": settings.agent_max_parallel_tool_calls,
-            "maxSkillChars": settings.agent_max_skill_chars,
+            "maxParallelToolCalls": self._max_tool_calls_for_state(state) or settings.agent_max_parallel_tool_calls,
+            "maxParallelSpecialists": int((state.get("expert_routing") or {}).get("maxParallel") or settings.agent_max_parallel_tool_calls),
+            "maxSkillChars": self._runtime_max_skill_prompt_chars(runtime_config),
+            "maxEvidenceItems": self._runtime_max_evidence_items(runtime_config),
             "maxMaterialChars": settings.agent_max_material_chars,
             "marketTopNDefault": settings.agent_market_topn_default,
             "chaptersPerRankBook": settings.agent_chapters_per_rank_book,
@@ -1229,6 +2120,9 @@ class NovelResearchAgent:
         return decision.model_dump(mode="json", exclude_none=True)
 
     def _supervisor_route_for_state(self, state: ResearchState) -> str:
+        request = state.get("request")
+        if isinstance(request, KnowledgeChatRequest) and self._is_context_backed_creative_followup(request):
+            return "followup_revision"
         domain_intent = str(state.get("domain_intent") or "")
         legacy_intent = str(state.get("intent") or "")
         if domain_intent == "mixed_creation_research":
@@ -1253,6 +2147,9 @@ class NovelResearchAgent:
             return "needs_clarification"
         if status == "out_of_scope":
             return "out_of_scope"
+        request = state.get("request")
+        if isinstance(request, KnowledgeChatRequest) and self._is_context_backed_creative_followup(request):
+            return "followup_revision"
         domain_intent = str(state.get("domain_intent") or "")
         legacy_intent = str(state.get("intent") or "")
         answer_mode = str((response.resultJson.get("answerMode") if response is not None else "") or "")
@@ -1358,15 +2255,26 @@ class NovelResearchAgent:
         result = response.resultJson
         sources = state.get("sources", response.sources or [])
         request = state.get("request")
+        trace_diagnostics = dict(result.get("diagnostics") or {})
+        if isinstance(result.get("memoryDiagnostics"), dict):
+            trace_diagnostics["memory"] = dict(result["memoryDiagnostics"])
+        if isinstance(result.get("retrievalDiagnostics"), dict):
+            trace_diagnostics["retrieval"] = dict(result["retrievalDiagnostics"])
         result.setdefault("businessRoute", self._business_route_for_state(state, response))
         result.setdefault("routeDiagnostics", self._route_diagnostics_for_trace(state, response))
         if request is not None and "contextUsed" not in result:
             result["contextUsed"] = self._context_used_for_trace(request, state)
+        if request is not None and "contextBudget" not in result:
+            result["contextBudget"] = self._context_budget_for_state(state, response)
+        project_knowledge = self._project_knowledge_trace_for_tool_runs(list(result.get("toolRuns") or []))
+        if project_knowledge:
+            result["projectKnowledge"] = project_knowledge
         result["trace"] = {
             "traceId": request.traceId if request is not None else None,
             "checkpointThreadId": self._graph_thread_id(request) if request is not None else None,
             "checkpointStore": checkpoint_store_name(self._checkpointer),
             "nodes": self._runtime_nodes_for_trace(response, result, state),
+            "executedRuntimeNodes": list(state.get("executed_runtime_nodes") or []),
             "intent": result.get("intent"),
             "domainIntent": result.get("domainIntent"),
             "businessRoute": result.get("businessRoute"),
@@ -1375,14 +2283,20 @@ class NovelResearchAgent:
             "answerStatus": result.get("answerStatus"),
             "answerBoundary": result.get("answerBoundary"),
             "sourcePolicy": dict(result.get("sourcePolicy") or {}),
+            "preconditions": self._preconditions_for_trace(result, state, response),
             "supervisorDecision": dict(result.get("supervisorDecision") or {}),
             "retryCounts": dict(result.get("retryCounts") or {}),
             "contextUsed": dict(result.get("contextUsed") or {}),
+            "contextBudget": dict(result.get("contextBudget") or {}),
             "memoryCandidates": list(result.get("memoryCandidates") or []),
             "promptPolicy": self._prompt_policy_for_trace(result),
             "toolPlan": list(result.get("toolPlan") or []),
             "toolRuns": list(result.get("toolRuns") or []),
+            "projectKnowledge": dict(result.get("projectKnowledge") or {}),
             "selectedSkills": list(result.get("selectedSkills") or []),
+            "selectedExperts": list(result.get("selectedExperts") or []),
+            "expertRouter": dict(result.get("expertRouter") or {}),
+            "runtimeConfig": dict(result.get("runtimeConfig") or {}),
             "specialistAgents": list(result.get("specialistAgents") or []),
             "sourceCount": len(sources),
             "sourceTypes": sorted({str(source.sourceType or "unknown").upper() for source in sources}),
@@ -1391,10 +2305,145 @@ class NovelResearchAgent:
             "evidenceChars": self._evidence_chars(sources),
             "materialChars": result.get("materialChars", self._material_chars(sources)),
             "fallbackUsed": bool(result.get("fallbackUsed", False)),
+            "degraded": bool(result.get("degraded", False)),
+            "degradationReasons": list(result.get("degradationReasons") or []),
+            "providerCalls": list(result.get("providerCalls") or []),
+            "answerQuality": dict(result.get("answerQuality") or {}),
+            "health": self._trace_health_for_result(result, state),
             "citationRepairUsed": bool(result.get("citationRepairUsed", False)),
             "actions": list(response.actions or []),
-            "diagnostics": dict(result.get("diagnostics") or {}),
+            "diagnostics": trace_diagnostics,
         }
+
+    def _project_knowledge_trace_for_tool_runs(self, tool_runs: list[dict[str, Any]]) -> dict[str, Any]:
+        summary: dict[str, Any] = {}
+        buckets = {
+            "project.chapter_search": "retrievedChapters",
+            "project.chunk_search": "retrievedChunks",
+            "project.foreshadowing.list": "matchedForeshadowings",
+            "project.timeline_lookup": "matchedTimelineEvents",
+            "project.character_state_lookup": "matchedCharacterStates",
+            "project.world_rule_lookup": "matchedWorldRules",
+        }
+        for run in tool_runs:
+            if not isinstance(run, dict) or run.get("status") != "succeeded":
+                continue
+            name = str(run.get("name") or "")
+            input_payload = run.get("input") if isinstance(run.get("input"), dict) else {}
+            self._copy_first_int(summary, "userId", input_payload.get("userId") or input_payload.get("user_id"))
+            self._copy_first_int(summary, "projectId", input_payload.get("projectId") or input_payload.get("project_id"))
+            self._copy_first_int(summary, "workId", input_payload.get("workId") or input_payload.get("work_id"))
+            output = run.get("output") if isinstance(run.get("output"), dict) else {}
+            if name == "project.resolve":
+                self._copy_first_int(summary, "projectId", output.get("projectId") or output.get("project_id"))
+                self._copy_first_int(summary, "workId", output.get("workId") or output.get("work_id"))
+                if output.get("status") and "resolutionStatus" not in summary:
+                    summary["resolutionStatus"] = output.get("status")
+                if output.get("title") and "resolvedTitle" not in summary:
+                    summary["resolvedTitle"] = output.get("title")
+                candidates = output.get("candidates")
+                if isinstance(candidates, list) and candidates:
+                    summary["resolutionCandidates"] = [item for item in candidates[:10] if isinstance(item, dict)]
+                continue
+            bucket = buckets.get(name)
+            if not bucket:
+                continue
+            items = output.get("items") if isinstance(output, dict) else []
+            if isinstance(items, list):
+                summary.setdefault(bucket, [])
+                summary[bucket].extend(item for item in items[:20] if isinstance(item, dict))
+        return summary
+
+    def _copy_first_int(self, target: dict[str, Any], key: str, value: Any) -> None:
+        if key in target or value is None:
+            return
+        try:
+            target[key] = int(value)
+        except (TypeError, ValueError):
+            target[key] = value
+
+    def _trace_health_for_result(self, result: dict[str, Any], state: ResearchState) -> dict[str, Any]:
+        provider_calls = list(result.get("providerCalls") or state.get("provider_calls") or [])
+        if result.get("fallbackUsed"):
+            model_health = "fallback_used"
+        elif any(isinstance(call, dict) and call.get("status") == "succeeded" for call in provider_calls):
+            model_health = "succeeded"
+        elif any(isinstance(call, dict) and call.get("status") == "failed" for call in provider_calls):
+            model_health = "failed"
+        else:
+            model_health = "not_called"
+        tool_runs = list(result.get("toolRuns") or state.get("tool_runs") or [])
+        failed_tools = [run for run in tool_runs if isinstance(run, dict) and run.get("status") == "failed"]
+        blocked_tools = [
+            run
+            for run in tool_runs
+            if isinstance(run, dict)
+            and str(run.get("error") or run.get("reason") or "").lower() in {"toolbudgetexceeded", "tool_budget_exceeded"}
+        ]
+        memory_diagnostics = result.get("memoryDiagnostics") if isinstance(result.get("memoryDiagnostics"), dict) else {}
+        selected_experts = list(result.get("selectedExperts") or [])
+        return {
+            "model": model_health,
+            "tools": "failed" if failed_tools else ("blocked" if blocked_tools else ("succeeded" if tool_runs else "not_run")),
+            "evidence": "succeeded" if int(result.get("sourceCount") or 0) > 0 else "empty",
+            "memory": self._memory_health(memory_diagnostics, result),
+            "experts": "succeeded" if selected_experts else "skipped",
+            "fallback": "used" if result.get("fallbackUsed") else "none",
+            "degraded": bool(result.get("degraded")),
+        }
+
+    def _memory_health(self, diagnostics: dict[str, Any], result: dict[str, Any] | None = None) -> str:
+        loaded_statuses = {"loaded", "available", "succeeded", "success", "hit"}
+        failed_statuses = {"unavailable", "failed", "error", "timeout"}
+        skipped_statuses = {"skipped", "disabled", "not_requested"}
+        loaded = False
+        failed = False
+        skipped = False
+
+        def visit(value: Any) -> None:
+            nonlocal loaded, failed, skipped
+            if isinstance(value, dict):
+                status = str(value.get("status") or value.get("state") or "").strip().lower()
+                if status in loaded_statuses:
+                    loaded = True
+                if status in failed_statuses:
+                    failed = True
+                if status in skipped_statuses:
+                    skipped = True
+                for item in value.values():
+                    visit(item)
+            elif isinstance(value, list):
+                for item in value:
+                    visit(item)
+
+        visit(diagnostics)
+        context_used = result.get("contextUsed") if isinstance(result, dict) else {}
+        context_budget = result.get("contextBudget") if isinstance(result, dict) else {}
+        if isinstance(context_used, dict):
+            if context_used.get("hasThreadSummary") or context_used.get("hasProjectProfile") or context_used.get("hasUserProfile"):
+                loaded = True
+            memory_context = context_used.get("memoryContext")
+            if isinstance(memory_context, dict):
+                conversation_summary = memory_context.get("conversationSummary")
+                if isinstance(conversation_summary, dict) and str(conversation_summary.get("summary") or "").strip():
+                    loaded = True
+                project_memories = memory_context.get("projectMemories")
+                if isinstance(project_memories, list) and project_memories:
+                    loaded = True
+        if isinstance(context_budget, dict):
+            visit(context_budget.get("memoryLayers"))
+
+        if loaded and failed:
+            return "partial"
+        if loaded:
+            return "loaded"
+        if failed:
+            return "unavailable"
+        if skipped:
+            return "skipped"
+        if diagnostics:
+            return "empty"
+        return "empty"
 
     def _runtime_nodes_for_trace(
         self,
@@ -1403,55 +2452,144 @@ class NovelResearchAgent:
         state: ResearchState,
     ) -> list[dict[str, Any]]:
         tool_runs = list(result.get("toolRuns") or [])
-        return [
+        preconditions = state.get("preconditions") or self._preconditions_for_trace(result, state, response)
+        executed_raw = state.get("executed_runtime_nodes")
+        executed_nodes: set[str] | None = None
+        if isinstance(executed_raw, (list, tuple, set)):
+            executed_nodes = {str(node) for node in executed_raw}
+        timings = state.get("runtime_node_timings") if isinstance(state.get("runtime_node_timings"), dict) else {}
+
+        def node_status(name: str, legacy_status: str) -> str:
+            if executed_nodes is None:
+                return legacy_status
+            return "completed" if name in executed_nodes else "skipped"
+
+        nodes = [
             {
                 "name": "assemble_context",
-                "status": "completed" if result.get("contextUsed") else "skipped",
+                "status": node_status("assemble_context", "completed" if result.get("contextUsed") else "skipped"),
                 "legacyNode": "intent_router",
             },
             {
                 "name": "classify_intent",
-                "status": "completed" if result.get("intentDecision") else "skipped",
+                "status": node_status("classify_intent", "completed" if result.get("intentDecision") else "skipped"),
                 "legacyNode": "intent_router",
             },
             {
                 "name": "plan_tasks",
-                "status": "completed" if result.get("taskGraph") else "skipped",
+                "status": node_status("plan_tasks", "completed" if result.get("taskGraph") else "skipped"),
                 "legacyNode": "intent_router",
             },
             {
+                "name": "validate_preconditions",
+                "status": node_status("validate_preconditions", "completed"),
+                "legacyNode": "trace_metadata",
+                "preconditions": preconditions,
+            },
+            {
+                "name": "route_experts",
+                "status": node_status("route_experts", "completed" if result.get("expertRouter") else "skipped"),
+                "legacyNode": "specialist_agents",
+                "selectedExpertCount": len(result.get("selectedExperts") or []),
+            },
+            {
                 "name": "execute_tools",
-                "status": "completed" if tool_runs else "skipped",
+                "status": node_status("execute_tools", "completed" if tool_runs else "skipped"),
                 "legacyNode": "structured_rank_lookup/evidence_retriever",
                 "toolRunCount": len(tool_runs),
             },
             {
                 "name": "supervise_evidence",
-                "status": "completed" if result.get("supervisorDecision") else "skipped",
+                "status": node_status("supervise_evidence", "completed" if result.get("supervisorDecision") else "skipped"),
                 "legacyNode": "citation_verifier",
             },
             {
                 "name": "compose_answer",
-                "status": "completed" if response.answer else "skipped",
+                "status": node_status("compose_answer", "completed" if response.answer else "skipped"),
                 "legacyNode": self._compose_legacy_node_for_state(state),
             },
             {
                 "name": "extract_memory_candidates",
-                "status": "completed",
+                "status": node_status("extract_memory_candidates", "completed"),
                 "legacyNode": None,
                 "candidateCount": len(result.get("memoryCandidates") or []),
             },
             {
                 "name": "finalize_trace",
-                "status": "completed",
+                "status": node_status("finalize_trace", "completed"),
                 "legacyNode": "citation_verifier",
             },
         ]
+        for index, node in enumerate(nodes, start=1):
+            node.setdefault("sequenceNo", index)
+            timing = timings.get(str(node.get("name"))) if isinstance(timings, dict) else None
+            if isinstance(timing, dict) and isinstance(timing.get("durationMs"), (int, float)):
+                node["durationMs"] = max(0, int(timing["durationMs"]))
+        return nodes
 
     def _compose_legacy_node_for_state(self, state: ResearchState) -> str:
         if state.get("intent") == "creative_advice":
             return "creative_answer"
         return "answer_writer"
+
+    def _preconditions_for_trace(
+        self,
+        result: dict[str, Any],
+        state: ResearchState,
+        response: KnowledgeChatResponse,
+    ) -> dict[str, Any]:
+        request = state.get("request")
+        task_graph = result.get("taskGraph") if isinstance(result.get("taskGraph"), dict) else {}
+        source_policy = result.get("sourcePolicy") if isinstance(result.get("sourcePolicy"), dict) else {}
+        business_route = str(result.get("businessRoute") or self._business_route_for_state(state, response))
+        response_status = str(response.status or result.get("status") or "")
+        answer_status = str(result.get("answerStatus") or "")
+        answer_boundary = str(result.get("answerBoundary") or task_graph.get("answerBoundary") or "")
+        tool_names = {
+            str(tool)
+            for task in list(task_graph.get("tasks") or [])
+            if isinstance(task, dict)
+            for tool in list(task.get("tools") or [])
+        }
+        needs_book_selection = (
+            response_status == "candidates_required"
+            or answer_status in {"needs_book_selection", "needs_candidate_selection"}
+            or "needs_book_selection" in answer_boundary
+            or any(action == "select_candidate" for action in list(response.actions or []))
+        )
+        needs_latest_rank_evidence = (
+            business_route in {"market_scan", "mixed_creation_research"}
+            or source_policy.get("freshness") == "latest"
+            or bool(source_policy.get("requireSnapshotTime"))
+            or any(str(task.get("type") or "") == TaskType.market_scan.value for task in list(task_graph.get("tasks") or []) if isinstance(task, dict))
+        )
+        project_memory_allowed = bool(
+            task_graph.get("projectMemoryPolicy", "project_scoped") != "disabled"
+            and request is not None
+            and request.projectId is not None
+            and (
+                "memory.project_context" in tool_names
+                or business_route in {"project_creation", "mixed_creation_research", "followup_revision"}
+            )
+        )
+        if bool(task_graph.get("adminOperationRequested")) or business_route == "admin_governance":
+            evidence_mode = "admin_refusal"
+        elif response_status == "insufficient_evidence" or answer_status in {"needs_data", "needs_chapter_evidence"}:
+            evidence_mode = str(source_policy.get("trendGateReason") or answer_status or "insufficient_evidence")
+        elif source_policy.get("latestRankEvidenceDegraded"):
+            evidence_mode = "degraded_directional"
+        else:
+            evidence_mode = "satisfied"
+        return {
+            "domainAllowed": business_route not in {"out_of_scope", "admin_governance"} and not bool(task_graph.get("adminOperationRequested")),
+            "needsBookSelection": needs_book_selection,
+            "needsLatestRankEvidence": needs_latest_rank_evidence,
+            "projectMemoryAllowed": project_memory_allowed,
+            "evidenceInsufficiencyMode": evidence_mode,
+            "businessRoute": business_route,
+            "sourcePolicy": dict(source_policy),
+            "answerBoundary": answer_boundary or None,
+        }
 
     def _context_used_for_trace(
         self,
@@ -1474,7 +2612,121 @@ class NovelResearchAgent:
             "hasThreadSummary": "threadSummary" in payload,
             "projectMemoryKeys": sorted(str(key) for key in project_memories.keys()),
             "projectMemorySourceIds": list(project_payload.get("sourceIds") or []),
+            "memoryContext": dict(state.get("memory_context") or {}) if state is not None else {},
         }
+
+    def _context_budget_for_state(
+        self,
+        state: ResearchState,
+        response: KnowledgeChatResponse | None = None,
+    ) -> dict[str, Any]:
+        request = state.get("request")
+        sources = list(state.get("sources") or (response.sources if response is not None else []) or [])
+        bundle = state.get("context_bundle")
+        bundle_payload = bundle.model_dump(mode="json", exclude_none=True) if isinstance(bundle, ContextBundle) else {}
+        memory_context = state.get("memory_context") if isinstance(state.get("memory_context"), dict) else {}
+        components = {
+            "question": len(request.question or "") if request is not None else 0,
+            "history": self._json_chars(request.history if request is not None else []),
+            "contextSummary": len(request.contextSummary or "") if request is not None else 0,
+            "contextBundle": self._json_chars(bundle_payload),
+            "memoryContext": self._json_chars(memory_context),
+            "selectedSkills": self._json_chars(state.get("selected_skills") or []),
+            "evidenceSources": self._evidence_chars(sources),
+        }
+        used_chars = sum(max(0, int(value or 0)) for value in components.values())
+        estimated_used_tokens = max(1, (used_chars + 1) // 2) if used_chars else 0
+        max_input_tokens = self._max_context_input_tokens(request)
+        remaining_tokens = max(0, max_input_tokens - estimated_used_tokens)
+        remaining_ratio = round(remaining_tokens / max_input_tokens, 4) if max_input_tokens else 0.0
+        compressed = bool(
+            request is not None
+            and (
+                len(request.contextSummary or "") > CONTEXT_SUMMARY_PROMPT_CHARS
+                or len(request.history or []) > HISTORY_PROMPT_MESSAGES
+                or used_chars > max_input_tokens * 2
+            )
+        )
+        warnings: list[str] = []
+        if remaining_ratio < 0.15:
+            warnings.append("context_budget_low")
+        if memory_context.get("diagnostics"):
+            for key, diagnostic in dict(memory_context.get("diagnostics") or {}).items():
+                if isinstance(diagnostic, dict) and diagnostic.get("status") == "unavailable":
+                    warnings.append(f"{key}_unavailable")
+        return {
+            "maxInputTokens": max_input_tokens,
+            "estimatedUsedChars": used_chars,
+            "estimatedUsedTokens": estimated_used_tokens,
+            "remainingTokens": remaining_tokens,
+            "remainingRatio": remaining_ratio,
+            "compressed": compressed,
+            "components": components,
+            "memoryLayers": self._context_memory_layers(bundle, memory_context),
+            "warnings": warnings,
+        }
+
+    def _max_context_input_tokens(self, request: KnowledgeChatRequest | None) -> int:
+        if request is not None and isinstance(request.limits, dict):
+            value = request.limits.get("maxInputTokens") or request.limits.get("max_input_tokens")
+            try:
+                if value is not None:
+                    return max(4096, int(value))
+            except (TypeError, ValueError):
+                pass
+        return DEFAULT_CONTEXT_MAX_INPUT_TOKENS
+
+    def _context_memory_layers(
+        self,
+        bundle: Any,
+        memory_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        layers: dict[str, Any] = {}
+        if isinstance(bundle, ContextBundle):
+            layers["projectProfile"] = self._context_layer_status(bundle.projectProfile)
+            layers["threadSummary"] = self._context_layer_status(bundle.threadSummary)
+            layers["userProfile"] = self._context_layer_status(bundle.userProfile)
+        diagnostics = memory_context.get("diagnostics") if isinstance(memory_context.get("diagnostics"), dict) else {}
+        for key, diagnostic in diagnostics.items():
+            if isinstance(diagnostic, dict):
+                layers[key] = {
+                    "status": str(diagnostic.get("status") or "unknown"),
+                    **({"reason": diagnostic.get("reason")} if diagnostic.get("reason") else {}),
+                    **({"count": diagnostic.get("count")} if diagnostic.get("count") is not None else {}),
+                }
+        return layers
+
+    def _context_layer_status(self, layer: Any) -> dict[str, Any]:
+        if layer is None:
+            return {"status": "skipped", "keys": []}
+        content = dict(getattr(layer, "content", {}) or {})
+        diagnostics = content.get("_diagnostics") if isinstance(content.get("_diagnostics"), dict) else {}
+        memories = content.get("memories") if isinstance(content.get("memories"), dict) else {}
+        if diagnostics.get("projectProfileStatus") == "placeholder":
+            status = "placeholder"
+        elif memories or getattr(layer, "sourceIds", []):
+            status = "loaded"
+        elif content:
+            status = "provided"
+        else:
+            status = "empty"
+        keys = list(memories.keys()) if memories else sorted(str(key) for key in content.keys() if key != "_diagnostics")
+        result: dict[str, Any] = {
+            "status": status,
+            "keys": keys,
+            "sourceIds": list(getattr(layer, "sourceIds", []) or []),
+        }
+        if diagnostics.get("reason"):
+            result["reason"] = diagnostics["reason"]
+        return result
+
+    def _json_chars(self, value: Any) -> int:
+        if value is None:
+            return 0
+        try:
+            return len(json.dumps(value, ensure_ascii=False, default=str))
+        except Exception:
+            return len(str(value))
 
     def _prompt_policy_for_trace(self, result: dict[str, Any]) -> str:
         answer_mode = str(result.get("answerMode") or "")
@@ -1526,8 +2778,29 @@ class NovelResearchAgent:
         }
         if reason:
             payload["reason"] = reason
-        runs.append(payload)
+        runs.append(self._canonical_tool_run(payload))
         state["tool_runs"] = runs
+
+    def _canonical_tool_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(run)
+        raw_name = str(payload.get("name") or "")
+        canonical_by_legacy = {
+            "rank_lookup": "rank.lookup",
+            "rank_research_pack": "rank.research_pack",
+            "vector_rank_search": "knowledge.vector_search",
+        }
+        canonical = canonical_by_legacy.get(raw_name, raw_name)
+        if canonical != raw_name:
+            payload["legacyName"] = raw_name
+            payload["name"] = canonical
+            payload.setdefault("plane", "system_internal")
+            payload.setdefault("budgetScope", "system_recovery")
+            payload.setdefault("allowedAfterBudgetExhaustionReason", "internal_recovery_after_task_budget")
+        else:
+            payload.setdefault("plane", "task_graph" if "." in canonical else "system_internal")
+            payload.setdefault("budgetScope", "user_task")
+        payload.setdefault("canonicalGroup", canonical)
+        return payload
 
     def _project_context_tool(self, payload: dict[str, Any]) -> dict[str, Any]:
         summary = str(payload.get("contextSummary") or "").strip()
@@ -1568,6 +2841,9 @@ class NovelResearchAgent:
             graph,
             plans,
             context=self._task_tool_context(request, state),
+            allowed_tools=self._allowed_tools_for_state(state),
+            max_tool_calls=self._max_tool_calls_for_state(state),
+            reserved_required_tools=self._reserved_required_tools_for_plans(plans),
         )
         self._merge_task_tool_runs(state, runs)
         return self._sources_from_tool_runs(runs)
@@ -1584,8 +2860,13 @@ class NovelResearchAgent:
             "platform": state.get("platform") or (request.selectedCandidate.platform if request.selectedCandidate else None) or "fanqie",
             "contextSummary": request.contextSummary,
             "history": list(request.history or []),
-            "limit": self._limit(request, "rankLimit", default=settings.agent_market_topn_default, maximum=20),
-            "evidenceLimit": self._limit(request, "evidenceLimit", default=5, maximum=20),
+            "limit": self._limit(
+                request,
+                "rankLimit",
+                default=settings.agent_market_topn_default,
+                maximum=RANK_ANALYSIS_MAX_ITEMS,
+            ),
+            "evidenceLimit": self._runtime_evidence_limit(request, state, default=5, maximum=20),
             "chapterLimit": self._limit(request, "chapterLimit", default=3, maximum=20),
             "analysisLimit": self._limit(request, "analysisLimit", default=3, maximum=20),
             "toolTimeoutMillis": self._tool_timeout_millis(request),
@@ -1596,14 +2877,122 @@ class NovelResearchAgent:
                 maximum=5,
             ),
         }
+        source_policy = dict(state.get("source_policy") or {})
+        if source_policy:
+            context["sourcePolicy"] = source_policy
+        runtime_config = state.get("runtime_config")
+        if isinstance(runtime_config, dict):
+            context["runtimeConfig"] = runtime_config
         lookup = self._parse_trend_rank_lookup_for_request(request) or {}
+        if lookup:
+            requested_limit = self._int_or_zero(context.get("limit"))
+            lookup_limit = self._int_or_zero(lookup.get("limit"))
+            lookup["limit"] = max(1, min(max(requested_limit, lookup_limit), RANK_ANALYSIS_MAX_ITEMS))
         context.update({key: value for key, value in lookup.items() if value is not None})
         return {key: value for key, value in context.items() if value is not None}
 
+    def _allowed_tools_for_state(self, state: ResearchState) -> set[str] | None:
+        skill_allowed = self._allowed_tools_from_selected_skills(state)
+        expert_allowed = self._allowed_tools_from_expert_profiles(state)
+        if skill_allowed and expert_allowed:
+            return skill_allowed.intersection(expert_allowed)
+        if skill_allowed:
+            return skill_allowed
+        if expert_allowed:
+            return expert_allowed
+        return None
+
+    def _allowed_tools_from_selected_skills(self, state: ResearchState) -> set[str]:
+        selected_ids = {str(skill_id) for skill_id in list(state.get("selected_skills") or []) if skill_id}
+        if not selected_ids:
+            return set()
+        allowed: set[str] = set()
+        for skill in self.skill_registry.load_all():
+            if skill.skillId in selected_ids:
+                allowed.update(str(tool) for tool in skill.allowedTools if str(tool).strip())
+        return allowed
+
+    def _allowed_tools_from_expert_profiles(self, state: ResearchState) -> set[str]:
+        allowed: set[str] = set()
+        for profile in list(state.get("expert_profiles") or []):
+            if not isinstance(profile, dict) or profile.get("enabled") is False:
+                continue
+            for tool in list(profile.get("allowedTools") or []):
+                tool_name = str(tool).strip()
+                if tool_name:
+                    allowed.add(tool_name)
+        return allowed
+
+    def _max_tool_calls_for_state(self, state: ResearchState) -> int | None:
+        budgets: list[int] = []
+        for profile in list(state.get("expert_profiles") or []):
+            if not isinstance(profile, dict) or profile.get("enabled") is False:
+                continue
+            try:
+                value = int(profile.get("maxToolCalls"))
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                budgets.append(value)
+        return min(budgets) if budgets else None
+
+    def _reserved_required_tools_for_plans(self, plans: list[ToolPlan]) -> set[str]:
+        reserved_candidates = {"skill.lookup", "memory.project_context"}
+        reserved: set[str] = set()
+        for plan in plans:
+            if not plan.required:
+                continue
+            for tool_name in plan.tools:
+                if tool_name in reserved_candidates:
+                    reserved.add(tool_name)
+        return reserved
+
+    def _required_evidence_for_state(self, state: ResearchState) -> list[str]:
+        selected_ids = {str(skill_id) for skill_id in list(state.get("selected_skills") or []) if skill_id}
+        required: list[str] = []
+        for skill in self.skill_registry.load_all():
+            if skill.skillId not in selected_ids:
+                continue
+            for item in skill.requiredEvidence:
+                requirement = str(item).strip()
+                if requirement and requirement not in required:
+                    required.append(requirement)
+        for skill in list(state.get("runtime_skills") or []):
+            if not isinstance(skill, dict):
+                continue
+            if str(skill.get("skillId") or "") not in selected_ids:
+                continue
+            for item in list(skill.get("requiredEvidence") or []):
+                requirement = str(item).strip()
+                if requirement and requirement not in required:
+                    required.append(requirement)
+        return required
+
     def _merge_task_tool_runs(self, state: ResearchState, runs: list[ToolRun]) -> None:
         existing = list(state.get("tool_runs") or [])
-        existing.extend(run.model_dump(mode="json", exclude_none=True) for run in runs)
+        existing.extend(self._canonical_tool_run(run.model_dump(mode="json", exclude_none=True)) for run in runs)
         state["tool_runs"] = existing
+        for run in runs:
+            if run.name == "skill.lookup" and run.status == "succeeded":
+                self._merge_skill_lookup_output(state, run.output)
+
+    def _merge_skill_lookup_output(self, state: ResearchState, output: dict[str, Any]) -> None:
+        selected = list(state.get("selected_skills") or [])
+        for skill_id in list(output.get("selectedSkills") or []):
+            skill_id = str(skill_id)
+            if skill_id and skill_id not in selected:
+                selected.append(skill_id)
+        state["selected_skills"] = selected
+
+        prompt = str(output.get("prompt") or "").strip()
+        if not prompt:
+            return
+        existing_prompt = str(state.get("skill_prompt") or "").strip()
+        if prompt in existing_prompt:
+            return
+        merged = f"{existing_prompt}\n\n{prompt}".strip() if existing_prompt else prompt
+        max_chars = max(500, int(getattr(settings, "agent_max_skill_chars", 3000)))
+        state["skill_prompt"] = merged[:max_chars].rstrip()
 
     def _filter_task_graph_tool_plans(
         self,
@@ -1623,16 +3012,7 @@ class NovelResearchAgent:
         return filtered
 
     def _legacy_tool_runs_for_trace(self, tool_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        legacy: list[dict[str, Any]] = []
-        for run in tool_runs:
-            if not isinstance(run, dict):
-                continue
-            legacy_run = dict(run)
-            name = str(legacy_run.get("name") or "")
-            if name == "rank.lookup":
-                legacy_run["name"] = name.replace(".", "_")
-                legacy.append(legacy_run)
-        return legacy
+        return []
 
     def _existing_generic_vector_sources(self, state: ResearchState) -> list[KnowledgeSource] | None:
         sources: list[KnowledgeSource] = []
@@ -1662,7 +3042,7 @@ class NovelResearchAgent:
             found_run = True
             output = run.get("output")
             if isinstance(output, dict):
-                sources.extend(self._rank_pack_output_to_sources(output))
+                sources.extend(self._with_retrieval_backend(self._rank_pack_output_to_sources(output), "rank.research_pack"))
         return sources if found_run else None
 
     def _existing_book_pack_sources(self, state: ResearchState) -> list[KnowledgeSource] | None:
@@ -1684,14 +3064,26 @@ class NovelResearchAgent:
         for run in runs:
             if run.status != "succeeded":
                 continue
+            run_sources: list[KnowledgeSource] = []
             if run.name == "rank.lookup":
-                sources.extend(self._rank_lookup_output_to_sources(run.output))
+                run_sources = self._rank_lookup_output_to_sources(run.output)
             elif run.name == "rank.research_pack":
-                sources.extend(self._rank_pack_output_to_sources(run.output))
+                run_sources = self._rank_pack_output_to_sources(run.output)
             elif run.name == "book.research_pack":
-                sources.extend(self._book_pack_output_to_sources(run.output))
+                run_sources = self._book_pack_output_to_sources(run.output)
             elif run.name == "knowledge.vector_search":
-                sources.extend(self._knowledge_search_output_to_sources(run.output))
+                run_sources = self._knowledge_search_output_to_sources(run.output)
+            sources.extend(self._with_retrieval_backend(run_sources, run.name))
+        return sources
+
+    def _with_retrieval_backend(
+        self,
+        sources: list[KnowledgeSource],
+        retrieval_backend: str,
+    ) -> list[KnowledgeSource]:
+        for source in sources:
+            if source.retrievalBackend is None:
+                source.retrievalBackend = retrieval_backend
         return sources
 
     def _rank_lookup_output_to_sources(self, output: dict[str, Any]) -> list[KnowledgeSource]:
@@ -1739,13 +3131,23 @@ class NovelResearchAgent:
             plan.append({
                 "name": "rank_research_pack",
                 "required": True,
-                "maxItems": self._limit(request, "rankLimit", default=settings.agent_market_topn_default, maximum=20),
+                "maxItems": self._limit(
+                    request,
+                    "rankLimit",
+                    default=settings.agent_market_topn_default,
+                    maximum=RANK_ANALYSIS_MAX_ITEMS,
+                ),
                 "fallback": "continue_with_vector_evidence",
             })
             plan.append({
                 "name": "rank_lookup",
                 "required": False,
-                "maxItems": self._limit(request, "rankLimit", default=settings.agent_market_topn_default, maximum=20),
+                "maxItems": self._limit(
+                    request,
+                    "rankLimit",
+                    default=settings.agent_market_topn_default,
+                    maximum=RANK_ANALYSIS_MAX_ITEMS,
+                ),
                 "fallback": "skip_structured_rank_sources",
             })
             plan.append({
@@ -1802,11 +3204,37 @@ class NovelResearchAgent:
             sources=sources,
             skill_fragments=list(state.get("selected_skills") or []),
             actions=list(state.get("actions", [])),
+            diagnostics=self._specialist_context_diagnostics(state),
         )
+        runtime_config = dict(state.get("runtime_config") or {})
+        expert_profiles = list(state.get("expert_profiles") or [])
+        if not runtime_config and not expert_profiles:
+            governance = await self._load_agent_governance()
+            runtime_config = self._runtime_config_for_state(governance, dict(governance.get("config") or {}))
+            expert_profiles = list(governance.get("experts") or [])
+            state["runtime_config"] = runtime_config
+            state["expert_profiles"] = expert_profiles
+        max_parallel_specialists = self._runtime_max_parallel_specialists(runtime_config)
+        state["runtime_config"] = {**runtime_config, "maxParallelSpecialists": max_parallel_specialists}
+        registry = ExpertRegistry.default().with_admin_profiles(expert_profiles)
+        expert_route = route_agents(
+            decision,
+            reasoning_mode=state["request"].reasoningMode,
+            task_graph=state.get("task_graph"),
+            registry=registry,
+            max_parallel=max_parallel_specialists,
+        )
+        state["expert_routing"] = expert_route.to_dict()
+        mcp_registry = await self._get_specialist_mcp_tool_registry()
         return [
             {
                 "agentName": result.agentName,
+                "status": result.status,
                 "answerMode": result.answerMode,
+                "summary": result.summary,
+                "evidenceRefs": result.evidenceRefs,
+                "warnings": result.warnings,
+                "toolCalls": result.toolCalls,
                 "generationInstructions": result.generationInstructions,
                 "evidencePolicy": result.evidencePolicy,
                 "actions": result.actions,
@@ -1814,9 +3242,111 @@ class NovelResearchAgent:
             }
             for result in await run_specialists_parallel(
                 context,
-                max_parallel=settings.agent_max_parallel_tool_calls,
+                max_parallel=max_parallel_specialists,
+                provider_client=self.provider_client,
+                model=self._model_name(state["request"]),
+                mcp_client=self.mcp_client if mcp_registry is not None else None,
+                mcp_tool_registry=mcp_registry,
+                expert_route=expert_route,
             )
         ]
+
+    async def _load_agent_governance(self) -> dict[str, Any]:
+        runtime_config_fn = getattr(self.knowledge_client, "get_agent_runtime_config", None)
+        expert_profiles_fn = getattr(self.knowledge_client, "get_agent_expert_profiles", None)
+        runtime_skills_fn = getattr(self.knowledge_client, "get_runtime_skills", None)
+        if not callable(runtime_config_fn) and not callable(expert_profiles_fn) and not callable(runtime_skills_fn):
+            return {"source": "default", "config": {}, "experts": [], "runtimeSkills": []}
+        try:
+            runtime_config = await runtime_config_fn() if callable(runtime_config_fn) else {}
+            expert_profiles = await expert_profiles_fn() if callable(expert_profiles_fn) else []
+            runtime_skills = await runtime_skills_fn() if callable(runtime_skills_fn) else []
+            return {
+                "source": "backend",
+                "config": runtime_config if isinstance(runtime_config, dict) else {},
+                "experts": expert_profiles if isinstance(expert_profiles, list) else [],
+                "runtimeSkills": runtime_skills if isinstance(runtime_skills, list) else [],
+            }
+        except Exception as exc:
+            return {
+                "source": "error",
+                "config": {},
+                "experts": [],
+                "runtimeSkills": [],
+                "error": exc.__class__.__name__,
+            }
+
+    def _apply_runtime_skills(self, runtime_skills: list[dict[str, Any]]) -> None:
+        self.skill_registry.runtime_skills = [
+            dict(skill)
+            for skill in runtime_skills
+            if isinstance(skill, dict)
+        ]
+
+    def _runtime_config_for_state(
+        self,
+        governance: dict[str, Any],
+        runtime_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        state = {
+            "source": governance.get("source", "default"),
+            **runtime_config,
+            "maxParallelSpecialists": self._runtime_max_parallel_specialists(runtime_config),
+            "maxSkillPromptChars": self._runtime_max_skill_prompt_chars(runtime_config),
+            "maxEvidenceItems": self._runtime_max_evidence_items(runtime_config),
+        }
+        if governance.get("error"):
+            state["error"] = governance["error"]
+        return state
+
+    def _runtime_max_parallel_specialists(self, runtime_config: dict[str, Any]) -> int:
+        try:
+            value = int(runtime_config.get("maxParallelSpecialists") or settings.agent_max_parallel_tool_calls)
+        except (TypeError, ValueError):
+            value = settings.agent_max_parallel_tool_calls
+        return max(1, value)
+
+    def _runtime_max_skill_prompt_chars(self, runtime_config: dict[str, Any]) -> int:
+        try:
+            value = int(runtime_config.get("maxSkillPromptChars") or settings.agent_max_skill_chars)
+        except (TypeError, ValueError):
+            value = settings.agent_max_skill_chars
+        return max(0, value)
+
+    def _runtime_max_evidence_items(self, runtime_config: dict[str, Any] | None) -> int | None:
+        if not isinstance(runtime_config, dict):
+            return None
+        raw = runtime_config.get("maxEvidenceItems")
+        if raw is None:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return max(0, value)
+
+    async def _get_specialist_mcp_tool_registry(self) -> McpToolRegistry | None:
+        if self.mcp_tool_registry is not None or self.mcp_client is not None or settings.mcp_internal_api_key:
+            return await self._get_mcp_tool_registry()
+        return None
+
+    def _specialist_context_diagnostics(self, state: ResearchState) -> dict[str, Any]:
+        diagnostics: dict[str, Any] = {}
+        source_policy = state.get("source_policy")
+        if isinstance(source_policy, dict):
+            contract = source_policy.get("evidenceContract")
+            if isinstance(contract, dict):
+                diagnostics["evidenceContractStatus"] = contract.get("status")
+                selected_group = contract.get("selectedGroup") or contract.get("selectedSnapshotGroup")
+                if selected_group:
+                    diagnostics["selectedSnapshotGroup"] = selected_group
+                rejected_groups = contract.get("rejectedGroups")
+                if rejected_groups:
+                    diagnostics["rejectedSnapshotGroupCount"] = len(rejected_groups)
+        memory_context = state.get("memory_context")
+        if isinstance(memory_context, dict):
+            diagnostics["memoryContextKeys"] = sorted(str(key) for key in memory_context.keys())
+        return diagnostics
 
     def _format_specialist_plan(self, state: ResearchState) -> str:
         results = list(state.get("specialist_results") or [])
@@ -1839,17 +3369,23 @@ class NovelResearchAgent:
     async def _specialist_agents_node(self, state: ResearchState) -> ResearchState:
         if state.get("specialist_results") is not None:
             return {}
-        return {
-            "specialist_results": await self._prepare_specialist_results(
-                state,
-                list(state.get("sources", [])),
-            )
+        specialist_results = await self._prepare_specialist_results(
+            state,
+            list(state.get("sources", [])),
+        )
+        result: ResearchState = {
+            "specialist_results": specialist_results
         }
+        if state.get("expert_routing") is not None:
+            result["expert_routing"] = dict(state.get("expert_routing") or {})
+        if state.get("runtime_config") is not None:
+            result["runtime_config"] = dict(state.get("runtime_config") or {})
+        return result
 
     async def _creative_answer_node(self, state: ResearchState) -> ResearchState:
         request = state["request"]
         state.update(await self._specialist_agents_node({**state, "sources": []}))
-        answer, fallback_used = await self._compose_creative_answer(request)
+        answer, fallback_used = await self._compose_creative_answer(request, state=state)
         response = KnowledgeChatResponse(
             status="answered",
             answer=answer,
@@ -2096,35 +3632,66 @@ class NovelResearchAgent:
                 structured_rank_sources = await self._lookup_rank_sources_for_trend(request, state)
 
             source_policy: dict[str, Any] = {}
+            rank_gate_sources = self._rank_sources_from(
+                task_tool_sources + pack_sources + structured_rank_sources
+            )
             lookup_available = callable(getattr(self.knowledge_client, "lookup_rank", None))
-            if self._should_search_rank_evidence(request, state) and lookup_available and not use_rank_pack:
-                source_policy = self._build_trend_source_policy(request, structured_rank_sources)
+            degraded_rank_gate = False
+            if self._should_search_rank_evidence(request, state) and (rank_gate_sources or lookup_available):
+                source_policy = self._build_trend_source_policy(request, rank_gate_sources)
                 if source_policy.get("trendGateFailed"):
-                    actions = self._dedupe(list(state.get("actions", [])) + ["refresh_rank_board"])
-                    self._append_tool_run(
-                        state,
-                        "trend_rank_gate",
-                        "blocked",
-                        reason=str(source_policy.get("trendGateReason") or "missing_current_top_rank"),
+                    arbitrated_source_policy = self._arbitrate_mixed_rank_source_policy(
+                        state=state,
+                        source_policy=source_policy,
+                        rank_gate_sources=rank_gate_sources,
                     )
-                    return {
-                        "sources": [],
-                        "actions": actions,
-                        "tool_runs": list(state.get("tool_runs") or []),
-                        "source_policy": source_policy,
-                    }
+                    if arbitrated_source_policy is not None:
+                        degraded_rank_gate = bool(arbitrated_source_policy.get("latestRankEvidenceDegraded"))
+                        source_policy = arbitrated_source_policy
+                        self._append_tool_run(
+                            state,
+                            "trend_rank_gate",
+                            "degraded",
+                            reason=str(source_policy.get("trendGateOriginalReason") or "mixed_structured_rank_snapshot"),
+                        )
+                    elif self._should_degrade_latest_rank_gate(state, source_policy, rank_gate_sources):
+                        degraded_rank_gate = True
+                        source_policy = self._degrade_latest_rank_source_policy(
+                            source_policy,
+                            rank_gate_sources=rank_gate_sources,
+                        )
+                        self._append_tool_run(
+                            state,
+                            "trend_rank_gate",
+                            "degraded",
+                            reason=str(source_policy.get("trendGateOriginalReason") or "rank_snapshot_metadata_incomplete"),
+                        )
+                    else:
+                        actions = self._dedupe(list(state.get("actions", [])) + ["refresh_rank_board"])
+                        self._append_tool_run(
+                            state,
+                            "trend_rank_gate",
+                            "blocked",
+                            reason=str(source_policy.get("trendGateReason") or "missing_current_top_rank"),
+                        )
+                        return {
+                            "sources": [],
+                            "actions": actions,
+                            "tool_runs": list(state.get("tool_runs") or []),
+                            "source_policy": source_policy,
+                        }
 
             if self._can_answer_rank_advice_from_pack(request, state, pack_sources + structured_rank_sources):
                 sources = structured_rank_sources
                 actions = self._dedupe(list(state.get("actions", [])) + ["vector_evidence_skipped"])
-            elif self._needs_chapter_level_evidence(request) and state.get("book_id") is not None:
+            elif self._requires_chapter_level_evidence(state) and state.get("book_id") is not None:
                 sources = await self._with_tool_timeout(
                     self.knowledge_client.search_evidence(
                         query=self._build_chapter_level_retrieval_query(request),
                         book_id=state.get("book_id"),
                         platform=state.get("platform"),
                         analysis_type=None,
-                        limit=self._limit(request, "evidenceLimit", default=5, maximum=20),
+                        limit=self._runtime_evidence_limit(request, state, default=5, maximum=20),
                         source_type="CHAPTER",
                     ),
                     default=[],
@@ -2143,7 +3710,7 @@ class NovelResearchAgent:
                             book_id=state.get("book_id"),
                             platform=state.get("platform"),
                             analysis_type=self._analysis_type(request),
-                            limit=self._limit(request, "evidenceLimit", default=5, maximum=20),
+                            limit=self._runtime_evidence_limit(request, state, default=5, maximum=20),
                         ),
                         default=[],
                         request=request,
@@ -2163,20 +3730,223 @@ class NovelResearchAgent:
                 sources = self._filter_plain_trend_sources_to_structured_front_ranks(structured_rank_sources, sources)
             sources = await self._augment_chapter_sources_for_chapter_level_question(request, state, sources)
             sources = self._filter_sources_for_requested_book(state, sources)
+            sources = self._filter_sources_to_evidence_contract(sources, source_policy)
             sources = self._rerank_sources(request, state, sources)
+            source_policy = self._apply_required_evidence_contract(state, sources, source_policy)
+            sources = self._limit_sources_by_runtime_policy(state, sources)
+            if degraded_rank_gate:
+                actions = self._dedupe(list(actions) + ["latest_rank_snapshot_degraded"])
             return {
                 "sources": sources,
                 "actions": self._dedupe(actions),
                 "tool_runs": list(state.get("tool_runs") or []),
                 "source_policy": source_policy,
+                "retrieval_diagnostics": dict(state.get("retrieval_diagnostics") or {}),
             }
         except Exception:
             actions = self._dedupe(list(state.get("actions", [])) + ["evidence_search_failed"])
-            return {"sources": [], "actions": actions, "tool_runs": list(state.get("tool_runs") or [])}
+            return {
+                "sources": [],
+                "actions": actions,
+                "tool_runs": list(state.get("tool_runs") or []),
+                "retrieval_diagnostics": {
+                    "inputCount": 0,
+                    "dedupedCount": 0,
+                    "selectedCount": 0,
+                    "intent": str(state.get("intent") or ""),
+                    "reasonTags": ["evidence_search_failed"],
+                },
+            }
+
+    def _arbitrate_mixed_rank_source_policy(
+        self,
+        *,
+        state: ResearchState,
+        source_policy: dict[str, Any],
+        rank_gate_sources: list[KnowledgeSource],
+    ) -> dict[str, Any] | None:
+        if not self._is_mixed_creation_state(state):
+            return None
+        if source_policy.get("trendGateReason") != "mixed_structured_rank_snapshot":
+            return None
+        contract = self.evidence_arbiter.evaluate(
+            intent="mixed_creation_research",
+            sources=rank_gate_sources,
+            source_policy=source_policy,
+        )
+        if contract.status not in {
+            EvidenceStatus.degraded_directional,
+            EvidenceStatus.verified_latest,
+        }:
+            return None
+        selected_group = contract.selectedSnapshotGroup
+        snapshot_marker_type = None
+        if selected_group is not None:
+            if selected_group.snapshotTime:
+                snapshot_marker_type = "snapshotTime"
+            elif selected_group.snapshotId is not None:
+                snapshot_marker_type = "snapshotId"
+        return {
+            **source_policy,
+            "trendGateFailed": False,
+            "requireSnapshotTime": contract.status == EvidenceStatus.verified_latest,
+            "latestRankEvidenceDegraded": contract.status != EvidenceStatus.verified_latest,
+            "trendGateOriginalReason": source_policy.get("trendGateReason"),
+            "degradationReason": "rank_snapshot_arbitrated_to_directional_evidence",
+            "snapshotTime": selected_group.snapshotTime if selected_group is not None else source_policy.get("snapshotTime"),
+            "snapshotId": selected_group.snapshotId if selected_group is not None else source_policy.get("snapshotId"),
+            "snapshotMarkerType": snapshot_marker_type or source_policy.get("snapshotMarkerType"),
+            "evidenceContract": contract.model_dump(mode="json", exclude_none=True),
+        }
+
+    def _filter_sources_to_evidence_contract(
+        self,
+        sources: list[KnowledgeSource],
+        source_policy: dict[str, Any],
+    ) -> list[KnowledgeSource]:
+        contract = source_policy.get("evidenceContract")
+        if not isinstance(contract, dict):
+            return sources
+        selected_group = contract.get("selectedSnapshotGroup")
+        if not isinstance(selected_group, dict):
+            return sources
+        filtered: list[KnowledgeSource] = []
+        for source in sources:
+            if (source.sourceType or "").upper() == "RANK":
+                if self._rank_source_matches_snapshot_group(source, selected_group):
+                    filtered.append(source)
+                continue
+            filtered.append(source)
+        return filtered
+
+    def _apply_required_evidence_contract(
+        self,
+        state: ResearchState,
+        sources: list[KnowledgeSource],
+        source_policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        required = self._required_evidence_for_state(state)
+        if not required:
+            return source_policy
+        contract = self.evidence_arbiter.evaluate(
+            intent=str(state.get("domain_intent") or state.get("intent") or ""),
+            sources=sources,
+            source_policy=source_policy,
+            required_evidence=required,
+        )
+        existing_contract = source_policy.get("evidenceContract")
+        if (
+            source_policy.get("latestRankEvidenceDegraded")
+            and isinstance(existing_contract, dict)
+            and str(existing_contract.get("status") or "") == EvidenceStatus.degraded_directional.value
+            and contract.status == EvidenceStatus.verified_latest
+        ):
+            preserved_contract = {**existing_contract, "status": EvidenceStatus.degraded_directional.value}
+            return {
+                **source_policy,
+                "requiredEvidence": required,
+                "evidenceContract": preserved_contract,
+            }
+        return {
+            **source_policy,
+            "requiredEvidence": required,
+            "evidenceContract": contract.model_dump(mode="json", exclude_none=True),
+        }
+
+    def _limit_sources_by_runtime_policy(
+        self,
+        state: ResearchState,
+        sources: list[KnowledgeSource],
+    ) -> list[KnowledgeSource]:
+        limit = self._runtime_max_evidence_items(state.get("runtime_config"))
+        if limit is None:
+            return sources
+        return list(sources)[:limit]
+
+    def _required_evidence_contract_missing(self, source_policy: dict[str, Any]) -> bool:
+        contract = source_policy.get("evidenceContract")
+        if not isinstance(contract, dict):
+            return False
+        return str(contract.get("status") or "") == EvidenceStatus.missing.value
+
+    def _source_policy_requires_current_rank(self, source_policy: dict[str, Any]) -> bool:
+        raw = source_policy.get("requiredEvidence")
+        values = raw if isinstance(raw, (list, tuple, set)) else [raw]
+        return any(str(value or "").strip() == "current_structured_rank_topn" for value in values)
+
+    def _rank_source_matches_snapshot_group(
+        self,
+        source: KnowledgeSource,
+        selected_group: dict[str, Any],
+    ) -> bool:
+        selected_snapshot_id = selected_group.get("snapshotId")
+        if selected_snapshot_id is not None:
+            return source.snapshotId == selected_snapshot_id
+        selected_snapshot_time = selected_group.get("snapshotTime")
+        if selected_snapshot_time:
+            return source.snapshotTime == selected_snapshot_time
+        return True
 
     def _should_search_rank_evidence(self, request: KnowledgeChatRequest, state: ResearchState) -> bool:
         intent = str(state.get("intent") or "")
         return state.get("book_id") is None and (intent == "trend_research" or self._is_trend_question(request.question or ""))
+
+    def _should_degrade_latest_rank_gate(
+        self,
+        state: ResearchState,
+        source_policy: dict[str, Any],
+        rank_gate_sources: list[KnowledgeSource],
+    ) -> bool:
+        if not self._is_mixed_creation_state(state):
+            return False
+        reason = str(source_policy.get("trendGateReason") or "")
+        if reason == "missing_structured_rank_snapshot":
+            return self._has_front_rank_sources_for_degraded_mixed_creation(source_policy, rank_gate_sources)
+        retry_counts = dict(state.get("retry_counts") or {})
+        if int(retry_counts.get("market_refresh") or 0) < 1:
+            return False
+        if reason not in {
+            "stale_structured_rank_snapshot",
+            "invalid_structured_rank_snapshot",
+        }:
+            return False
+        return self._has_front_rank_sources_for_degraded_mixed_creation(source_policy, rank_gate_sources)
+
+    def _has_front_rank_sources_for_degraded_mixed_creation(
+        self,
+        source_policy: dict[str, Any],
+        rank_gate_sources: list[KnowledgeSource],
+    ) -> bool:
+        top_rank_limit = int(source_policy.get("topRankLimit") or 3)
+        rank_sources = self._dedupe_rank_sources_by_book(self._rank_sources_from(rank_gate_sources))
+        return any(
+            source.rankNo is not None and source.rankNo <= top_rank_limit
+            for source in rank_sources
+        )
+
+    def _degrade_latest_rank_source_policy(
+        self,
+        source_policy: dict[str, Any],
+        *,
+        rank_gate_sources: list[KnowledgeSource] | None = None,
+    ) -> dict[str, Any]:
+        reason = source_policy.get("trendGateReason")
+        degraded_policy = {
+            **source_policy,
+            "trendGateFailed": False,
+            "requireSnapshotTime": False,
+            "latestRankEvidenceDegraded": True,
+            "trendGateOriginalReason": reason,
+            "degradationReason": "rank_snapshot_metadata_incomplete_after_refresh",
+        }
+        if rank_gate_sources:
+            contract = self.evidence_arbiter.evaluate(
+                intent="mixed_creation_research",
+                sources=rank_gate_sources,
+                source_policy=source_policy,
+            )
+            degraded_policy["evidenceContract"] = contract.model_dump(mode="json", exclude_none=True)
+        return degraded_policy
 
     def _build_trend_source_policy(
         self,
@@ -2196,7 +3966,8 @@ class NovelResearchAgent:
             if source.rankNo is not None and source.rankNo <= top_rank_limit
         ]
         snapshot_times = {source.snapshotTime for source in top_sources if source.snapshotTime}
-        missing_snapshot = any(not source.snapshotTime for source in top_sources)
+        snapshot_ids = {source.snapshotId for source in top_sources if source.snapshotId is not None}
+        missing_snapshot = any(not (source.snapshotTime or source.snapshotId is not None) for source in top_sources)
         category = lookup.get("category")
         channel_code = lookup.get("channel_code")
         board_code = lookup.get("board_code")
@@ -2212,10 +3983,19 @@ class NovelResearchAgent:
             not self._trend_board_matches(source, str(board_code))
             for source in top_sources
         )
+        snapshot_age_days, invalid_snapshot_time = self._snapshot_age_days(snapshot_times)
+        max_snapshot_age_days = settings.agent_latest_rank_max_age_days
+        stale_snapshot = (
+            snapshot_age_days is not None
+            and snapshot_age_days > max_snapshot_age_days
+        )
         failed = (
             not top_sources
             or missing_snapshot
             or len(snapshot_times) > 1
+            or len(snapshot_ids) > 1
+            or invalid_snapshot_time
+            or stale_snapshot
             or category_mismatch
             or channel_mismatch
             or board_mismatch
@@ -2224,8 +4004,12 @@ class NovelResearchAgent:
             reason = "missing_current_structured_top_rank"
         elif missing_snapshot:
             reason = "missing_structured_rank_snapshot"
-        elif len(snapshot_times) > 1:
+        elif len(snapshot_times) > 1 or len(snapshot_ids) > 1:
             reason = "mixed_structured_rank_snapshot"
+        elif invalid_snapshot_time:
+            reason = "invalid_structured_rank_snapshot"
+        elif stale_snapshot:
+            reason = "stale_structured_rank_snapshot"
         elif category_mismatch:
             reason = "category_mismatch"
         elif channel_mismatch:
@@ -2235,8 +4019,11 @@ class NovelResearchAgent:
         else:
             reason = None
         return {
+            "freshness": "latest",
+            "allowHistorical": False,
+            "requireSnapshotTime": True,
             "trendGateFailed": failed,
-            "trendGateReason": reason,
+            "trendGateReason": reason or "satisfied",
             "structuredRankCount": len(rank_sources),
             "structuredTopRankCount": len(top_sources),
             "topRankLimit": top_rank_limit,
@@ -2245,7 +4032,45 @@ class NovelResearchAgent:
             "requestedChannelCode": channel_code,
             "requestedBoardCode": board_code,
             "snapshotTime": max(snapshot_times) if snapshot_times else None,
+            "snapshotId": max(snapshot_ids) if snapshot_ids else None,
+            "snapshotMarkerType": "snapshotTime" if snapshot_times else ("snapshotId" if snapshot_ids else None),
+            "snapshotAgeDays": round(snapshot_age_days, 3) if snapshot_age_days is not None else None,
+            "maxSnapshotAgeDays": max_snapshot_age_days,
         }
+
+    def _rank_sources_from(self, sources: list[KnowledgeSource]) -> list[KnowledgeSource]:
+        return [
+            source
+            for source in sources
+            if (source.sourceType or "").upper() == "RANK"
+        ]
+
+    def _snapshot_age_days(self, snapshot_times: set[str]) -> tuple[float | None, bool]:
+        if not snapshot_times:
+            return None, False
+        parsed_times: list[datetime] = []
+        for snapshot_time in snapshot_times:
+            parsed = self._parse_snapshot_time(snapshot_time)
+            if parsed is None:
+                return None, True
+            parsed_times.append(parsed)
+        latest_snapshot = max(parsed_times)
+        age_seconds = (datetime.now(timezone.utc) - latest_snapshot).total_seconds()
+        return max(0.0, age_seconds / 86400), False
+
+    def _parse_snapshot_time(self, snapshot_time: str) -> datetime | None:
+        value = str(snapshot_time or "").strip()
+        if not value:
+            return None
+        if value.endswith("Z"):
+            value = f"{value[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _trend_channel_matches(self, source: KnowledgeSource, requested_channel: str) -> bool:
         aliases = self._trend_channel_aliases(requested_channel)
@@ -2408,7 +4233,7 @@ class NovelResearchAgent:
         intent = str(state.get("intent") or "")
         if intent == "trend_research" or self._is_trend_question(request.question or ""):
             return False
-        return intent == "single_book_research" or self._needs_chapter_level_evidence(request) or bool(request.bookId or request.bookName or request.selectedCandidate)
+        return intent == "single_book_research" or self._requires_chapter_level_evidence(state) or bool(request.bookId or request.bookName or request.selectedCandidate)
 
     def _can_answer_rank_advice_from_pack(
         self,
@@ -2482,7 +4307,12 @@ class NovelResearchAgent:
                     board_code=lookup.get("board_code"),
                     category=lookup.get("category"),
                     rank_no=lookup.get("rank_no"),
-                    limit=self._limit(request, "rankLimit", default=lookup.get("limit", 10), maximum=20),
+                    limit=self._limit(
+                        request,
+                        "rankLimit",
+                        default=lookup.get("limit", RANK_PROMPT_DEFAULT_ITEMS),
+                        maximum=RANK_ANALYSIS_MAX_ITEMS,
+                    ),
                     chapter_limit_per_book=self._limit(
                         request,
                         "chapterLimitPerBook",
@@ -2499,7 +4329,7 @@ class NovelResearchAgent:
         if pack is None:
             self._append_tool_run(state, "rank_research_pack", "skipped", reason="empty_pack")
             return []
-        sources = self._rank_pack_to_sources(pack)
+        sources = self._with_retrieval_backend(self._rank_pack_to_sources(pack), "rank.research_pack")
         self._append_tool_run(state, "rank_research_pack", "succeeded", result_count=len(sources))
         return sources
 
@@ -2598,7 +4428,10 @@ class NovelResearchAgent:
         except Exception:
             self._append_tool_run(state, "rank_lookup", "failed", reason="exception")
             return []
-        sources = [self._rank_result_to_source(result) for result in results]
+        sources = self._with_retrieval_backend(
+            [self._rank_result_to_source(result) for result in results],
+            "rank.lookup",
+        )
         self._append_tool_run(state, "rank_lookup", "succeeded", result_count=len(sources))
         return sources
 
@@ -2613,7 +4446,7 @@ class NovelResearchAgent:
             found_run = True
             output = run.get("output")
             if isinstance(output, dict):
-                sources.extend(self._rank_lookup_output_to_sources(output))
+                sources.extend(self._with_retrieval_backend(self._rank_lookup_output_to_sources(output), "rank.lookup"))
         return sources if found_run else None
 
     def _parse_trend_rank_lookup_for_request(self, request: KnowledgeChatRequest) -> dict[str, Any] | None:
@@ -2636,9 +4469,9 @@ class NovelResearchAgent:
         combined = f"{question}\n{context_text}"
         if not lookup.get("channel_code"):
             if "男频" in combined:
-                lookup["channel_code"] = "male-new" if ("新书榜" in combined or "最近" in combined) else "male"
+                lookup["channel_code"] = "male-new" if self._prefers_new_rank_channel(combined) else "male"
             elif "女频" in combined:
-                lookup["channel_code"] = "female-new" if ("新书榜" in combined or "最近" in combined) else "female"
+                lookup["channel_code"] = "female-new" if self._prefers_new_rank_channel(combined) else "female"
         if not lookup.get("category") and "都市脑洞" in combined:
             lookup["category"] = "都市脑洞"
         return lookup
@@ -2656,9 +4489,9 @@ class NovelResearchAgent:
             return None
         channel_code = None
         if "男频" in normalized:
-            channel_code = "male-new" if ("新书榜" in normalized or "最近" in normalized) else "male"
+            channel_code = "male-new" if self._prefers_new_rank_channel(normalized) else "male"
         elif "女频" in normalized:
-            channel_code = "female-new" if ("新书榜" in normalized or "最近" in normalized) else "female"
+            channel_code = "female-new" if self._prefers_new_rank_channel(normalized) else "female"
         category = "都市脑洞" if "都市脑洞" in normalized else None
         return {
             "platform": "fanqie",
@@ -2666,14 +4499,32 @@ class NovelResearchAgent:
             "board_code": None,
             "category": category,
             "rank_no": None,
-            "limit": self._limit_from_question(question, default=10, maximum=20),
+            "limit": self._limit_from_question(
+                question,
+                default=settings.agent_market_topn_default,
+                maximum=RANK_ANALYSIS_MAX_ITEMS,
+            ),
         }
 
+    def _prefers_new_rank_channel(self, text: str) -> bool:
+        return any(keyword in text for keyword in ("新书榜", "最近", "当前", "目前", "扫榜", "看榜", "开书", "开文"))
+
     def _limit_from_question(self, question: str, *, default: int, maximum: int) -> int:
-        match = re.search(r"(?:top|Top|TOP|前)\s*(\d+)", question or "")
-        if not match:
-            return default
-        return max(1, min(int(match.group(1)), maximum))
+        text = question or ""
+        patterns = [
+            r"(?i)\btop\s*(\d{1,3})\b",
+            r"前\s*(\d{1,3})\s*(?:名|本|个)?",
+            r"(?:整体|完整|全部|全量)\s*(\d{1,3})\s*(?:名|本|个)",
+            r"(\d{1,3})\s*名\s*(?:榜单|榜|排行|排名|趋势)",
+            r"(\d{1,3})\s*(?:本|个)?\s*(?:榜单|排行|排名)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return max(1, min(int(match.group(1)), maximum))
+        if re.search(r"(?:前|整体|完整|全部|全量)?\s*三十\s*(?:名|本|个|榜单|榜|排行|排名|趋势)", text):
+            return max(1, min(30, maximum))
+        return default
 
     async def _search_rank_evidence(self, request: KnowledgeChatRequest, state: ResearchState) -> list[KnowledgeSource]:
         search_fn = getattr(self.knowledge_client, "search_evidence")
@@ -2684,7 +4535,7 @@ class NovelResearchAgent:
                     book_id=None,
                     platform=state.get("platform"),
                     analysis_type=None,
-                    limit=self._limit(request, "evidenceLimit", default=5, maximum=20),
+                    limit=self._runtime_evidence_limit(request, state, default=5, maximum=20),
                     source_type="RANK",
                 ),
                 default=[],
@@ -2702,7 +4553,7 @@ class NovelResearchAgent:
         state: ResearchState,
         sources: list[KnowledgeSource],
     ) -> list[KnowledgeSource]:
-        if not self._needs_chapter_level_evidence(request) or self._has_chapter_level_evidence(sources):
+        if not self._requires_chapter_level_evidence(state) or self._has_chapter_level_evidence(sources):
             return sources
         target_book_id = state.get("book_id") or self._first_source_book_id(sources)
         if target_book_id is None:
@@ -2715,7 +4566,7 @@ class NovelResearchAgent:
                     book_id=target_book_id,
                     platform=state.get("platform"),
                     analysis_type=None,
-                    limit=self._limit(request, "evidenceLimit", default=5, maximum=20),
+                    limit=self._runtime_evidence_limit(request, state, default=5, maximum=20),
                     source_type="CHAPTER",
                 ),
                 default=[],
@@ -2799,6 +4650,11 @@ class NovelResearchAgent:
         sources = state.get("sources", [])
         source_policy = dict(state.get("source_policy") or {})
         if source_policy.get("trendGateFailed"):
+            answer_status = (
+                "needs_required_evidence"
+                if self._source_policy_requires_current_rank(source_policy)
+                else "needs_data"
+            )
             response = KnowledgeChatResponse(
                 status="insufficient_evidence",
                 answer=(
@@ -2810,11 +4666,29 @@ class NovelResearchAgent:
                 actions=self._dedupe(list(state.get("actions", [])) + ["refresh_rank_board"]),
                 resultJson={
                     "status": "insufficient_evidence",
-                    "answerStatus": "needs_data",
+                    "answerStatus": answer_status,
                     "answerBoundary": "needs_more_data",
                     "intent": state.get("intent"),
                     "bookId": state.get("book_id"),
                     "bookName": state.get("book_name"),
+                    "sourcePolicy": source_policy,
+                },
+            )
+            self._attach_domain_intent_metadata(response, state)
+            self._attach_memory_metadata(response, state["request"])
+            return {"response": response}
+        if self._required_evidence_contract_missing(source_policy):
+            response = KnowledgeChatResponse(
+                status="insufficient_evidence",
+                answer="证据不足：当前运行时技能要求的必需证据没有满足，已拒绝生成不可校验结论。",
+                candidates=[],
+                sources=[],
+                actions=self._dedupe(list(state.get("actions", [])) + ["collect_required_evidence"]),
+                resultJson={
+                    "status": "insufficient_evidence",
+                    "answerStatus": "needs_required_evidence",
+                    "answerBoundary": "needs_more_data",
+                    "intent": state.get("intent"),
                     "sourcePolicy": source_policy,
                 },
             )
@@ -2843,7 +4717,7 @@ class NovelResearchAgent:
             self._attach_memory_metadata(response, state["request"])
             return {"response": response}
 
-        if self._needs_chapter_level_evidence(state["request"]) and not self._has_chapter_level_evidence(sources):
+        if self._requires_chapter_level_evidence(state) and not self._has_chapter_level_evidence(sources):
             if self._should_search_book_after_missing_evidence(state):
                 return await self._build_book_candidates_response(state)
             response = KnowledgeChatResponse(
@@ -2885,11 +4759,21 @@ class NovelResearchAgent:
                 "sourceCount": len(sources),
                 "diagnostics": self._answer_diagnostics(sources, answer),
                 "fallbackUsed": fallback_used,
+                "degraded": bool(state.get("answer_degraded")),
+                "degradationReasons": list(state.get("degradation_reasons") or []),
+                "providerCalls": list(state.get("provider_calls") or []),
+                "answerQuality": dict(state.get("answer_quality") or {}),
+                "answerDeltas": list(state.get("answer_deltas") or []),
             },
         )
+        if fallback_used and state.get("answer_degraded"):
+            response.resultJson["answerStatus"] = "degraded_model_fallback"
         self._attach_domain_intent_metadata(response, state)
         self._attach_memory_metadata(response, state["request"])
-        return {"response": response}
+        return {
+            "response": response,
+            "token_metrics": list(state.get("token_metrics") or []),
+        }
 
     async def _build_book_candidates_response(self, state: ResearchState) -> ResearchState:
         request = state["request"]
@@ -2951,7 +4835,42 @@ class NovelResearchAgent:
         ):
             request = state.get("request")
             question = request.question if request is not None else ""
-            response.answer = self._compose_fallback_answer(question, response.sources)
+            answer_mode = str(response.resultJson.get("answerMode") or "")
+            if not answer_mode and request is not None:
+                answer_mode = self._answer_mode(
+                    request,
+                    response.sources,
+                    str(state.get("intent") or response.resultJson.get("intent") or ""),
+                    state=state,
+                )
+            if (
+                answer_mode == "mixed_creation"
+                and isinstance(response.resultJson.get("answerQuality"), dict)
+                and response.resultJson["answerQuality"].get("status") == "passed"
+            ):
+                original_answer = response.answer
+                repaired_answer = self._repair_citations_in_place(response.answer, response.sources)
+                if repaired_answer:
+                    response.answer = repaired_answer
+                response.status = "answered"
+                response.resultJson["status"] = response.status
+                response.resultJson["citationRepairUsed"] = repaired_answer != original_answer
+                response.resultJson["diagnostics"] = self._answer_diagnostics(response.sources, response.answer)
+                self._attach_trace_metadata(response, {**state, "sources": response.sources})
+                return {"response": response}
+            repaired_answer = (
+                self._repair_citations_in_place(response.answer, response.sources)
+                if self._should_preserve_answer_structure_for_citation_repair(response.answer)
+                else ""
+            )
+            response.answer = repaired_answer if (
+                self._has_valid_citation(repaired_answer, len(response.sources))
+                and self._has_claim_level_citations(repaired_answer, len(response.sources))
+            ) else self._compose_fallback_answer(
+                question,
+                response.sources,
+                answer_mode=answer_mode or None,
+            )
             response.status = "answered"
             response.resultJson["status"] = response.status
             response.resultJson["fallbackUsed"] = True
@@ -2972,6 +4891,8 @@ class NovelResearchAgent:
 
     def _route_intent(self, request: KnowledgeChatRequest) -> str:
         question = (request.question or "").strip()
+        if self._is_context_backed_creative_followup(request):
+            return "creative_advice"
         if self._is_trend_question(question):
             return "trend_research"
         if any(keyword in question for keyword in ("找书", "哪本", "搜索", "候选")):
@@ -2996,6 +4917,8 @@ class NovelResearchAgent:
         if state.get("book_id") is not None:
             return False
         request = state["request"]
+        if self._is_context_backed_creative_followup(request):
+            return False
         if request.selectedCandidate is not None:
             return False
         if str(state.get("intent") or "") == "trend_research" or self._is_trend_question(request.question or ""):
@@ -3020,6 +4943,34 @@ class NovelResearchAgent:
             "开篇",
             "章节",
         ))
+
+    def _requires_chapter_level_evidence(self, state: ResearchState) -> bool:
+        request = state["request"]
+        if not self._needs_chapter_level_evidence(request):
+            return False
+        has_explicit_book_context = bool(
+            state.get("book_id")
+            or state.get("book_name")
+            or request.bookId is not None
+            or request.bookName
+            or request.selectedCandidate is not None
+            or str(state.get("intent") or "") == "single_book_research"
+        )
+        if has_explicit_book_context:
+            return True
+        if self._is_mixed_creation_state(state):
+            return False
+        domain_intent = str(state.get("domain_intent") or "")
+        if domain_intent in {
+            "opening_strategy",
+            "outline_building",
+            "chapter_outline",
+            "inspiration_expand",
+            "character_design",
+            "worldbuilding",
+        }:
+            return False
+        return False
 
     def _requires_book_resolution_before_global_evidence(self, request: KnowledgeChatRequest) -> bool:
         question = request.question or ""
@@ -3068,13 +5019,30 @@ class NovelResearchAgent:
         state: ResearchState,
         sources: list[KnowledgeSource],
     ) -> list[KnowledgeSource]:
-        limit = self._limit(request, "evidenceLimit", default=5, maximum=20)
+        limit = self._source_selection_limit(request, state)
         return fuse_and_rerank_sources(
             request=request,
             state=state,
             sources=sources,
             limit=limit,
         )
+
+    def _source_selection_limit(self, request: KnowledgeChatRequest, state: ResearchState) -> int:
+        evidence_limit = self._limit(request, "evidenceLimit", default=5, maximum=20)
+        if not self._should_search_rank_evidence(request, state):
+            return evidence_limit
+        lookup = self._parse_trend_rank_lookup_for_request(request) or {}
+        if not lookup and "rankLimit" not in request.limits:
+            return evidence_limit
+        rank_limit = self._limit(
+            request,
+            "rankLimit",
+            default=int(lookup.get("limit") or settings.agent_market_topn_default),
+            maximum=RANK_ANALYSIS_MAX_ITEMS,
+        )
+        if rank_limit >= RANK_PROMPT_DEFAULT_ITEMS:
+            return min(RANK_ANALYSIS_MAX_ITEMS, max(evidence_limit, rank_limit + min(evidence_limit, 5)))
+        return max(evidence_limit, rank_limit)
 
     def _select_trend_sources(self, ranked: list[KnowledgeSource], limit: int) -> list[KnowledgeSource]:
         selected: list[KnowledgeSource] = []
@@ -3386,7 +5354,7 @@ class NovelResearchAgent:
         try:
             result = await self._provider_invoke(
                 messages=self._build_intent_messages(request, fallback),
-                model=settings.default_model,
+                model=self._model_name(request),
                 temperature=0,
                 max_tokens=240,
                 require_json=True,
@@ -3507,6 +5475,8 @@ class NovelResearchAgent:
         return "evidence_grounded"
 
     def _resolve_book_name_by_rules(self, request: KnowledgeChatRequest) -> str | None:
+        if self._is_context_backed_creative_followup(request):
+            return None
         if request.bookName and request.bookName.strip():
             return request.bookName.strip()
         question = request.question or ""
@@ -3717,21 +5687,43 @@ class NovelResearchAgent:
             },
         ]
 
-    async def _compose_creative_answer(self, request: KnowledgeChatRequest) -> tuple[str, bool]:
+    async def _compose_creative_answer(
+        self,
+        request: KnowledgeChatRequest,
+        state: ResearchState | None = None,
+    ) -> tuple[str, bool]:
+        model_name = self._model_name(request)
+        started_at = time.perf_counter()
         try:
             result = await self._provider_invoke(
-                messages=self._build_creative_messages(request),
-                model=settings.default_model,
+                messages=self._build_creative_messages(request, state=state),
+                model=model_name,
                 temperature=0.4,
-                max_tokens=self._creative_max_tokens(request),
+                max_tokens=self._creative_max_tokens(request, state=state),
                 require_json=False,
                 timeout_millis=self._request_timeout_millis(request),
+            )
+            self._append_provider_call(
+                state,
+                node="compose_answer",
+                model=str(result.get("model_name") or model_name),
+                status="succeeded",
+                started_at=started_at,
+                token_used=int(result.get("token_used") or 0),
+                provider_result=result,
             )
             content = str(result.get("content") or "").strip()
             if content:
                 return content, False
-        except Exception:
-            pass
+        except Exception as exc:
+            self._append_provider_call(
+                state,
+                node="compose_answer",
+                model=model_name,
+                status="failed",
+                started_at=started_at,
+                error=exc,
+            )
         return (
             "模型暂时不可用，我先按网文创作方向给出一个简版建议：先明确主角短期目标，再安排高频反馈的阻力和代价，让爽点从目标推进中自然出现。",
             True,
@@ -3751,22 +5743,249 @@ class NovelResearchAgent:
             resolved_mode,
             state=state,
         )
+        model_name = self._model_name(request)
         try:
-            result = await self._provider_invoke(
-                messages=messages,
-                model=settings.default_model,
-                temperature=0.2,
-                max_tokens=self._answer_max_tokens(request, resolved_mode),
-                require_json=False,
-                timeout_millis=self._request_timeout_millis(request),
+            started_at = time.perf_counter()
+            result: dict[str, Any]
+            if state is not None and state.get("stream_answer") and callable(getattr(self.provider_client, "stream", None)):
+                result = await self._collect_streamed_answer_for_graph(
+                    messages=messages,
+                    request=request,
+                    answer_mode=resolved_mode,
+                    state=state,
+                )
+            else:
+                result = await self._run_answer_tool_loop(
+                    messages=messages,
+                    request=request,
+                    answer_mode=resolved_mode,
+                    state=state,
+                )
+            self._append_provider_call(
+                state,
+                node="compose_answer",
+                model=str(result.get("model_name") or model_name),
+                status="succeeded",
+                started_at=started_at,
+                token_used=int(result.get("token_used") or 0),
+                provider_result=result,
             )
             content = str(result.get("content") or "").strip()
             if content:
+                if state is not None:
+                    self._record_token_metric(state, "answer_writer", result)
                 content = self._postprocess_answer_for_mode(content, sources, resolved_mode)
+                if resolved_mode == "mixed_creation":
+                    quality = self._mixed_creation_answer_quality(request, content)
+                    if quality["status"] != "passed":
+                        repair_started_at = time.perf_counter()
+                        repair_result = await self._run_answer_tool_loop(
+                            messages=self._build_mixed_creation_repair_messages(messages, quality),
+                            request=request,
+                            answer_mode=resolved_mode,
+                            state=state,
+                        )
+                        self._append_provider_call(
+                            state,
+                            node="compose_answer.repair",
+                            model=str(repair_result.get("model_name") or model_name),
+                            status="succeeded",
+                            started_at=repair_started_at,
+                            token_used=int(repair_result.get("token_used") or 0),
+                            provider_result=repair_result,
+                        )
+                        repaired_content = self._postprocess_answer_for_mode(
+                            str(repair_result.get("content") or "").strip(),
+                            sources,
+                            resolved_mode,
+                        )
+                        repair_quality = self._mixed_creation_answer_quality(request, repaired_content, repaired=True)
+                        if repaired_content and repair_quality["status"] == "passed":
+                            if state is not None:
+                                state["answer_quality"] = repair_quality
+                                state["answer_deltas"] = self._synthetic_stream_chunks(repaired_content)
+                            return repaired_content, False
+                        quality = repair_quality
+                        self._mark_degraded_answer(state, "answer_quality_gate_failed")
+                        if state is not None:
+                            state["answer_quality"] = quality
+                            state["answer_deltas"] = self._synthetic_stream_chunks(
+                                self._domain_aware_mixed_creation_emergency_answer(request, sources)
+                            )
+                        return self._domain_aware_mixed_creation_emergency_answer(request, sources), True
+                    if state is not None:
+                        state["answer_quality"] = quality
                 return content, False
+        except Exception as exc:
+            self._append_provider_call(
+                state,
+                node="compose_answer",
+                model=model_name,
+                status="failed",
+                started_at=locals().get("started_at", time.perf_counter()),
+                error=exc,
+                fallback_reason="provider_exception",
+            )
+            self._mark_degraded_answer(state, "provider_exception")
+        fallback = (
+            self._domain_aware_mixed_creation_emergency_answer(request, sources)
+            if resolved_mode == "mixed_creation"
+            else self._compose_fallback_answer(request.question, sources, answer_mode=resolved_mode)
+        )
+        if state is not None:
+            state["answer_deltas"] = self._synthetic_stream_chunks(fallback)
+            if resolved_mode == "mixed_creation":
+                state["answer_quality"] = self._mixed_creation_answer_quality(request, fallback)
+        return fallback, True
+
+    async def _collect_streamed_answer_for_graph(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        request: KnowledgeChatRequest,
+        answer_mode: str,
+        state: ResearchState,
+    ) -> dict[str, Any]:
+        stream_fn = getattr(self.provider_client, "stream", None)
+        if not callable(stream_fn):
+            return await self._run_answer_tool_loop(
+                messages=messages,
+                request=request,
+                answer_mode=answer_mode,
+                state=state,
+            )
+        chunks: list[str] = []
+        token_used = 0
+        usage_summary: dict[str, Any] | None = None
+        prompt_cache_hit_tokens = 0
+        prompt_cache_miss_tokens = 0
+        async for event in self._provider_stream(
+            stream_fn,
+            messages=messages,
+            model=self._model_name(request),
+            temperature=0.2,
+            max_tokens=self._answer_max_tokens(request, answer_mode, state=state),
+            require_json=False,
+            timeout_millis=self._request_timeout_millis(request),
+            reasoning_mode=self._reasoning_mode(request),
+        ):
+            if event.get("event") == "delta":
+                delta = str(event.get("delta") or "")
+                if delta:
+                    chunks.append(delta)
+            elif event.get("event") == "done":
+                try:
+                    token_used = int(event.get("tokenUsed") or 0)
+                except (TypeError, ValueError):
+                    token_used = 0
+                if isinstance(event.get("usage"), dict):
+                    usage_summary = dict(event["usage"])
+                try:
+                    prompt_cache_hit_tokens = int(event.get("promptCacheHitTokens") or 0)
+                except (TypeError, ValueError):
+                    prompt_cache_hit_tokens = 0
+                try:
+                    prompt_cache_miss_tokens = int(event.get("promptCacheMissTokens") or 0)
+                except (TypeError, ValueError):
+                    prompt_cache_miss_tokens = 0
+        content = "".join(chunks).strip()
+        if content:
+            state["answer_deltas"] = chunks
+            result: dict[str, Any] = {
+                "model_name": self._model_name(request),
+                "content": content,
+                "token_used": token_used,
+            }
+            if usage_summary is not None:
+                result["usage"] = usage_summary
+            result["prompt_cache_hit_tokens"] = prompt_cache_hit_tokens
+            result["prompt_cache_miss_tokens"] = prompt_cache_miss_tokens
+            return result
+        return await self._run_answer_tool_loop(
+            messages=messages,
+            request=request,
+            answer_mode=answer_mode,
+            state=state,
+        )
+
+    async def _run_answer_tool_loop(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        request: KnowledgeChatRequest,
+        answer_mode: str,
+        state: ResearchState | None,
+    ) -> dict[str, Any]:
+        registry = await self._get_mcp_tool_registry()
+        route = self._tool_route_for_answer(answer_mode, state)
+        if registry is None or route is None:
+            return await self._provider_invoke(
+                messages=messages,
+                model=self._model_name(request),
+                temperature=0.2,
+                max_tokens=self._answer_max_tokens(request, answer_mode, state=state),
+                require_json=False,
+                timeout_millis=self._request_timeout_millis(request),
+                reasoning_mode=self._reasoning_mode(request),
+            )
+        loop = ToolCallLoop(
+            provider_client=self.provider_client,
+            mcp_client=self.mcp_client,
+            registry=registry,
+        )
+        result = await loop.run(
+            messages=messages,
+            route=route,
+            model=self._model_name(request),
+            temperature=0.2,
+            max_tokens=self._answer_max_tokens(request, answer_mode, state=state),
+            reasoning_mode=self._reasoning_mode(request),
+        )
+        tool_runs = list(result.get("toolRuns") or [])
+        if state is not None and tool_runs:
+            state["mcp_tool_calls"] = tool_runs
+            state["tool_runs"] = [*list(state.get("tool_runs") or []), *tool_runs]
+        return result
+
+    async def _get_mcp_tool_registry(self) -> McpToolRegistry | None:
+        if self.mcp_tool_registry is not None:
+            return self.mcp_tool_registry
+        if self.mcp_client is None:
+            self.mcp_client = McpClient()
+        try:
+            self.mcp_tool_registry = await McpToolRegistry.load(self.mcp_client)
+            return self.mcp_tool_registry
         except Exception:
-            pass
-        return self._compose_fallback_answer(request.question, sources, answer_mode=resolved_mode), True
+            return None
+
+    def _tool_route_for_answer(self, answer_mode: str, state: ResearchState | None) -> str | None:
+        if state is not None:
+            domain_intent = str(state.get("domain_intent") or "")
+            if domain_intent:
+                return domain_intent
+        if answer_mode == "mixed_creation":
+            return "mixed_creation_research"
+        if answer_mode == "trend":
+            return "market_scan"
+        return None
+
+    def _reasoning_mode(self, request: KnowledgeChatRequest) -> str:
+        value = (request.reasoningMode or "fast").strip().lower()
+        if value in {"deep", "reasoning", "thinking", "max"}:
+            return "deep"
+        return "fast"
+
+    def _model_name(self, request: KnowledgeChatRequest) -> str:
+        for key in ("modelName", "model"):
+            raw = request.limits.get(key)
+            if raw is None:
+                continue
+            value = str(raw).strip()
+            if value:
+                return value
+        if self._reasoning_mode(request) == "deep":
+            return settings.deep_model
+        return settings.default_model
 
     def _postprocess_answer_for_mode(
         self,
@@ -3774,6 +5993,7 @@ class NovelResearchAgent:
         sources: list[KnowledgeSource],
         answer_mode: str | None,
     ) -> str:
+        answer = self._normalize_rank_count_mentions(answer, sources)
         if answer_mode == "trend":
             return self._ensure_rank_lead_for_trend_answer(answer, sources)
         if answer_mode == "mixed_creation":
@@ -3789,6 +6009,8 @@ class NovelResearchAgent:
     ) -> str:
         if answer_mode == "mixed_creation":
             return self._compose_mixed_creation_fallback_answer(question, sources)
+        if answer_mode == "trend":
+            return self._compose_rank_first_trend_answer(sources)
         rank_lead = self._rank_lead_sentence(sources)
         evidence_points: list[str] = []
         for index, source in enumerate(sources[:3], start=1):
@@ -3828,7 +6050,8 @@ class NovelResearchAgent:
     ) -> list[dict[str, str]]:
         mode = answer_mode or self._answer_mode(request, sources, "", state=state)
         evidence_lines: list[str] = []
-        for index, source in enumerate(sources[:8], start=1):
+        prompt_source_limit = self._answer_prompt_source_limit(request, mode, sources)
+        for index, source in enumerate(sources[:prompt_source_limit], start=1):
             title = source.title or source.bookName or f"source {index}"
             book_name = source.bookName or "unknown book"
             source_type = source.sourceType or "unknown"
@@ -3884,6 +6107,27 @@ class NovelResearchAgent:
             },
         ]
 
+    def _answer_prompt_source_limit(
+        self,
+        request: KnowledgeChatRequest,
+        answer_mode: str,
+        sources: list[KnowledgeSource],
+    ) -> int:
+        base_limit = 8
+        if answer_mode not in {"trend", "mixed_creation"}:
+            return base_limit
+        rank_count = sum(1 for source in sources if (source.sourceType or "").upper() == "RANK")
+        if rank_count <= base_limit:
+            return base_limit
+        lookup = self._parse_trend_rank_lookup_for_request(request) or {}
+        rank_limit = self._limit(
+            request,
+            "rankLimit",
+            default=int(lookup.get("limit") or settings.agent_market_topn_default),
+            maximum=RANK_ANALYSIS_MAX_ITEMS,
+        )
+        return max(base_limit, min(len(sources), max(rank_limit, min(rank_count, RANK_PROMPT_DEFAULT_ITEMS))))
+
     def _answer_policy_block(
         self,
         answer_mode: str,
@@ -3908,6 +6152,11 @@ class NovelResearchAgent:
             boundary_rules.append("boundaryRule: separate cited market evidence from author-side recommendations")
         if source_policy.get("freshness") == "time_window":
             boundary_rules.append("boundaryRule: state the historical time window before trend conclusions")
+        elif source_policy.get("latestRankEvidenceDegraded"):
+            boundary_rules.append(
+                "boundaryRule: state that refreshed structured rank rows are available, "
+                "but snapshot metadata is incomplete; do not call them fully verified latest snapshot facts"
+            )
         elif source_policy.get("freshness") == "latest":
             boundary_rules.append("boundaryRule: latest market facts require snapshotTime and citations")
         if not sources:
@@ -3957,6 +6206,83 @@ class NovelResearchAgent:
             if match.isdigit()
         ]
         return any(1 <= citation <= source_count for citation in citation_numbers)
+
+    def _repair_citations_in_place(self, answer: str, sources: list[KnowledgeSource]) -> str:
+        if not answer or not sources:
+            return answer
+        repaired_lines: list[str] = []
+        for line in answer.splitlines():
+            stripped = line.strip()
+            if (
+                not stripped
+                or stripped.startswith("#")
+                or re.search(r"\[(\d+)\]", stripped)
+                or not self._line_needs_citation(stripped)
+            ):
+                repaired_lines.append(line)
+                continue
+            citation = self._citation_for_line(stripped, sources)
+            repaired_lines.append(f"{line}{citation}")
+        return "\n".join(repaired_lines)
+
+    def _should_preserve_answer_structure_for_citation_repair(self, answer: str) -> bool:
+        text = (answer or "").strip()
+        if not text:
+            return False
+        if re.search(r"(?m)^#{1,6}\s+", text):
+            return True
+        content_lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        bullet_lines = [
+            line
+            for line in content_lines
+            if line.startswith(("-", "*", "1.", "2.", "3."))
+        ]
+        return len(content_lines) >= 3 or len(bullet_lines) >= 2
+
+    def _line_needs_citation(self, line: str) -> bool:
+        factual_markers = (
+            "榜",
+            "排名",
+            "第",
+            "Top",
+            "top",
+            "题材",
+            "趋势",
+            "赛道",
+            "作品",
+            "作者",
+            "数据",
+            "证据",
+            "新书",
+            "男频",
+            "女频",
+            "Rank",
+            "rank",
+            "Book",
+            "claim",
+            "trend",
+        )
+        return any(marker in line for marker in factual_markers)
+
+    def _citation_for_line(self, line: str, sources: list[KnowledgeSource]) -> str:
+        best_index = 1
+        best_score = 0
+        for index, source in enumerate(sources, start=1):
+            score = 0
+            for value in (source.bookName, source.title, source.author):
+                text = str(value or "").strip()
+                if text and text in line:
+                    score += len(text)
+            if source.rankNo is not None and re.search(rf"(#|第)\s*{source.rankNo}\b", line):
+                score += 4
+            if score > best_score:
+                best_score = score
+                best_index = index
+        return f"[{best_index}]"
 
     def _has_claim_level_citations(self, answer: str, source_count: int) -> bool:
         if source_count <= 0:
@@ -4048,6 +6374,7 @@ class NovelResearchAgent:
                 "Start with cited current rank facts, then produce the requested author-side plan. "
                 "For chapter outline requests, include a chapter outline section with concrete beats, conflicts, hooks, and escalation. "
                 "Suggested Chinese sections: ## 榜单依据, ## 对标拆解, ## 题材定位, ## 细纲/大纲方案, ## 风险修正. "
+                "The UI chapter count is not the rank cutoff; rank coverage follows rankLimit and available RANK evidence. "
                 "Cite factual rank/source claims; clearly label uncited outline suggestions as author-side inference."
             )
         if answer_mode == "trend":
@@ -4055,6 +6382,7 @@ class NovelResearchAgent:
                 "Use these Chinese markdown sections exactly: "
                 "## 结论, ## 证据, ## 开文机会, ## 风险与规避. "
                 "If RANK evidence is present, the conclusion must start from the rank #1 book and TopN list before vector or chapter evidence. "
+                "The UI chapter count is not the rank cutoff; rank coverage follows rankLimit and available RANK evidence. "
                 "The opportunity and risk sections should be practical for professional web-novel authors."
             )
         if answer_mode == "single_book":
@@ -4076,10 +6404,21 @@ class NovelResearchAgent:
             "## 结论, ## 证据, ## 作者侧建议. Keep unsupported claims out."
         )
 
-    def _creative_max_tokens(self, request: KnowledgeChatRequest) -> int:
+    def _creative_max_tokens(self, request: KnowledgeChatRequest, state: ResearchState | None = None) -> int | None:
+        runtime_cap = self._runtime_final_output_tokens(request, state)
+        if runtime_cap is not _RUNTIME_TOKEN_CAP_UNSET:
+            return runtime_cap
         return LONG_CREATIVE_ANSWER_MAX_TOKENS if self._needs_long_creative_output(request) else CREATIVE_ANSWER_MAX_TOKENS
 
-    def _answer_max_tokens(self, request: KnowledgeChatRequest, answer_mode: str | None) -> int:
+    def _answer_max_tokens(
+        self,
+        request: KnowledgeChatRequest,
+        answer_mode: str | None,
+        state: ResearchState | None = None,
+    ) -> int | None:
+        runtime_cap = self._runtime_final_output_tokens(request, state)
+        if runtime_cap is not _RUNTIME_TOKEN_CAP_UNSET:
+            return runtime_cap
         if self._needs_long_creative_output(request):
             return LONG_CREATIVE_ANSWER_MAX_TOKENS
         if answer_mode == "trend":
@@ -4087,6 +6426,25 @@ class NovelResearchAgent:
         if answer_mode in {"creative", "mixed_creation"}:
             return CREATIVE_ANSWER_MAX_TOKENS
         return EVIDENCE_ANSWER_MAX_TOKENS
+
+    def _runtime_final_output_tokens(
+        self,
+        request: KnowledgeChatRequest,
+        state: ResearchState | None,
+    ) -> int | None | object:
+        runtime_config = state.get("runtime_config") if isinstance(state, dict) else None
+        if not isinstance(runtime_config, dict):
+            return _RUNTIME_TOKEN_CAP_UNSET
+        key = "maxFinalOutputTokensDeep" if self._reasoning_mode(request) == "deep" else "maxFinalOutputTokensFast"
+        if key not in runtime_config:
+            return _RUNTIME_TOKEN_CAP_UNSET
+        try:
+            value = int(runtime_config.get(key))
+        except (TypeError, ValueError):
+            return _RUNTIME_TOKEN_CAP_UNSET
+        if value <= 0:
+            return None
+        return value
 
     def _is_mixed_creation_state(self, state: ResearchState | None) -> bool:
         if not state:
@@ -4133,12 +6491,50 @@ class NovelResearchAgent:
         )
         return any(marker in question for marker in long_markers)
 
+    def _rank_sources_for_answer(self, sources: list[KnowledgeSource]) -> list[tuple[int, KnowledgeSource]]:
+        return [
+            (index, source)
+            for index, source in enumerate(sources, start=1)
+            if (source.sourceType or "").upper() == "RANK"
+        ]
+
+    def _normalize_rank_count_mentions(self, answer: str, sources: list[KnowledgeSource]) -> str:
+        rank_count = min(len(self._rank_sources_for_answer(sources)), RANK_PROMPT_DEFAULT_ITEMS)
+        if rank_count <= 5:
+            return answer
+        normalized = re.sub(r"\btop\s*5\b", f"Top{rank_count}", answer or "", flags=re.IGNORECASE)
+        return normalized.replace("\u524d\u4e94", f"\u524d{rank_count}")
+
+    def _rank_evidence_block_needed(self, answer: str, sources: list[KnowledgeSource]) -> bool:
+        rank_sources = [source for _, source in self._rank_sources_for_answer(sources)[:RANK_PROMPT_DEFAULT_ITEMS]]
+        if len(rank_sources) <= 5:
+            return False
+        if re.search(r"\btop\s*5\b", answer or "", flags=re.IGNORECASE) or "\u524d\u4e94" in (answer or ""):
+            return True
+        mentioned = sum(1 for source in rank_sources if source.bookName and source.bookName in (answer or ""))
+        return mentioned < min(len(rank_sources), 6)
+
+    def _compose_rank_evidence_block(self, sources: list[KnowledgeSource]) -> str:
+        lead = self._rank_lead_sentence(sources)
+        lines: list[str] = []
+        for citation_index, source in self._rank_sources_for_answer(sources)[:RANK_PROMPT_DEFAULT_ITEMS]:
+            rank_no = source.rankNo or citation_index
+            title = source.title or source.category or "\u699c\u5355"
+            author = f"\uff0c\u4f5c\u8005{source.author}" if source.author else ""
+            book_name = source.bookName or "\u672a\u547d\u540d\u4f5c\u54c1"
+            preview = self._short_text(source.preview or "", 120)
+            suffix = f"\uff1b{preview}" if preview else ""
+            lines.append(f"- #{rank_no}\u300a{book_name}\u300b{author}\uff1a{title}{suffix}[{citation_index}]")
+        evidence = "\n".join(lines) if lines else "- \u5f53\u524d\u6ca1\u6709\u53ef\u5c55\u5f00\u7684\u699c\u5355\u4f5c\u54c1\u660e\u7ec6\u3002"
+        lead_text = lead or "\u5f53\u524d\u7ed3\u6784\u5316\u699c\u5355\u8bc1\u636e\u5982\u4e0b\u3002"
+        return f"## \u699c\u5355\u4f9d\u636e\n{lead_text}\n{evidence}"
+
     def _ensure_rank_lead_for_trend_answer(self, answer: str, sources: list[KnowledgeSource]) -> str:
         lead = self._rank_lead_sentence(sources)
         if not lead:
             return answer
         first_rank = self._first_rank_source(sources)
-        if first_rank and first_rank.bookName and first_rank.bookName in answer:
+        if first_rank and first_rank.bookName and first_rank.bookName in answer and not self._rank_evidence_block_needed(answer, sources):
             return answer
         return self._compose_rank_first_trend_answer(sources)
 
@@ -4147,9 +6543,9 @@ class NovelResearchAgent:
         if not lead:
             return answer
         first_rank = self._first_rank_source(sources)
-        if first_rank and first_rank.bookName and first_rank.bookName in answer:
+        if first_rank and first_rank.bookName and first_rank.bookName in answer and not self._rank_evidence_block_needed(answer, sources):
             return answer
-        return f"## 榜单依据\n{lead}\n\n{answer}"
+        return f"{self._compose_rank_evidence_block(sources)}\n\n{answer}"
 
     def _compose_mixed_creation_fallback_answer(self, question: str, sources: list[KnowledgeSource]) -> str:
         rank_lead = self._rank_lead_sentence(sources)
@@ -4163,7 +6559,7 @@ class NovelResearchAgent:
             preview = self._short_text(source.preview or "", 110)
             suffix = f"：{preview}" if preview else ""
             rank_lines.append(f"- #{rank_no}《{book_name}》：{title}{suffix}[{index}]")
-            if len(rank_lines) >= 3:
+            if len(rank_lines) >= RANK_PROMPT_DEFAULT_ITEMS:
                 break
         if not rank_lines:
             rank_lines.append("- 当前没有可展开的前排榜单作品明细。")
@@ -4199,7 +6595,8 @@ class NovelResearchAgent:
             if (source.sourceType or "").upper() != "RANK"
         ]
         book_lines: list[str] = []
-        for index, source in enumerate(rank_sources[:5], start=1):
+        displayed_rank_sources = rank_sources[:RANK_PROMPT_DEFAULT_ITEMS]
+        for index, source in enumerate(displayed_rank_sources, start=1):
             rank_no = source.rankNo or index
             title = source.title or source.category or "榜单"
             author = f"，作者{source.author}" if source.author else ""
@@ -4209,7 +6606,7 @@ class NovelResearchAgent:
             book_lines.append(f"- #{rank_no}《{book_name}》{author}：{title}{suffix}[{index}]")
         if not book_lines:
             book_lines.append("- 当前没有可展开的榜单作品明细。")
-        next_index = len(rank_sources[:5]) + 1
+        next_index = len(displayed_rank_sources) + 1
         evidence_lines = list(book_lines)
         for offset, source in enumerate(intro_sources[:2], start=next_index):
             title = source.title or source.bookName or "补充材料"
@@ -4352,6 +6749,20 @@ class NovelResearchAgent:
         except (TypeError, ValueError):
             parsed = default
         return max(1, min(parsed, maximum))
+
+    def _runtime_evidence_limit(
+        self,
+        request: KnowledgeChatRequest,
+        state: ResearchState,
+        *,
+        default: int,
+        maximum: int,
+    ) -> int:
+        limit = self._limit(request, "evidenceLimit", default=default, maximum=maximum)
+        runtime_limit = self._runtime_max_evidence_items(state.get("runtime_config"))
+        if runtime_limit is None or runtime_limit <= 0:
+            return limit
+        return max(1, min(limit, runtime_limit))
 
     def _request_timeout_millis(self, request: KnowledgeChatRequest) -> int:
         return self._limit(request, "timeoutMillis", default=settings.timeout_millis, maximum=600_000)

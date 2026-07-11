@@ -300,6 +300,98 @@ class FanqieSearchTest(unittest.TestCase):
             http_client.json_calls,
         )
 
+    def test_search_books_filters_mobile_audio_and_video_when_novel_exists(self) -> None:
+        search_url = "https://fanqienovel.com/search/test-book"
+        web_api_url = "https://fanqienovel.com/api/author/search/search_book/v1"
+        mobile_api_url = "https://novel.snssdk.com/api/novel/channel/homepage/search/search/v1/"
+        http_client = StubHttpClient(
+            {
+                search_url: (
+                    '<script>(function(){window.__INITIAL_STATE__={'
+                    '"common":{"css":""},'
+                    '"search":{"searchBookList":null,"total":0}'
+                    '};})()</script>'
+                )
+            }
+        )
+        http_client._anti_bot_urls.add(web_api_url)
+        http_client._json_responses[mobile_api_url] = {
+            "code": 0,
+            "data": {
+                "ret_data": [
+                    {
+                        "book_id": "501",
+                        "title": "听书结果",
+                        "author": "Audio Author",
+                        "abstract": "有声书",
+                        "content_type": "audio",
+                    },
+                    {
+                        "book_id": "502",
+                        "title": "视频结果",
+                        "author": "Video Author",
+                        "abstract": "短视频",
+                        "item_type": "video",
+                    },
+                    {
+                        "book_id": "503",
+                        "title": "Novel Result",
+                        "author": "Novel Author",
+                        "abstract": "Readable intro",
+                        "content_type": "novel",
+                    },
+                ]
+            },
+        }
+        crawler = FanqieCrawler(http_client)
+
+        result = crawler.search_books("test-book", limit=5)
+
+        self.assertEqual(1, len(result))
+        self.assertEqual("Novel Result", result[0].bookName)
+        self.assertEqual("novel", result[0].contentType)
+        self.assertTrue(result[0].readableNovel)
+        self.assertIsNone(result[0].unavailableReason)
+
+    def test_search_books_returns_unreadable_mobile_results_with_reason_when_no_novel_exists(self) -> None:
+        search_url = "https://fanqienovel.com/search/test-book"
+        web_api_url = "https://fanqienovel.com/api/author/search/search_book/v1"
+        mobile_api_url = "https://novel.snssdk.com/api/novel/channel/homepage/search/search/v1/"
+        http_client = StubHttpClient(
+            {
+                search_url: (
+                    '<script>(function(){window.__INITIAL_STATE__={'
+                    '"common":{"css":""},'
+                    '"search":{"searchBookList":null,"total":0}'
+                    '};})()</script>'
+                )
+            }
+        )
+        http_client._anti_bot_urls.add(web_api_url)
+        http_client._json_responses[mobile_api_url] = {
+            "code": 0,
+            "data": {
+                "ret_data": [
+                    {
+                        "book_id": "601",
+                        "title": "Only Audio",
+                        "author": "Audio Author",
+                        "abstract": "有声书",
+                        "content_type": "audiobook",
+                    }
+                ]
+            },
+        }
+        crawler = FanqieCrawler(http_client)
+
+        result = crawler.search_books("test-book", limit=5)
+
+        self.assertEqual(1, len(result))
+        self.assertEqual("Only Audio", result[0].bookName)
+        self.assertEqual("audiobook", result[0].contentType)
+        self.assertFalse(result[0].readableNovel)
+        self.assertEqual("search_result_is_audiobook", result[0].unavailableReason)
+
     def test_search_books_retries_mobile_api_when_first_response_is_empty(self) -> None:
         search_url = "https://fanqienovel.com/search/test-book"
         web_api_url = "https://fanqienovel.com/api/author/search/search_book/v1"

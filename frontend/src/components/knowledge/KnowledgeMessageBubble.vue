@@ -12,6 +12,9 @@ const props = defineProps<{
   intent?: string;
   answerBoundary?: string;
   sources?: KnowledgeSource[];
+  fallbackUsed?: boolean;
+  degraded?: boolean;
+  degradationReasons?: string[];
   deletable?: boolean;
   deleteTestId?: string;
 }>();
@@ -84,6 +87,10 @@ const answerBoundaryLabel = computed(() => {
   return props.answerBoundary ? labels[props.answerBoundary] || props.answerBoundary : '';
 });
 
+const showDegradedNotice = computed(() => props.role === 'assistant' && (props.degraded || props.fallbackUsed));
+
+const degradedReasonLabel = computed(() => (props.degradationReasons ?? []).filter(Boolean).join(', '));
+
 function sourceLabel(source: KnowledgeSource, index: number) {
   if ((source.sourceType || '').toUpperCase() === 'RANK') {
     return `[${index + 1}] ${source.rankNo ? `#${source.rankNo}` : '榜单'}`;
@@ -127,6 +134,10 @@ function isRankSource(source: KnowledgeSource) {
       >
         引用来源 {{ sources.length }}
       </button>
+      <span v-if="showDegradedNotice" class="knowledge-message__degraded">
+        降级回答
+        <small v-if="degradedReasonLabel">{{ degradedReasonLabel }}</small>
+      </span>
       <span v-if="answerStatusLabel" class="knowledge-message__status">{{ answerStatusLabel }}</span>
       <span v-if="intentLabel" class="knowledge-message__badge">{{ intentLabel }}</span>
       <span v-if="answerBoundaryLabel" class="knowledge-message__badge">{{ answerBoundaryLabel }}</span>
@@ -183,10 +194,10 @@ function isRankSource(source: KnowledgeSource) {
 
 .knowledge-message__delete {
   position: absolute;
-  top: -0.45rem;
-  right: -0.45rem;
-  width: 28px;
-  height: 28px;
+  top: -0.75rem;
+  right: -0.75rem;
+  width: 44px;
+  height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -203,6 +214,11 @@ function isRankSource(source: KnowledgeSource) {
 .knowledge-message:hover .knowledge-message__delete,
 .knowledge-message__delete:focus-visible {
   opacity: 1;
+}
+
+.knowledge-message__delete:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .knowledge-message__delete:hover {
@@ -254,6 +270,26 @@ function isRankSource(source: KnowledgeSource) {
 .knowledge-message__status {
   color: var(--color-text-muted);
   font-size: 0.78rem;
+}
+
+.knowledge-message__degraded {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--el-color-warning) 42%, var(--color-border));
+  border-radius: 999px;
+  color: var(--el-color-warning-dark-2);
+  background: color-mix(in srgb, var(--el-color-warning-light-9) 72%, var(--color-surface));
+  font-size: 0.76rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.knowledge-message__degraded small {
+  color: inherit;
+  font-size: 0.72rem;
 }
 
 .knowledge-message__badge {

@@ -102,6 +102,7 @@ class KnowledgeRetrievalServiceTest {
         assertThat(results.get(0).getBookName()).isEqualTo("Retrieval Test Book");
         assertThat(results.get(0).getChapterNo()).isEqualTo(1);
         assertThat(results.get(0).getPreview()).contains("hero goal appears");
+        assertThat(results.get(0).getRetrievalBackend()).isEqualTo("qdrant");
         verify(embeddingClient).embed("hero goal");
         verify(qdrantClient).ensureCollection();
     }
@@ -148,6 +149,7 @@ class KnowledgeRetrievalServiceTest {
         assertThat(results.get(0).getBookId()).isEqualTo(bookId);
         assertThat(results.get(0).getSourceType()).isEqualTo("CHAPTER");
         assertThat(results.get(0).getChapterNo()).isEqualTo(1);
+        assertThat(results.get(0).getRetrievalBackend()).isEqualTo("crawler_fallback");
         assertThat(results.get(0).getTitle()).isEqualTo("第一章 直播曝光");
         assertThat(results.get(0).getPreview()).contains("妹妹直播");
         assertThat(results.get(1).getChapterNo()).isEqualTo(2);
@@ -193,6 +195,7 @@ class KnowledgeRetrievalServiceTest {
         assertThat(results.get(0).getAnalysisType()).isEqualTo("trend");
         assertThat(results.get(0).getScore()).isGreaterThanOrEqualTo(0.4d);
         assertThat(results.get(0).getPreview()).contains("Life simulator");
+        assertThat(results.get(0).getRetrievalBackend()).isEqualTo("lexical");
     }
 
     @Test
@@ -227,6 +230,15 @@ class KnowledgeRetrievalServiceTest {
         assertThat(results.get(0).getChunkId()).isEqualTo(chunkId);
         assertThat(results.get(0).getSourceType()).isEqualTo("ANALYSIS");
         assertThat(results.get(0).getPreview()).contains("Simulator counterattack");
+        assertThat(results.get(0).getRetrievalBackend()).isEqualTo("lexical");
+        assertThat(results.get(0).getRetrievalDiagnostics())
+            .containsEntry("retrievalBackend", "lexical")
+            .containsEntry("fallbackBackend", "lexical")
+            .containsEntry("qdrantFailureClass", "RuntimeException")
+            .containsEntry("requestedMinScore", 0.2d)
+            .containsEntry("returnedCount", 1);
+        assertThat(results.get(0).getRetrievalDiagnostics().values())
+            .doesNotContain("embedding provider unavailable");
         verify(qdrantClient, never()).ensureCollection();
         verify(qdrantClient, never()).search(any(), any(), any(Integer.class));
     }

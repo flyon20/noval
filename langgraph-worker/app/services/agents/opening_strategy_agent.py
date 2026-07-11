@@ -6,6 +6,9 @@ from app.services.agents.base import BaseSpecialistAgent
 class OpeningStrategyAgent(BaseSpecialistAgent):
     agent_name = "opening_strategy"
     answer_mode = "opening_strategy"
+    llm_enabled = True
+    tool_route = "mixed_creation_research"
+    deep_reasoning_effort = "high"
     generation_instructions = (
         "围绕开篇钩子、前三章节奏、主卖点和读者承诺组织回答。",
         "给出可执行的开书定位、切入场景、金手指/冲突呈现顺序。",

@@ -20,6 +20,7 @@ import com.novelanalyzer.modules.security.service.PasswordLoginRiskControlServic
 import com.novelanalyzer.modules.security.service.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -47,6 +48,7 @@ public class AuthService {
     private static final Pattern LOWERCASE_PATTERN = Pattern.compile(".*[a-z].*");
     private static final Pattern DIGIT_PATTERN = Pattern.compile(".*\\d.*");
     private static final String KICKED_BY_NEW_LOGIN_REASON = "kicked by new login";
+    private static final String LOGIN_LOCK_BUSY_MESSAGE = "\u767b\u5f55\u8bf7\u6c42\u6b63\u5728\u6392\u961f\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5";
     private static final String ADMIN_ROLE_CODE = "ADMIN";
     private static final String USER_ROLE_CODE = "USER";
     private static final String BOOTSTRAP_ADMIN_PHONES_CONFIG_KEY = "auth.bootstrap-admin-phones";
@@ -105,7 +107,7 @@ public class AuthService {
                 passwordLoginRiskControlService.recordFailure(phone, loginIp);
                 throw new BusinessException(ResultCode.UNAUTHORIZED, PASSWORD_INCORRECT_MESSAGE);
             }
-            authRepository.lockUserById(dbUser.getId());
+            lockUserForLogin(dbUser.getId());
             ensureBootstrapAdminRole(dbUser);
             List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
             passwordLoginRiskControlService.recordSuccess(phone, loginIp);
@@ -173,7 +175,7 @@ public class AuthService {
         }
 
         smsAuthService.verifyCode(phone, "LOGIN", request.getSmsCode(), request.getSmsOutId(), true);
-        authRepository.lockUserById(dbUser.getId());
+        lockUserForLogin(dbUser.getId());
         ensureBootstrapAdminRole(dbUser);
         List<String> roleCodes = authRepository.findRoleCodesByUserId(dbUser.getId());
         authRepository.updateLastLoginTime(dbUser.getId());
@@ -424,6 +426,14 @@ public class AuthService {
                 KICKED_BY_NEW_LOGIN_REASON
             )
         );
+    }
+
+    private void lockUserForLogin(Long userId) {
+        try {
+            authRepository.lockUserById(userId);
+        } catch (CannotAcquireLockException ex) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, LOGIN_LOCK_BUSY_MESSAGE);
+        }
     }
 
     private TokenResponse issueToken(Long userId,

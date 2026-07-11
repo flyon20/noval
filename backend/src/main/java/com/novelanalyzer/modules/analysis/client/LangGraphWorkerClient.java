@@ -7,7 +7,10 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
+import com.novelanalyzer.modules.knowledge.dto.AgentEvalRunRequest;
+import com.novelanalyzer.modules.knowledge.vo.AgentEvalRunVO;
 import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
+import com.novelanalyzer.modules.knowledge.vo.RuntimeSkillVO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -21,6 +24,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.BiConsumer;
@@ -73,6 +77,39 @@ public class LangGraphWorkerClient {
         } catch (Exception ex) {
             LOGGER.warn("langgraph worker knowledge chat call failed: {}", ex.getMessage());
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker knowledge chat failed");
+        }
+    }
+
+    public List<RuntimeSkillVO> listRuntimeSkills() {
+        try {
+            HttpRequest request = buildGetRequest("/internal/knowledge/runtime-skills");
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            ensureSuccess(response.statusCode(), response.body());
+            return objectMapper.readValue(response.body(), new TypeReference<List<RuntimeSkillVO>>() {});
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            LOGGER.warn("langgraph worker runtime skills call failed: {}", ex.getMessage());
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker runtime skills failed");
+        }
+    }
+
+    public AgentEvalRunVO startKnowledgeEvalRun(AgentEvalRunRequest evalRunRequest) {
+        try {
+            Map<String, Object> payload = objectMapper.convertValue(
+                evalRunRequest == null ? new AgentEvalRunRequest() : evalRunRequest,
+                new TypeReference<Map<String, Object>>() {}
+            );
+            HttpRequest request = buildRequest("/internal/knowledge/eval-runs", payload);
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            ensureSuccess(response.statusCode(), response.body());
+            Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<Map<String, Object>>() {});
+            return toAgentEvalRun(body);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            LOGGER.warn("langgraph worker eval run call failed: {}", ex.getMessage());
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker eval run failed");
         }
     }
 
@@ -298,6 +335,15 @@ public class LangGraphWorkerClient {
             .build();
     }
 
+    private HttpRequest buildGetRequest(String path) {
+        return HttpRequest.newBuilder()
+            .uri(URI.create(resolveBaseUrl() + path))
+            .timeout(Duration.ofMillis(resolveTimeoutMillis(null)))
+            .header(INTERNAL_API_KEY_HEADER, resolveInternalApiKey())
+            .GET()
+            .build();
+    }
+
     private AiInvokeResult toAiInvokeResult(Map<String, Object> payload) {
         Map<String, Object> safePayload = payload == null ? Map.of() : payload;
         Map<String, Object> resultJson = convertMap(safePayload.get("resultJson"));
@@ -310,6 +356,34 @@ public class LangGraphWorkerClient {
         );
         int tokenUsed = parseInteger(safePayload.get("tokenUsed"), 0);
         return AiInvokeResult.of(modelName, content == null ? "" : content, tokenUsed, resultJson);
+    }
+
+    private AgentEvalRunVO toAgentEvalRun(Map<String, Object> payload) {
+        Map<String, Object> safePayload = payload == null ? Map.of() : payload;
+        AgentEvalRunVO vo = new AgentEvalRunVO();
+        vo.setId(parseLong(firstNonNull(safePayload.get("id"), safePayload.get("runId")), null));
+        vo.setRunKey(asString(safePayload.get("runKey")));
+        vo.setSuiteName(asString(safePayload.get("suiteName")));
+        vo.setRunnerName(asString(safePayload.get("runnerName")));
+        vo.setEvaluatorName(asString(safePayload.get("evaluatorName")));
+        vo.setModelName(asString(safePayload.get("modelName")));
+        vo.setStatus(asString(safePayload.get("status")));
+        vo.setTotalCases(parseInteger(safePayload.get("totalCases"), 0));
+        vo.setPassedCases(parseInteger(safePayload.get("passedCases"), 0));
+        vo.setFailedCases(parseInteger(safePayload.get("failedCases"), 0));
+        vo.setProgressCurrent(parseInteger(safePayload.get("progressCurrent"), 0));
+        vo.setProgressTotal(parseInteger(safePayload.get("progressTotal"), 0));
+        vo.setProgressMessage(asString(safePayload.get("progressMessage")));
+        vo.setCancelRequested(Boolean.valueOf(String.valueOf(safePayload.getOrDefault("cancelRequested", "false"))));
+        vo.setRetryCount(parseInteger(safePayload.get("retryCount"), 0));
+        vo.setMaxRetries(parseInteger(safePayload.get("maxRetries"), 0));
+        vo.setErrorMessage(asString(safePayload.get("errorMessage")));
+        vo.setMetricsJson(asString(safePayload.get("metricsJson")));
+        vo.setSettingsJson(asString(safePayload.get("settingsJson")));
+        vo.setQueuedAt(asString(safePayload.get("queuedAt")));
+        vo.setStartedAt(asString(safePayload.get("startedAt")));
+        vo.setFinishedAt(asString(safePayload.get("finishedAt")));
+        return vo;
     }
 
     private Map<String, Object> convertMap(Object value) {
@@ -375,6 +449,9 @@ public class LangGraphWorkerClient {
             "ai.langgraph-worker.timeout-millis",
             aiProperties.getLanggraphWorker().getTimeoutMillis()
         );
+        if (configuredTimeout <= 0) {
+            configuredTimeout = Math.max(aiProperties.getLanggraphWorker().getTimeoutMillis(), 30000);
+        }
         int requestedTimeout = extractRequestedTimeoutMillis(requestPayload);
         if (requestedTimeout <= 0) {
             return configuredTimeout;
@@ -408,6 +485,26 @@ public class LangGraphWorkerClient {
         } catch (NumberFormatException ex) {
             return defaultValue;
         }
+    }
+
+    private Long parseLong(Object value, Long defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return defaultValue;
+        }
+    }
+
+    private Object firstNonNull(Object... values) {
+        for (Object value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String firstNonBlank(String... values) {

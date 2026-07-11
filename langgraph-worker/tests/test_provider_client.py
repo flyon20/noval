@@ -151,7 +151,7 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
             httpx.ConnectError("stream attempt failed", request=self.request),
             FakeStreamResponse([
                 'data: {"choices":[{"delta":{"content":"hello"}}]}',
-                'data: {"choices":[{"finish_reason":"stop"}],"usage":{"total_tokens":21}}',
+                'data: {"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":9,"total_tokens":21,"prompt_cache_hit_tokens":7,"prompt_cache_miss_tokens":5}}',
                 "data: [DONE]",
             ]),
         ])
@@ -169,11 +169,145 @@ class ProviderClientRetryTest(unittest.IsolatedAsyncioTestCase):
         ]
 
         self.assertEqual(
-            [{"event": "delta", "delta": "hello"}, {"event": "done", "tokenUsed": 21}],
+            [
+                {"event": "delta", "delta": "hello"},
+                {
+                    "event": "done",
+                    "tokenUsed": 21,
+                    "promptCacheHitTokens": 7,
+                    "promptCacheMissTokens": 5,
+                    "usage": {
+                        "promptTokens": 12,
+                        "completionTokens": 9,
+                        "totalTokens": 21,
+                        "promptCacheHitTokens": 7,
+                        "promptCacheMissTokens": 5,
+                    },
+                },
+            ],
             events,
         )
         self.assertEqual(2, len(factory.constructor_calls))
         self.assertEqual(1, sleep_mock.await_count)
+
+    @patch("app.services.provider_client.httpx.AsyncClient")
+    async def test_invoke_should_enable_deepseek_thinking_mode_with_max_effort(self, async_client_mock) -> None:
+        factory = FakeAsyncClientFactory(post_effects=[
+            FakeResponse({
+                "model": "deepseek-v4-pro",
+                "choices": [{"message": {"content": "deep answer", "reasoning_content": "private reasoning"}}],
+                "usage": {"total_tokens": 42},
+            }),
+        ])
+        async_client_mock.side_effect = factory
+        client = OpenAICompatibleProviderClient()
+
+        result = await client.invoke(
+            messages=[{"role": "user", "content": CHINESE_PROMPT}],
+            model="deepseek-v4-pro",
+            temperature=0.3,
+            max_tokens=1024,
+            require_json=False,
+            reasoning_mode="deep",
+        )
+
+        payload = factory.post_calls[0]["kwargs"]["json"]
+        self.assertNotIn("temperature", payload)
+        self.assertEqual({"type": "enabled"}, payload["thinking"])
+        self.assertEqual("max", payload["reasoning_effort"])
+        self.assertEqual("private reasoning", result["reasoning_content"])
+
+    @patch("app.services.provider_client.httpx.AsyncClient")
+    async def test_invoke_should_disable_deepseek_thinking_mode_for_fast_mode(self, async_client_mock) -> None:
+        factory = FakeAsyncClientFactory(post_effects=[
+            FakeResponse({
+                "model": "deepseek-v4-flash",
+                "choices": [{"message": {"content": "fast answer"}}],
+                "usage": {"total_tokens": 21},
+            }),
+        ])
+        async_client_mock.side_effect = factory
+        client = OpenAICompatibleProviderClient()
+
+        await client.invoke(
+            messages=[{"role": "user", "content": CHINESE_PROMPT}],
+            model="deepseek-v4-flash",
+            temperature=0.3,
+            max_tokens=1024,
+            require_json=False,
+            reasoning_mode="fast",
+        )
+
+        payload = factory.post_calls[0]["kwargs"]["json"]
+        self.assertEqual({"type": "disabled"}, payload["thinking"])
+        self.assertEqual(0.3, payload["temperature"])
+        self.assertNotIn("reasoning_effort", payload)
+
+    @patch("app.services.provider_client.httpx.AsyncClient")
+    async def test_invoke_should_allow_deepseek_high_effort_for_selected_agents(self, async_client_mock) -> None:
+        factory = FakeAsyncClientFactory(post_effects=[
+            FakeResponse({
+                "model": "deepseek-v4-pro",
+                "choices": [{"message": {"content": "high effort answer"}}],
+                "usage": {"total_tokens": 18},
+            }),
+        ])
+        async_client_mock.side_effect = factory
+        client = OpenAICompatibleProviderClient()
+
+        await client.invoke(
+            messages=[{"role": "user", "content": CHINESE_PROMPT}],
+            model="deepseek-v4-pro",
+            temperature=0.3,
+            max_tokens=1024,
+            require_json=False,
+            reasoning_mode="deep",
+            reasoning_effort="high",
+        )
+
+        payload = factory.post_calls[0]["kwargs"]["json"]
+        self.assertEqual({"type": "enabled"}, payload["thinking"])
+        self.assertEqual("high", payload["reasoning_effort"])
+        self.assertNotIn("temperature", payload)
+
+    @patch("app.services.provider_client.httpx.AsyncClient")
+    async def test_invoke_should_return_deepseek_prompt_cache_usage(self, async_client_mock) -> None:
+        factory = FakeAsyncClientFactory(post_effects=[
+            FakeResponse({
+                "model": "deepseek-v4-pro",
+                "choices": [{"message": {"content": "cached answer"}}],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 30,
+                    "total_tokens": 150,
+                    "prompt_cache_hit_tokens": 90,
+                    "prompt_cache_miss_tokens": 30,
+                },
+            }),
+        ])
+        async_client_mock.side_effect = factory
+        client = OpenAICompatibleProviderClient()
+
+        result = await client.invoke(
+            messages=[{"role": "user", "content": CHINESE_PROMPT}],
+            model="deepseek-v4-pro",
+            temperature=0.3,
+            max_tokens=1024,
+            require_json=False,
+            reasoning_mode="deep",
+            reasoning_effort="max",
+        )
+
+        self.assertEqual(150, result["token_used"])
+        self.assertEqual(90, result["prompt_cache_hit_tokens"])
+        self.assertEqual(30, result["prompt_cache_miss_tokens"])
+        self.assertEqual({
+            "promptTokens": 120,
+            "completionTokens": 30,
+            "totalTokens": 150,
+            "promptCacheHitTokens": 90,
+            "promptCacheMissTokens": 30,
+        }, result["usage"])
 
 
 class RoutingProviderClient(OpenAICompatibleProviderClient):

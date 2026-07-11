@@ -8,6 +8,7 @@ public class KnowledgeProperties {
     private Qdrant qdrant = new Qdrant();
     private Embedding embedding = new Embedding();
     private Index index = new Index();
+    private Eval eval = new Eval();
 
     public Qdrant getQdrant() {
         return qdrant;
@@ -33,10 +34,19 @@ public class KnowledgeProperties {
         this.index = index;
     }
 
+    public Eval getEval() {
+        return eval;
+    }
+
+    public void setEval(Eval eval) {
+        this.eval = eval == null ? new Eval() : eval;
+    }
+
     public static class Qdrant {
 
         private String baseUrl = "http://127.0.0.1:6333";
         private String collection = "novel_knowledge_chunks";
+        private String memoryCollection = "noval_ai_memory";
 
         public String getBaseUrl() {
             return baseUrl;
@@ -52,6 +62,14 @@ public class KnowledgeProperties {
 
         public void setCollection(String collection) {
             this.collection = collection;
+        }
+
+        public String getMemoryCollection() {
+            return memoryCollection;
+        }
+
+        public void setMemoryCollection(String memoryCollection) {
+            this.memoryCollection = memoryCollection;
         }
     }
 
@@ -270,6 +288,139 @@ public class KnowledgeProperties {
             private String deadLetterExchange = "noval.knowledge.index.dlx";
             private String deadLetterQueue = "noval.knowledge.index.book.dlq";
             private String deadLetterRoutingKey = "knowledge.index.book.dlq";
+
+            public String getExchange() {
+                return exchange;
+            }
+
+            public void setExchange(String exchange) {
+                this.exchange = exchange;
+            }
+
+            public String getQueue() {
+                return queue;
+            }
+
+            public void setQueue(String queue) {
+                this.queue = queue;
+            }
+
+            public String getRoutingKey() {
+                return routingKey;
+            }
+
+            public void setRoutingKey(String routingKey) {
+                this.routingKey = routingKey;
+            }
+
+            public String getRetryExchange() {
+                return retryExchange;
+            }
+
+            public void setRetryExchange(String retryExchange) {
+                this.retryExchange = retryExchange;
+            }
+
+            public String getRetryRoutingKeyPrefix() {
+                return retryRoutingKeyPrefix;
+            }
+
+            public void setRetryRoutingKeyPrefix(String retryRoutingKeyPrefix) {
+                this.retryRoutingKeyPrefix = retryRoutingKeyPrefix;
+            }
+
+            public String getDeadLetterExchange() {
+                return deadLetterExchange;
+            }
+
+            public void setDeadLetterExchange(String deadLetterExchange) {
+                this.deadLetterExchange = deadLetterExchange;
+            }
+
+            public String getDeadLetterQueue() {
+                return deadLetterQueue;
+            }
+
+            public void setDeadLetterQueue(String deadLetterQueue) {
+                this.deadLetterQueue = deadLetterQueue;
+            }
+
+            public String getDeadLetterRoutingKey() {
+                return deadLetterRoutingKey;
+            }
+
+            public void setDeadLetterRoutingKey(String deadLetterRoutingKey) {
+                this.deadLetterRoutingKey = deadLetterRoutingKey;
+            }
+        }
+    }
+
+    public static class Eval {
+
+        private boolean queueEnabled = true;
+        private int workerConcurrency = 1;
+        private int maxRetries = 3;
+        private long visibilityTimeoutSeconds = 1800;
+        private String retryBackoffSeconds = "30,120,600";
+        private Rabbit rabbit = new Rabbit();
+
+        public boolean isQueueEnabled() {
+            return queueEnabled;
+        }
+
+        public void setQueueEnabled(boolean queueEnabled) {
+            this.queueEnabled = queueEnabled;
+        }
+
+        public int getWorkerConcurrency() {
+            return workerConcurrency;
+        }
+
+        public void setWorkerConcurrency(int workerConcurrency) {
+            this.workerConcurrency = workerConcurrency;
+        }
+
+        public int getMaxRetries() {
+            return maxRetries;
+        }
+
+        public void setMaxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
+        }
+
+        public long getVisibilityTimeoutSeconds() {
+            return visibilityTimeoutSeconds;
+        }
+
+        public void setVisibilityTimeoutSeconds(long visibilityTimeoutSeconds) {
+            this.visibilityTimeoutSeconds = visibilityTimeoutSeconds;
+        }
+
+        public String getRetryBackoffSeconds() {
+            return retryBackoffSeconds;
+        }
+
+        public void setRetryBackoffSeconds(String retryBackoffSeconds) {
+            this.retryBackoffSeconds = retryBackoffSeconds;
+        }
+
+        public Rabbit getRabbit() {
+            return rabbit;
+        }
+
+        public void setRabbit(Rabbit rabbit) {
+            this.rabbit = rabbit == null ? new Rabbit() : rabbit;
+        }
+
+        public static class Rabbit {
+            private String exchange = "noval.knowledge.eval";
+            private String queue = "noval.knowledge.eval.run";
+            private String routingKey = "knowledge.eval.run";
+            private String retryExchange = "noval.knowledge.eval.retry";
+            private String retryRoutingKeyPrefix = "knowledge.eval.run.retry";
+            private String deadLetterExchange = "noval.knowledge.eval.dlx";
+            private String deadLetterQueue = "noval.knowledge.eval.run.dlq";
+            private String deadLetterRoutingKey = "knowledge.eval.run.dlq";
 
             public String getExchange() {
                 return exchange;

@@ -10,6 +10,9 @@ public class BookSearchCandidateVO {
     private String intro;
     private String bookUrl;
     private boolean local;
+    private String contentType = "novel";
+    private Boolean readableNovel = Boolean.TRUE;
+    private String unavailableReason;
 
     public Long getBookId() {
         return bookId;
@@ -74,4 +77,28 @@ public class BookSearchCandidateVO {
     public void setLocal(boolean local) {
         this.local = local;
     }
-}
+
+    public String getContentType() {
+        return contentType;
+    }
+
+    public void setContentType(String contentType) {
+        this.contentType = contentType;
+    }
+
+    public Boolean getReadableNovel() {
+        return readableNovel;
+    }
+
+    public void setReadableNovel(Boolean readableNovel) {
+        this.readableNovel = readableNovel;
+    }
+
+    public String getUnavailableReason() {
+        return unavailableReason;
+    }
+
+    public void setUnavailableReason(String unavailableReason) {
+        this.unavailableReason = unavailableReason;
+    }
+}

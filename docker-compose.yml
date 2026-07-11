@@ -89,6 +89,7 @@ services:
       AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
       KNOWLEDGE_QDRANT_BASE_URL: ${KNOWLEDGE_QDRANT_BASE_URL:-http://qdrant:6333}
       KNOWLEDGE_QDRANT_COLLECTION: ${KNOWLEDGE_QDRANT_COLLECTION:-novel_knowledge_chunks}
+      KNOWLEDGE_QDRANT_MEMORY_COLLECTION: ${KNOWLEDGE_QDRANT_MEMORY_COLLECTION:-noval_ai_memory}
       KNOWLEDGE_EMBEDDING_PROVIDER: ${KNOWLEDGE_EMBEDDING_PROVIDER:-dashscope}
       KNOWLEDGE_EMBEDDING_BASE_URL: ${KNOWLEDGE_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-text-embedding-v4}
@@ -146,6 +147,8 @@ services:
   langgraph-worker:
     build:
       context: ./langgraph-worker
+    depends_on:
+      - fastmcp-tools
     environment:
       TZ: Asia/Shanghai
       AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
@@ -157,6 +160,9 @@ services:
       AI_BACKEND_BASE_URL: http://backend:8080
       AI_BACKEND_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
       AI_BACKEND_TOOL_TIMEOUT_MILLIS: ${AI_BACKEND_TOOL_TIMEOUT_MILLIS:-90000}
+      AI_MCP_BASE_URL: ${AI_MCP_BASE_URL:-http://fastmcp-tools:7001}
+      AI_MCP_TIMEOUT_MILLIS: ${AI_MCP_TIMEOUT_MILLIS:-30000}
+      MCP_INTERNAL_API_KEY: ${MCP_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_MCP_INTERNAL_KEY}
       AI_LANGGRAPH_CHECKPOINT_BACKEND: mysql
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -167,6 +173,24 @@ services:
     cpus: 0.40
     mem_limit: 384m
     memswap_limit: 384m
+    pids_limit: 128
+    logging: *default-logging
+    restart: unless-stopped
+
+  fastmcp-tools:
+    build:
+      context: ./mcp-tools
+    expose:
+      - "7001"
+    environment:
+      TZ: Asia/Shanghai
+      MCP_INTERNAL_API_KEY: ${MCP_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_MCP_INTERNAL_KEY}
+      AI_BACKEND_BASE_URL: http://backend:8080
+      AI_BACKEND_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
+      AI_BACKEND_TOOL_TIMEOUT_MILLIS: ${AI_BACKEND_TOOL_TIMEOUT_MILLIS:-90000}
+    cpus: 0.20
+    mem_limit: 256m
+    memswap_limit: 256m
     pids_limit: 128
     logging: *default-logging
     restart: unless-stopped

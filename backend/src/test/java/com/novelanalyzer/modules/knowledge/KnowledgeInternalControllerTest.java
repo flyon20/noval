@@ -2,6 +2,7 @@ package com.novelanalyzer.modules.knowledge;
 
 import com.novelanalyzer.modules.crawler.client.PythonCrawlerClient;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookSearchItem;
+import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
 import com.novelanalyzer.modules.knowledge.client.EmbeddingClient;
 import com.novelanalyzer.modules.knowledge.client.QdrantClient;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,7 +26,10 @@ import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -45,6 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.crawler.internal-api-key=crawler-internal-api-key-with-enough-length-1234567890",
         "app.ai.langgraph-worker.internal-api-key=langgraph-internal-key-with-enough-length-1234567890",
         "app.knowledge.index.queue-enabled=false",
+        "app.knowledge.eval.queue-enabled=false",
         "app.knowledge.index.rank-incremental-enabled=false",
         "app.knowledge.embedding.api-key=test-embedding-key"
     }
@@ -59,7 +64,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "classpath:sql/phase5-schema-h2.sql",
         "classpath:sql/phase2-data-h2.sql",
         "classpath:sql/phase7-knowledge-schema-h2.sql",
-        "classpath:sql/phase12-webnovel-agent-project-trace-h2.sql"
+        "classpath:sql/phase12-webnovel-agent-project-trace-h2.sql",
+        "classpath:sql/phase13-agent-memory-mcp-h2.sql",
+        "classpath:sql/phase16-project-knowledge-rag-h2.sql"
     },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
@@ -97,6 +104,118 @@ class KnowledgeInternalControllerTest {
         } catch (RuntimeException ignored) {
             // These controller tests do not depend on Redis state. Local Redis may be absent in CI/dev.
         }
+    }
+
+    @Test
+    void shouldExposeAgentGovernanceConfigForInternalWorkerCaller() throws Exception {
+        mockMvc.perform(get("/internal/knowledge/agent/runtime-config")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.reasoningModeDefault").value("fast"))
+            .andExpect(jsonPath("$.maxParallelSpecialists").value(3))
+            .andExpect(jsonPath("$.maxEvidenceItems").value(30));
+
+        mockMvc.perform(get("/internal/knowledge/agent/experts")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].expertName").value("market_scan"))
+            .andExpect(jsonPath("$[0].enabled").value(true))
+            .andExpect(jsonPath("$[0].allowedTools[0]").value("rank.lookup"));
+    }
+
+    @Test
+    void shouldExposePublishedRuntimeSkillsFromBackendDbForInternalWorkerCaller() throws Exception {
+        jdbcTemplate.update("""
+                insert into ai_runtime_skill(candidate_id, skill_id, version, title, content, status,
+                    intents_json, triggers_json, allowed_tools_json, required_evidence_json)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            11L,
+            "webnovel-market-scan",
+            "2026.07.02",
+            "Market Scan",
+            "Use rank.lookup before synthesis.",
+            "ACTIVE",
+            "[\"market_scan\"]",
+            "[\"rank\",\"trend\"]",
+            "[\"rank.lookup\",\"rank.research_pack\"]",
+            "[\"fresh_rank\"]"
+        );
+        jdbcTemplate.update("""
+                insert into ai_runtime_skill(candidate_id, skill_id, version, title, content, status)
+                values(?, ?, ?, ?, ?, ?)
+                """,
+            12L,
+            "disabled-skill",
+            "1.0.0",
+            "Disabled",
+            "disabled content",
+            "DISABLED"
+        );
+
+        mockMvc.perform(get("/internal/knowledge/runtime-skills")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].skillId").value("webnovel-market-scan"))
+            .andExpect(jsonPath("$[0].version").value("2026.07.02"))
+            .andExpect(jsonPath("$[0].content").value(org.hamcrest.Matchers.containsString("rank.lookup")))
+            .andExpect(jsonPath("$[0].intents[0]").value("market_scan"))
+            .andExpect(jsonPath("$[0].allowedTools[0]").value("rank.lookup"))
+            .andExpect(jsonPath("$[0].requiredEvidence[0]").value("fresh_rank"))
+            .andExpect(jsonPath("$[0].source").value("backend"));
+    }
+
+    @Test
+    void shouldIngestRuntimeTelemetryForInternalWorkerCaller() throws Exception {
+        mockMvc.perform(post("/internal/knowledge/agent/telemetry")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "traceId":"trace-telemetry-1",
+                      "cacheEvents":[
+                        {
+                          "cacheScope":"tool",
+                          "nodeName":"execute_tools",
+                          "expertName":"market_scan",
+                          "cacheKeyHash":"cache-1",
+                          "cacheStatus":"MISS",
+                          "promptPrefixHash":"prefix-1",
+                          "promptPrefixStable":true,
+                          "durationMs":17
+                        }
+                      ],
+                      "tokenMetrics":[
+                        {
+                          "nodeName":"answer_writer",
+                          "expertName":"market_scan",
+                          "modelName":"deepseek-chat",
+                          "promptTokens":120,
+                          "completionTokens":80,
+                          "tokenCount":200
+                        }
+                      ]
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.cacheEvents").value(1))
+            .andExpect(jsonPath("$.tokenMetrics").value(1));
+
+        Integer cacheRows = jdbcTemplate.queryForObject(
+            "select count(*) from ai_agent_cache_event where trace_id = ? and cache_status = ?",
+            Integer.class,
+            "trace-telemetry-1",
+            "MISS"
+        );
+        Integer tokenRows = jdbcTemplate.queryForObject(
+            "select count(*) from ai_agent_token_metric where trace_id = ? and token_count = ?",
+            Integer.class,
+            "trace-telemetry-1",
+            200
+        );
+        org.assertj.core.api.Assertions.assertThat(cacheRows).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThat(tokenRows).isEqualTo(1);
     }
 
     @Test
@@ -271,6 +390,46 @@ class KnowledgeInternalControllerTest {
     }
 
     @Test
+    void shouldRefreshRankBoardForInternalWorkerCallerByCategory() throws Exception {
+        insertRankBoardWithSnapshot("fanqie", "male-new", "urban-brain", "都市脑洞", "男频新书榜", 30L);
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 10, 20))
+            .thenReturn(List.of(rankItem(1, "Fresh Agent Rank", "Agent Author", "https://fanqienovel.com/page/agent-rank")));
+
+        mockMvc.perform(post("/internal/knowledge/rank/refresh")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","channelCode":"male-new","category":"都市脑洞","rankFetchCount":10,"refreshMode":"FORCE"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.channelCode").value("male-new"))
+            .andExpect(jsonPath("$.boardCode").value("urban-brain"))
+            .andExpect(jsonPath("$.total").value(1))
+            .andExpect(jsonPath("$.reused").value(false))
+            .andExpect(jsonPath("$.refreshLimited").value(false));
+    }
+
+    @Test
+    void shouldDefaultInternalRankRefreshToAutoAndReuseFreshSnapshot() throws Exception {
+        insertRankBoardWithSnapshot("fanqie", "male-new", "urban-brain", "都市脑洞", "男频新书榜", 31L);
+
+        mockMvc.perform(post("/internal/knowledge/rank/refresh")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","channelCode":"male-new","category":"都市脑洞","rankFetchCount":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.channelCode").value("male-new"))
+            .andExpect(jsonPath("$.boardCode").value("urban-brain"))
+            .andExpect(jsonPath("$.total").value(30))
+            .andExpect(jsonPath("$.reused").value(true))
+            .andExpect(jsonPath("$.refreshLimited").value(false));
+
+        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-new", "urban-brain", 10, 20);
+    }
+
+    @Test
     void shouldUpsertAndReadProjectMemoryForInternalWorkerCaller() throws Exception {
         insertProject(900L, 7L, "Urban Brain Project", "ACTIVE");
 
@@ -298,6 +457,129 @@ class KnowledgeInternalControllerTest {
     }
 
     @Test
+    void shouldSearchProjectChaptersForInternalWorkerCaller() throws Exception {
+        insertProject(910L, 7L, "Project Knowledge Novel", "ACTIVE");
+        insertProjectWork(920L, 910L, 7L, "诸天外包特效师");
+        insertProjectChapter(930L, 910L, 920L, 7L, 12, "御剑交付", "洛风用真正的御剑轨迹完成仙侠特效。", "hash-a");
+        insertProjectChapter(931L, 910L, 920L, 7L, 13, "魔法交付", "魔法导师完成火球术粒子效果。", "hash-b");
+        insertProject(911L, 8L, "Other Novel", "ACTIVE");
+        insertProjectWork(921L, 911L, 8L, "Other Work");
+        insertProjectChapter(932L, 911L, 921L, 8L, 1, "Wrong User", "御剑线索不该被查到。", "hash-c");
+
+        mockMvc.perform(post("/internal/knowledge/projects/chapters/search")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":910,"workId":920,"query":"御剑","limit":5}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].projectId").value(910))
+            .andExpect(jsonPath("$[0].workId").value(920))
+            .andExpect(jsonPath("$[0].chapterNo").value(12))
+            .andExpect(jsonPath("$[0].title").value("御剑交付"))
+            .andExpect(jsonPath("$[0].content").value("洛风用真正的御剑轨迹完成仙侠特效。"));
+    }
+
+    @Test
+    void shouldResolveOwnedProjectWorkForInternalWorkerCaller() throws Exception {
+        insertProject(914L, 7L, "Project Knowledge Novel", "ACTIVE");
+        insertProjectWork(924L, 914L, 7L, "Myriad Outsourcing Effects");
+        insertProjectWork(925L, 914L, 7L, "Myriad Outsourcing Sequel");
+        insertProject(915L, 8L, "Other User Project", "ACTIVE");
+        insertProjectWork(926L, 915L, 8L, "Myriad Outsourcing Effects");
+
+        mockMvc.perform(post("/internal/knowledge/projects/resolve")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"query":"Myriad Outsourcing Effects","limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("resolved"))
+            .andExpect(jsonPath("$.projectId").value(914))
+            .andExpect(jsonPath("$.workId").value(924));
+
+        mockMvc.perform(post("/internal/knowledge/projects/resolve")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"query":"Myriad Outsourcing","limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("ambiguous"))
+            .andExpect(jsonPath("$.candidates.length()").value(2));
+    }
+
+    @Test
+    void shouldLookupStructuredProjectKnowledgeForInternalWorkerCaller() throws Exception {
+        insertProject(912L, 7L, "Structured Project", "ACTIVE");
+        insertProjectWork(922L, 912L, 7L, "诸天外包特效师");
+        jdbcTemplate.update("""
+                insert into ai_project_foreshadowing(foreshadowing_id, user_id, project_id, work_id, title, content,
+                    status, planted_chapter_no, importance, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            940L, 7L, 912L, 922L, "月球背面管理员信号", "第30章出现一次异常后台提示。", "OPEN", 30, "HIGH", 0.92);
+        jdbcTemplate.update("""
+                insert into ai_project_timeline_event(event_id, user_id, project_id, work_id, chapter_no,
+                    event_order, title, summary, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            941L, 7L, 912L, 922L, 30, 1, "后台信号出现", "系统提示有新管理员接入。", 0.91);
+        jdbcTemplate.update("""
+                insert into ai_project_character_state(state_id, user_id, project_id, work_id, character_name,
+                    chapter_no, state_summary, motivation, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            942L, 7L, 912L, 922L, "林舟", 30, "开始怀疑平台不是单机系统。", "保护工作室", 0.9);
+        jdbcTemplate.update("""
+                insert into ai_project_world_rule(rule_id, user_id, project_id, work_id, rule_type, title,
+                    content, first_chapter_no, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            943L, 7L, 912L, 922L, "system", "三端一体结算规则", "接收端、执行端、结算端必须闭环。", 1, 0.95);
+
+        mockMvc.perform(post("/internal/knowledge/projects/foreshadowings/list")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":912,"workId":922,"status":"OPEN","limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].title").value("月球背面管理员信号"))
+            .andExpect(jsonPath("$[0].status").value("OPEN"));
+
+        mockMvc.perform(post("/internal/knowledge/projects/timeline/lookup")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":912,"workId":922,"query":"后台","limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].title").value("后台信号出现"));
+
+        mockMvc.perform(post("/internal/knowledge/projects/character-states/lookup")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":912,"workId":922,"query":"林舟","limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].characterName").value("林舟"))
+            .andExpect(jsonPath("$[0].stateSummary").value("开始怀疑平台不是单机系统。"));
+
+        mockMvc.perform(post("/internal/knowledge/projects/world-rules/lookup")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":912,"workId":922,"query":"结算","limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].title").value("三端一体结算规则"));
+    }
+
+    @Test
     void shouldRejectProjectMemoryForWrongUser() throws Exception {
         insertProject(901L, 7L, "Scoped Project", "ACTIVE");
 
@@ -309,6 +591,65 @@ class KnowledgeInternalControllerTest {
                     """))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value(404));
+    }
+
+    @Test
+    void shouldCreatePromoteAndSearchScopedMemoryForInternalWorkerCaller() throws Exception {
+        String candidateResponse = mockMvc.perform(post("/internal/knowledge/memory/candidates")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":900,"conversationId":"conv-1","scope":"project","memoryType":"fact","content":"three-terminal setting","summary":"project setting","confidence":0.88,"sourceTraceId":"trace-1","ttlDays":30}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").isNumber())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        Number candidateId = com.jayway.jsonpath.JsonPath.read(candidateResponse, "$.id");
+
+        mockMvc.perform(post("/internal/knowledge/memory/candidates/" + candidateId.longValue() + "/promote")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("confirmed"))
+            .andExpect(jsonPath("$.content").value("three-terminal setting"));
+
+        mockMvc.perform(post("/internal/knowledge/memory/search")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":900,"scope":"project","limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].content").value("three-terminal setting"));
+    }
+
+    @Test
+    void shouldUpdateAndReadConversationSummaryForInternalWorkerCaller() throws Exception {
+        mockMvc.perform(post("/internal/knowledge/conversation-summary")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":900,"conversationId":"conv-1","summary":"User is building an urban brain-hole project.","sourceTraceId":"trace-2"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.summary").value("User is building an urban brain-hole project."))
+            .andExpect(jsonPath("$.sourceTraceId").value("trace-2"));
+
+        mockMvc.perform(post("/internal/knowledge/conversation-summary/read")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"conversationId":"conv-1"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.projectId").value(900))
+            .andExpect(jsonPath("$.summary").value("User is building an urban brain-hole project."));
     }
 
     private void insertBook(String platform,
@@ -357,6 +698,17 @@ class KnowledgeInternalControllerTest {
         return item;
     }
 
+    private ExternalRankItem rankItem(int rankNo, String bookName, String author, String url) {
+        ExternalRankItem item = new ExternalRankItem();
+        item.setRankNo(rankNo);
+        item.setBookName(bookName);
+        item.setAuthor(author);
+        item.setIntro("intro-" + bookName);
+        item.setBookUrl(url);
+        item.setPlatformBookId("pid-" + rankNo);
+        return item;
+    }
+
     private void insertChapter(long bookId, int chapterNo, String chapterTitle, String content) {
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update(
@@ -389,6 +741,57 @@ class KnowledgeInternalControllerTest {
             name,
             "Test project",
             status,
+            Timestamp.valueOf(now),
+            Timestamp.valueOf(now)
+        );
+    }
+
+    private void insertProjectWork(long workId, long projectId, long userId, String title) {
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update(
+            """
+                INSERT INTO ai_project_work(work_id, user_id, project_id, title, alias, genre, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            workId,
+            userId,
+            projectId,
+            title,
+            null,
+            "都市脑洞",
+            "ACTIVE",
+            Timestamp.valueOf(now),
+            Timestamp.valueOf(now)
+        );
+    }
+
+    private void insertProjectChapter(long chapterId,
+                                      long projectId,
+                                      long workId,
+                                      long userId,
+                                      int chapterNo,
+                                      String title,
+                                      String content,
+                                      String contentHash) {
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update(
+            """
+                INSERT INTO ai_project_chapter(chapter_id, user_id, project_id, work_id, chapter_no, title,
+                    content, content_hash, word_count, source_type, version, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            chapterId,
+            userId,
+            projectId,
+            workId,
+            chapterNo,
+            title,
+            content,
+            contentHash,
+            content.length(),
+            "upload",
+            1,
+            "ACTIVE",
             Timestamp.valueOf(now),
             Timestamp.valueOf(now)
         );

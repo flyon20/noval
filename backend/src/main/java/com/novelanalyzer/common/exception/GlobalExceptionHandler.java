@@ -7,6 +7,9 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.MessageSourceResolvable;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
@@ -21,6 +24,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class GlobalExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private static final String TEMPORARY_DATABASE_BUSY_MESSAGE = "\u7cfb\u7edf\u6570\u636e\u5e93\u6682\u65f6\u7e41\u5fd9\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5";
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Result<Void>> handleBusinessException(BusinessException ex) {
@@ -40,6 +44,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleValidationException(Exception ex) {
         LOGGER.warn("validation exception: {}", ex.getMessage());
         return buildResponse(ResultCode.BAD_REQUEST, resolveValidationMessage(ex));
+    }
+
+    @ExceptionHandler({
+        CannotAcquireLockException.class,
+        RecoverableDataAccessException.class,
+        TransientDataAccessException.class
+    })
+    public ResponseEntity<Result<Void>> handleTemporaryDatabaseException(Exception ex) {
+        LOGGER.warn("temporary database exception: {}", ex.getMessage());
+        return buildResponse(ResultCode.SERVICE_UNAVAILABLE, TEMPORARY_DATABASE_BUSY_MESSAGE);
     }
 
     @ExceptionHandler(Exception.class)

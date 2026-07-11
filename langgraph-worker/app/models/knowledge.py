@@ -38,6 +38,7 @@ class KnowledgeSource(BaseModel):
     category: str | None = None
     title: str | None = None
     preview: str | None = None
+    retrievalBackend: str | None = None
     material: str | None = Field(default=None, exclude=True)
 
 
@@ -120,6 +121,7 @@ class KnowledgeChatRequest(BaseModel):
     bookId: int | None = None
     selectedCandidate: BookCandidate | None = None
     mode: str | None = "research"
+    reasoningMode: str | None = "fast"
     userId: int | None = None
     contextSummary: str | None = None
     history: list[dict[str, str]] = Field(default_factory=list)

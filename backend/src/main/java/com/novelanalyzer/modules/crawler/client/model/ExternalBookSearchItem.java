@@ -7,6 +7,9 @@ public class ExternalBookSearchItem {
     private String intro;
     private String bookUrl;
     private String platformBookId;
+    private String contentType;
+    private Boolean readableNovel;
+    private String unavailableReason;
 
     public String getBookName() {
         return bookName;
@@ -47,4 +50,28 @@ public class ExternalBookSearchItem {
     public void setPlatformBookId(String platformBookId) {
         this.platformBookId = platformBookId;
     }
-}
+
+    public String getContentType() {
+        return contentType;
+    }
+
+    public void setContentType(String contentType) {
+        this.contentType = contentType;
+    }
+
+    public Boolean getReadableNovel() {
+        return readableNovel;
+    }
+
+    public void setReadableNovel(Boolean readableNovel) {
+        this.readableNovel = readableNovel;
+    }
+
+    public String getUnavailableReason() {
+        return unavailableReason;
+    }
+
+    public void setUnavailableReason(String unavailableReason) {
+        this.unavailableReason = unavailableReason;
+    }
+}

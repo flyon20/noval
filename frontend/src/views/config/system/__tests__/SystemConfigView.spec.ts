@@ -56,6 +56,7 @@ describe('SystemConfigView', () => {
       'ai.langgraph-worker.base-url',
       'ai.langgraph-worker.internal-api-key',
       'ai.langgraph-worker.timeout-millis',
+      'ai.knowledge.reasoning-mode.default',
       'ai.available-models',
       'analysis.reanalyze.cooldown-hours',
       'analysis.reanalyze.user-max-times',
@@ -374,6 +375,74 @@ describe('SystemConfigView', () => {
       configValue: '2000',
       configType: 'string',
       description: 'ai.timeout.millis description',
+    });
+  });
+
+  test('updates AI knowledge default reasoning mode from segmented control', async () => {
+    const { systemConfigApi } = await import('@/api/config');
+
+    vi.mocked(systemConfigApi.getByKey).mockImplementation(async (configKey) => ({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createSystemConfig(configKey, configKey === 'ai.knowledge.reasoning-mode.default' ? 'fast' : '1000'),
+        timestamp: 1,
+        traceId: `trace-${configKey}`,
+      },
+    }));
+    vi.mocked(systemConfigApi.getModelRegistry).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: { defaultModelKey: '', models: [] },
+        timestamp: 1,
+        traceId: 'trace-registry',
+      },
+    });
+    vi.mocked(systemConfigApi.listPromptTemplates).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: [],
+        timestamp: 1,
+        traceId: 'trace-templates',
+      },
+    });
+    vi.mocked(systemConfigApi.update).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: createSystemConfig('ai.knowledge.reasoning-mode.default', 'deep'),
+        timestamp: 1,
+        traceId: 'trace-update',
+      },
+    });
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/config/system', component: SystemConfigView }],
+    });
+    await router.push('/config/system');
+
+    const wrapper = mount(SystemConfigView, {
+      global: {
+        plugins: [router, ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    await wrapper
+      .get('[data-test="system-config-value-ai.knowledge.reasoning-mode.default"] .el-segmented__group label:nth-of-type(2) input')
+      .setValue(true);
+    await wrapper.get('[data-test="system-config-save-ai.knowledge.reasoning-mode.default"]').trigger('click');
+    await flushPromises();
+
+    expect(systemConfigApi.update).toHaveBeenCalledWith({
+      configKey: 'ai.knowledge.reasoning-mode.default',
+      configValue: 'deep',
+      configType: 'string',
+      description: 'ai.knowledge.reasoning-mode.default description',
     });
   });
 

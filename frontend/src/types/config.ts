@@ -101,6 +101,7 @@ export type KnownSystemConfigKey =
   | 'ai.langgraph-worker.base-url'
   | 'ai.langgraph-worker.internal-api-key'
   | 'ai.langgraph-worker.timeout-millis'
+  | 'ai.knowledge.reasoning-mode.default'
   | 'ai.available-models'
   | 'analysis.chunk.max-input-tokens'
   | 'analysis.chunk.target-input-tokens'

@@ -32,6 +32,18 @@ class KnowledgeConfigValidatorTest {
     }
 
     @Test
+    void shouldRejectBlankQdrantMemoryCollection() {
+        KnowledgeProperties properties = validProperties();
+        properties.getQdrant().setMemoryCollection(" ");
+
+        KnowledgeConfigValidator validator = new KnowledgeConfigValidator(properties);
+
+        assertThatThrownBy(validator::validate)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("Qdrant memory collection");
+    }
+
+    @Test
     void shouldRejectMissingEmbeddingRuntime() {
         KnowledgeProperties properties = validProperties();
         properties.getEmbedding().setProvider(" ");
@@ -80,6 +92,7 @@ class KnowledgeConfigValidatorTest {
         KnowledgeProperties properties = new KnowledgeProperties();
         properties.getQdrant().setBaseUrl("http://qdrant:6333");
         properties.getQdrant().setCollection("novel_knowledge_chunks");
+        properties.getQdrant().setMemoryCollection("noval_ai_memory");
         properties.getEmbedding().setProvider("siliconflow");
         properties.getEmbedding().setModel("BAAI/bge-m3");
         properties.getEmbedding().setDimension(1024);

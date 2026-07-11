@@ -34,19 +34,31 @@ CREATE TABLE IF NOT EXISTS ai_eval_run (
     runner_name VARCHAR(100) NOT NULL COMMENT 'runner name',
     evaluator_name VARCHAR(100) NOT NULL COMMENT 'evaluator name',
     model_name VARCHAR(100) COMMENT 'judge or answer model name',
-    status VARCHAR(20) NOT NULL DEFAULT 'RUNNING' COMMENT 'RUNNING / PASSED / FAILED',
+    status VARCHAR(20) NOT NULL DEFAULT 'RUNNING' COMMENT 'QUEUED / RUNNING / CANCELLING / CANCELLED / PASSED / FAILED',
     total_cases INT NOT NULL DEFAULT 0 COMMENT 'total cases',
     passed_cases INT NOT NULL DEFAULT 0 COMMENT 'passed cases',
     failed_cases INT NOT NULL DEFAULT 0 COMMENT 'failed cases',
+    progress_current INT NOT NULL DEFAULT 0 COMMENT 'completed case count or current progress unit',
+    progress_total INT NOT NULL DEFAULT 0 COMMENT 'expected case count or progress total',
+    progress_message VARCHAR(500) COMMENT 'operator-facing progress message',
+    cancel_requested TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'cancel requested by admin',
+    cancelled_at DATETIME COMMENT 'cancel request time',
+    retry_count INT NOT NULL DEFAULT 0 COMMENT 'retry count already scheduled',
+    max_retries INT NOT NULL DEFAULT 3 COMMENT 'max durable retries',
+    next_retry_at DATETIME COMMENT 'next retry publish time',
+    last_heartbeat_at DATETIME COMMENT 'last worker heartbeat/progress update time',
+    error_message VARCHAR(1000) COMMENT 'last execution error',
     metrics_json JSON COMMENT 'aggregated metrics',
     settings_json JSON COMMENT 'evaluation settings',
+    queued_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'queue submit time',
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'start time',
     finished_at DATETIME COMMENT 'finish time',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
     deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
     UNIQUE KEY uk_ai_eval_run_run_key (run_key),
-    INDEX idx_ai_eval_run_suite_status (suite_name, status, deleted, started_at)
+    INDEX idx_ai_eval_run_suite_status (suite_name, status, deleted, started_at),
+    INDEX idx_ai_eval_run_recovery (status, last_heartbeat_at, retry_count, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='evaluation run summary';
 
 CREATE TABLE IF NOT EXISTS ai_eval_case_result (

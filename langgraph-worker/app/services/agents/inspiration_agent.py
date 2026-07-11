@@ -6,6 +6,9 @@ from app.services.agents.base import BaseSpecialistAgent
 class InspirationAgent(BaseSpecialistAgent):
     agent_name = "inspiration"
     answer_mode = "creative"
+    llm_enabled = True
+    tool_route = "mixed_creation_research"
+    deep_reasoning_effort = "high"
     generation_instructions = (
         "围绕题材混搭、反套路切口、差异化卖点和可开篇场景发散。",
         "每个点子都要能落到主角目标、阻力和爽点反馈。",

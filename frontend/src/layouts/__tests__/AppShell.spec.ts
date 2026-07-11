@@ -32,8 +32,27 @@ describe('AppShell', () => {
     const sidebarSource = fs.readFileSync(path.resolve(__dirname, '../../components/layout/AppSidebar.vue'), 'utf-8');
 
     expect(sidebarSource).toContain('/knowledge/admin/traces');
+    expect(sidebarSource).toContain('/knowledge/admin/agent-governance');
     expect(sidebarSource).toContain('/knowledge/admin/skills');
+    expect(sidebarSource).toContain('/knowledge/admin/memories');
     expect(sidebarSource).toContain("props.roles.includes('ADMIN')");
+  });
+
+  test('switches the desktop knowledge route sidebar to the project space', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppShell.vue'), 'utf-8');
+
+    expect(source).toContain('KnowledgeProjectSpace');
+    expect(source).toContain('knowledge-sidebar-mode');
+    expect(source).toContain('showMainNavAction');
+  });
+
+  test('hosts the mobile knowledge project drawer from the shell at half width', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppShell.vue'), 'utf-8');
+
+    expect(source).toContain('mobileProjectDrawerVisible');
+    expect(source).toContain('@open-knowledge-projects');
+    expect(source).toContain('data-test="knowledge-mobile-project-drawer"');
+    expect(source).toContain('size="50%"');
   });
 
   test('does not clip desktop page-level sticky controls', () => {

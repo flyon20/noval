@@ -132,6 +132,30 @@ class CrawlerBookSearchTest {
     }
 
     @Test
+    void shouldExposeUnreadableExternalCandidateReason() throws Exception {
+        ExternalBookSearchItem audio = searchItem("102", "Audio Beta", "Author B", "Intro B", "https://fanqienovel.com/page/102");
+        audio.setContentType("audiobook");
+        audio.setReadableNovel(Boolean.FALSE);
+        audio.setUnavailableReason("search_result_is_audiobook");
+        when(pythonCrawlerClient.searchBooks("fanqie", "Audio", 3)).thenReturn(List.of(audio));
+
+        String token = loginAndGetToken("admin123");
+        mockMvc.perform(post("/api/crawler/books/search")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","keyword":"Audio","limit":3}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(1))
+            .andExpect(jsonPath("$.data[0].bookName").value("Audio Beta"))
+            .andExpect(jsonPath("$.data[0].contentType").value("audiobook"))
+            .andExpect(jsonPath("$.data[0].readableNovel").value(false))
+            .andExpect(jsonPath("$.data[0].unavailableReason").value("search_result_is_audiobook"));
+    }
+
+    @Test
     void shouldRejectBlankKeyword() throws Exception {
         String token = loginAndGetToken("admin123");
         mockMvc.perform(post("/api/crawler/books/search")

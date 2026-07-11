@@ -28,6 +28,7 @@ const FALLBACK_SYSTEM_CONFIG_KEYS: KnownSystemConfigOption[] = [
   { key: 'ai.langgraph-worker.base-url', label: '工作流地址', hint: 'LangGraph worker 服务地址，留空时使用环境配置。' },
   { key: 'ai.langgraph-worker.internal-api-key', label: '工作流内部令牌', hint: '后端调用 LangGraph worker 的内部鉴权令牌。' },
   { key: 'ai.langgraph-worker.timeout-millis', label: '工作流超时毫秒', hint: '后端等待 LangGraph worker 响应的超时时间。' },
+  { key: 'ai.knowledge.reasoning-mode.default', label: 'AI 问答默认推理模式', hint: 'fast 为快速模式；deep 会启用 DeepSeek 思考模式并使用 max 强度。' },
   { key: 'ai.available-models', label: '旧版模型列表', hint: '旧版逗号分隔模型列表，模型注册表保存后会同步。' },
   { key: 'analysis.reanalyze.cooldown-hours', label: '重析冷却小时', hint: '已有成功结果且输入未变化时，普通用户的重新分析冷却时间。' },
   { key: 'analysis.reanalyze.user-max-times', label: '重析次数限制', hint: '已有成功结果且输入未变化时，普通用户在冷却窗口内的次数上限。' },
@@ -62,6 +63,11 @@ const PROMPT_TYPES: Array<{ label: string; value: PromptType }> = [
   { label: '结构模板', value: 'structure' },
   { label: '情节模板', value: 'plot' },
   { label: '趋势模板', value: 'theme' },
+];
+
+const REASONING_MODE_OPTIONS = [
+  { label: '快速', value: 'fast' },
+  { label: '深度', value: 'deep' },
 ];
 
 const loading = ref(false);
@@ -148,6 +154,10 @@ function toKnownConfigOption(config: SystemConfig): KnownSystemConfigOption {
     label: fallback?.label ?? config.configKey,
     hint: fallback?.hint ?? config.description ?? '暂无补充说明。',
   };
+}
+
+function isReasoningModeConfig(item: SystemConfigFormItem) {
+  return item.configKey === 'ai.knowledge.reasoning-mode.default';
 }
 
 async function loadKnownConfigOptions() {
@@ -558,10 +568,18 @@ onMounted(() => {
             }}
           </label>
           <el-input
+            v-if="!isReasoningModeConfig(item)"
             v-model="item.draftValue"
             :disabled="!item.editable"
             :type="PASSWORD_KEYS.has(item.configKey) ? 'password' : 'text'"
             :show-password="PASSWORD_KEYS.has(item.configKey)"
+            :data-test="`system-config-value-${item.configKey}`"
+          />
+          <el-segmented
+            v-else
+            v-model="item.draftValue"
+            :disabled="!item.editable"
+            :options="REASONING_MODE_OPTIONS"
             :data-test="`system-config-value-${item.configKey}`"
           />
         </div>

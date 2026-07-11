@@ -14,6 +14,7 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.config.SmsAuthProperties;
 import com.novelanalyzer.modules.auth.model.SmsCodeLogEntity;
 import com.novelanalyzer.modules.auth.repository.SmsCodeLogRepository;
+import org.springframework.dao.DataAccessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -91,7 +92,20 @@ public class SmsAuthService {
             entity.setTraceId(TraceIdHolder.get());
             entity.setMessage(response.getMessage());
             entity.setExpireTime(LocalDateTime.now().plusMinutes(smsAuthProperties.getValidTimeMinutes()));
-            smsCodeLogRepository.insert(entity);
+            try {
+                smsCodeLogRepository.insert(entity);
+            } catch (DataAccessException ex) {
+                LOGGER.warn(
+                    "sms was sent but local sms log write failed phone={} bizType={} outId={} requestId={} bizId={} errorType={} message={}",
+                    phone,
+                    bizType,
+                    outId,
+                    response.getModel() == null ? null : response.getModel().getRequestId(),
+                    response.getModel() == null ? null : response.getModel().getBizId(),
+                    ex.getClass().getSimpleName(),
+                    ex.getMessage()
+                );
+            }
             LOGGER.info(
                 "aliyun sms send success phone={} bizType={} outId={} requestId={} bizId={} verifyCode={}",
                 phone,

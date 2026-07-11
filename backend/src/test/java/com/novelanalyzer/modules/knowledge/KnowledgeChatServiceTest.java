@@ -30,6 +30,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
@@ -293,6 +294,122 @@ class KnowledgeChatServiceTest {
     }
 
     @Test
+    void shouldForwardRequestedReasoningModeToWorkerPayload() throws Exception {
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("深度模式回答");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给我扫榜并做大纲","reasoningMode":"deep"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.status").value("answered"));
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("reasoningMode", "deep");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldForwardTopThirtyRankLimitToWorkerPayload() throws Exception {
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("Top30 榜单分析完成");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"帮我看男频都市脑洞新书榜整体30名榜单趋势","limits":{"rankLimit":30,"evidenceLimit":5}}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.status").value("answered"));
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        Map<String, Object> limits = (Map<String, Object>) payloadCaptor.getValue().get("limits");
+        assertThat(limits).containsEntry("rankLimit", 30);
+    }
+
+    @Test
+    void shouldUseAdminDefaultReasoningModeWhenRequestDoesNotSpecifyMode() throws Exception {
+        upsertSystemConfig("ai.knowledge.reasoning-mode.default", "deep");
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("默认深度模式回答");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给我扫榜并做大纲"}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.status").value("answered"));
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("reasoningMode", "deep");
+    }
+
+    private void upsertSystemConfig(String key, String value) {
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(1) FROM system_config WHERE config_key = ? AND deleted = 0",
+            Integer.class,
+            key
+        );
+        if (count != null && count > 0) {
+            jdbcTemplate.update("UPDATE system_config SET config_value = ? WHERE config_key = ? AND deleted = 0", value, key);
+            return;
+        }
+        jdbcTemplate.update(
+            "INSERT INTO system_config(config_key, config_value, config_type, description, is_editable, deleted) VALUES (?, ?, 'ai', 'test', 1, 0)",
+            key,
+            value
+        );
+    }
+
+    @Test
+    void shouldRejectUnreadableSelectedCandidateBeforeCrawlerFetch() throws Exception {
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"继续分析","selectedCandidate":{"platform":"fanqie","platformBookId":"audio-202","bookName":"Audio Book","author":"Author E","intro":"Audio intro","bookUrl":"https://fanqienovel.com/page/audio-202","local":false,"contentType":"audiobook","readableNovel":false,"unavailableReason":"search_result_is_audiobook"}}
+                    """))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("selected candidate is not a readable novel"));
+
+        verify(crawlerService, never()).completeExternalBookCandidate(
+            any(),
+            any(),
+            any(),
+            any(),
+            any(),
+            any(),
+            anyInt()
+        );
+        verify(langGraphWorkerClient, never()).runKnowledgeChat(any());
+    }
+
+    @Test
     void shouldClampSelectedCandidateCompletionToTenChaptersBeforeWorkerAnalysis() throws Exception {
         when(crawlerService.completeExternalBookCandidate(
             "fanqie",
@@ -504,6 +621,69 @@ class KnowledgeChatServiceTest {
     }
 
     @Test
+    void shouldPersistConversationSummaryForWorkerMemoryAgent() throws Exception {
+        createConversationSummaryTable();
+        createProjectTablesAndProject(900L, 1L);
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("底层特效师通过三端一体系统接单、外包、结算。");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of(
+            "status", "answered",
+            "memorySummary", "最近用户目标：底层职业都市脑洞\n上一轮结论：三端一体是接收端、执行端、结算端。",
+            "domainIntent", "mixed_creation_research"
+        ));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        MvcResult result = mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"我要写底层特效师都市脑洞，三端一体怎么落？","projectId":900}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.resultJson.conversationId").exists())
+            .andReturn();
+
+        String conversationId = JsonPath.read(result.getResponse().getContentAsString(), "$.data.resultJson.conversationId");
+        Map<String, Object> summary = jdbcTemplate.queryForMap(
+            "select user_id, project_id, summary, source_trace_id from ai_conversation_summary where conversation_id = ?",
+            conversationId
+        );
+
+        assertThat(summary.get("user_id")).isEqualTo(1L);
+        assertThat(summary.get("project_id")).isEqualTo(900L);
+        assertThat((String) summary.get("summary")).contains("三端一体");
+        assertThat((String) summary.get("summary")).contains("底层特效师");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldForwardDeepSeekScaleContextBudgetToWorkerByDefault() throws Exception {
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("完整大纲会沿用上一轮的题材设定。");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给出完整的大纲设计","conversationId":"conv-budget-default"}
+                    """))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        Map<String, Object> limits = (Map<String, Object>) payloadCaptor.getValue().get("limits");
+        assertThat(limits).containsEntry("maxInputTokens", 1_000_000);
+    }
+
+    @Test
     void shouldReturnBadGatewayWhenCandidateContinuationFails() throws Exception {
         KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
         workerResponse.setStatus("insufficient_evidence");
@@ -540,5 +720,52 @@ class KnowledgeChatServiceTest {
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
+    }
+
+    private void createConversationSummaryTable() {
+        jdbcTemplate.execute("""
+            create table if not exists ai_conversation_summary (
+                id bigint auto_increment primary key,
+                conversation_id varchar(80) not null,
+                user_id bigint not null,
+                project_id bigint,
+                summary clob not null,
+                source_trace_id varchar(80),
+                created_at timestamp default current_timestamp,
+                updated_at timestamp default current_timestamp,
+                constraint uk_ai_conversation_summary_chat_test unique(conversation_id, user_id)
+            )
+            """);
+    }
+
+    private void createProjectTablesAndProject(long projectId, long userId) {
+        jdbcTemplate.execute("""
+            create table if not exists ai_project (
+                project_id bigint auto_increment primary key,
+                user_id bigint not null,
+                name varchar(120) not null,
+                description varchar(500),
+                status varchar(20) not null default 'ACTIVE',
+                created_at timestamp default current_timestamp,
+                updated_at timestamp default current_timestamp
+            )
+            """);
+        jdbcTemplate.execute("""
+            create table if not exists ai_project_conversation (
+                id bigint auto_increment primary key,
+                project_id bigint not null,
+                user_id bigint not null,
+                conversation_id varchar(80) not null,
+                created_at timestamp default current_timestamp,
+                constraint uk_ai_project_conversation_chat_test unique(project_id, conversation_id)
+            )
+            """);
+        jdbcTemplate.update(
+            "insert into ai_project(project_id, user_id, name, description, status) values(?, ?, ?, ?, 'ACTIVE')",
+            projectId,
+            userId,
+            "context-memory-test",
+            "context memory test project"
+        );
     }
 }

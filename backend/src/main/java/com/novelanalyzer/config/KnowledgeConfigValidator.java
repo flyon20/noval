@@ -19,6 +19,7 @@ public class KnowledgeConfigValidator {
         }
         requireText(knowledgeProperties.getQdrant().getBaseUrl(), "Qdrant base URL must be configured");
         requireText(knowledgeProperties.getQdrant().getCollection(), "Qdrant collection must be configured");
+        requireText(knowledgeProperties.getQdrant().getMemoryCollection(), "Qdrant memory collection must be configured");
 
         if (knowledgeProperties.getEmbedding() == null) {
             throw new IllegalStateException("embedding config must be configured");
