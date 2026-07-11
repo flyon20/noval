@@ -831,6 +831,8 @@ public class CrawlerService {
         vo.setIntro(book.getIntro());
         vo.setBookUrl(book.getBookUrl());
         vo.setLocal(true);
+        vo.setContentType("novel");
+        vo.setReadableNovel(Boolean.TRUE);
         return vo;
     }
 
@@ -843,6 +845,9 @@ public class CrawlerService {
         vo.setIntro(item.getIntro());
         vo.setBookUrl(item.getBookUrl());
         vo.setLocal(false);
+        vo.setContentType(defaultIfBlank(item.getContentType(), "novel"));
+        vo.setReadableNovel(item.getReadableNovel() == null ? Boolean.TRUE : item.getReadableNovel());
+        vo.setUnavailableReason(item.getUnavailableReason());
         return vo;
     }
 

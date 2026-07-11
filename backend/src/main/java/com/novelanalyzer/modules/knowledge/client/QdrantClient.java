@@ -29,6 +29,7 @@ public class QdrantClient {
     private final ObjectMapper objectMapper;
     private final KnowledgeProperties knowledgeProperties;
     private final AtomicBoolean collectionEnsured = new AtomicBoolean(false);
+    private final AtomicBoolean memoryCollectionEnsured = new AtomicBoolean(false);
 
     public QdrantClient(HttpClient httpClient,
                         ObjectMapper objectMapper,
@@ -39,7 +40,15 @@ public class QdrantClient {
     }
 
     public void ensureCollection() {
-        if (collectionEnsured.get()) {
+        ensureCollection(knowledgeProperties.getQdrant().getCollection(), collectionEnsured);
+    }
+
+    public void ensureMemoryCollection() {
+        ensureCollection(knowledgeProperties.getQdrant().getMemoryCollection(), memoryCollectionEnsured);
+    }
+
+    private void ensureCollection(String collection, AtomicBoolean ensured) {
+        if (ensured.get()) {
             return;
         }
         Map<String, Object> request = Map.of(
@@ -48,8 +57,8 @@ public class QdrantClient {
                 "distance", "Cosine"
             )
         );
-        send("PUT", collectionPath(), request, "qdrant collection ensure failed");
-        collectionEnsured.set(true);
+        send("PUT", collectionPath(collection), request, "qdrant collection ensure failed");
+        ensured.set(true);
     }
 
     public void upsertPoint(String pointId, List<Double> vector, Map<String, Object> payload) {
@@ -113,7 +122,7 @@ public class QdrantClient {
                 .method(method, publisher)
                 .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if ("PUT".equals(method) && collectionPath().equals(path) && response.statusCode() == 409) {
+            if ("PUT".equals(method) && isCollectionEnsurePath(path) && response.statusCode() == 409) {
                 return response;
             }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -143,7 +152,15 @@ public class QdrantClient {
     }
 
     private String collectionPath() {
-        return "/collections/" + knowledgeProperties.getQdrant().getCollection();
+        return collectionPath(knowledgeProperties.getQdrant().getCollection());
+    }
+
+    private String collectionPath(String collection) {
+        return "/collections/" + collection;
+    }
+
+    private boolean isCollectionEnsurePath(String path) {
+        return path != null && path.startsWith("/collections/") && !path.contains("/points");
     }
 
     private double parseDouble(Object value) {

@@ -116,3 +116,34 @@ CREATE INDEX IF NOT EXISTS idx_async_job_type_key_time ON async_job(job_type, jo
 CREATE INDEX IF NOT EXISTS idx_async_job_resource_key ON async_job(resource_key);
 CREATE INDEX IF NOT EXISTS idx_async_job_status_time ON async_job(status, create_time);
 CREATE INDEX IF NOT EXISTS idx_async_job_trigger_user_time ON async_job(trigger_user_id, create_time);
+
+DROP TABLE IF EXISTS ai_chat_run;
+CREATE TABLE ai_chat_run (
+    run_id VARCHAR(64) PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    project_id BIGINT,
+    conversation_id VARCHAR(80) NOT NULL,
+    question CLOB,
+    request_json CLOB,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    progress_phase VARCHAR(40),
+    progress_message VARCHAR(500),
+    answer CLOB,
+    result_json CLOB,
+    trace_id VARCHAR(80),
+    source_count INT DEFAULT 0,
+    error_message VARCHAR(1000),
+    cancel_requested BOOLEAN DEFAULT FALSE,
+    retry_count INT DEFAULT 0,
+    max_retries INT DEFAULT 3,
+    queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted TINYINT DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_run_user_conversation ON ai_chat_run(user_id, conversation_id, deleted, queued_at);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_run_user_status ON ai_chat_run(user_id, status, deleted, queued_at);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_run_project ON ai_chat_run(project_id, deleted, queued_at);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_run_trace ON ai_chat_run(trace_id);

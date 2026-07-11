@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Delete, Plus, Promotion } from '@element-plus/icons-vue';
 import BookCandidatePicker from '@/components/knowledge/BookCandidatePicker.vue';
 import KnowledgeMessageBubble from '@/components/knowledge/KnowledgeMessageBubble.vue';
 import { useKnowledgeChat } from '@/composables/useKnowledgeChat';
+import {
+  getKnowledgeConversationSelectDetail,
+  getKnowledgeProjectChangeDetail,
+  KNOWLEDGE_CONVERSATION_SELECT_EVENT,
+  KNOWLEDGE_PROJECT_CHANGE_EVENT,
+} from '@/composables/useKnowledgeProjectSelection';
 import { useVisualViewportKeyboard } from '@/composables/useVisualViewportKeyboard';
 
 defineOptions({
@@ -16,19 +22,72 @@ const {
   sendQuestion,
   selectCandidate,
   loadProjects,
-  createProject,
   selectProject,
+  loadConversationRun,
   clearConversation,
+  startNewConversation,
   deleteMessage,
 } = useKnowledgeChat();
 const { keyboardStyle } = useVisualViewportKeyboard();
 const messagesRef = ref<HTMLElement | null>(null);
+const numberFormatter = new Intl.NumberFormat('zh-CN');
 
 const quickPrompts = [
   '凡人修仙传开篇卖点是什么？',
   '最近男频题材趋势是什么？',
   '修仙文开局怎么设计爽点？',
 ];
+
+const contextBudget = computed(() => state.contextBudget);
+const memoryLayerCount = computed(() => contextBudget.value?.memoryLayers?.length ?? 0);
+const contextTraceId = computed(() => state.traceId || [...state.messages].reverse().find((message) => message.traceId)?.traceId || '');
+const contextUsedRatio = computed(() => {
+  const maxTokens = Number(contextBudget.value?.maxInputTokens);
+  const usedTokens = Number(contextBudget.value?.estimatedUsedTokens);
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0 || !Number.isFinite(usedTokens)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(1, usedTokens / maxTokens));
+});
+const compressionThresholdTokens = computed(() => {
+  const raw = contextBudget.value?.compressionThresholdTokens ?? contextBudget.value?.compressionThreshold;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+});
+const memoryLayerSummary = computed(() => {
+  const layers = contextBudget.value?.memoryLayers;
+  if (!Array.isArray(layers) || layers.length === 0) {
+    return '记忆层 0：本轮未加载可用记忆';
+  }
+  return layers
+    .map((layer) => {
+      const name = String(layer.name || 'memory');
+      const status = String(layer.status || 'unknown');
+      const count = Number(layer.itemCount);
+      return Number.isFinite(count) ? `${name} ${status} ${count}` : `${name} ${status}`;
+    })
+    .join(' / ');
+});
+
+function formatTokenCount(value?: number) {
+  return numberFormatter.format(Math.max(0, Math.round(Number(value) || 0)));
+}
+
+function formatRemainingRatio(value?: number) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return '-';
+  }
+  return `${(Math.max(0, Math.min(1, normalized)) * 100).toFixed(2)}%`;
+}
+
+function formatRatio(value?: number) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return '-';
+  }
+  return `${(Math.max(0, Math.min(1, normalized)) * 100).toFixed(2)}%`;
+}
 
 async function scrollMessagesToBottom() {
   await nextTick();
@@ -37,9 +96,27 @@ async function scrollMessagesToBottom() {
   }
 }
 
+function handleProjectChange(event: Event) {
+  const detail = getKnowledgeProjectChangeDetail(event);
+  selectProject(detail.projectId);
+}
+
+function handleConversationSelect(event: Event) {
+  const detail = getKnowledgeConversationSelectDetail(event);
+  selectProject(detail.projectId);
+  void loadConversationRun(detail.conversationId);
+}
+
 onMounted(async () => {
+  window.addEventListener(KNOWLEDGE_PROJECT_CHANGE_EVENT, handleProjectChange);
+  window.addEventListener(KNOWLEDGE_CONVERSATION_SELECT_EVENT, handleConversationSelect);
   await loadProjects();
   await scrollMessagesToBottom();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(KNOWLEDGE_PROJECT_CHANGE_EVENT, handleProjectChange);
+  window.removeEventListener(KNOWLEDGE_CONVERSATION_SELECT_EVENT, handleConversationSelect);
 });
 
 watch(
@@ -54,40 +131,20 @@ watch(
 
 <template>
   <main class="knowledge-chat" :style="keyboardStyle">
-    <section class="knowledge-chat__projects" aria-label="writing projects">
-      <el-select
-        :model-value="state.activeProjectId"
-        clearable
-        size="small"
-        placeholder="项目"
-        data-test="knowledge-project-select"
-        @change="(value: number | '') => selectProject(value || null)"
-      >
-        <el-option
-          v-for="project in state.projects"
-          :key="project.projectId"
-          :label="project.name"
-          :value="project.projectId"
-        />
-      </el-select>
-      <div data-test="knowledge-project-name">
-        <el-input
-          v-model="state.projectNameDraft"
-          size="small"
-          placeholder="新项目"
-          @keydown.enter.prevent="createProject"
-        />
-      </div>
-      <el-button
-        size="small"
-        :icon="Plus"
-        data-test="knowledge-create-project"
-        @click="createProject"
-      />
-    </section>
-
     <header v-if="state.messages.length" class="knowledge-chat__toolbar">
       <span>最近会话</span>
+      <el-button
+        data-test="knowledge-new-chat"
+        size="small"
+        type="primary"
+        plain
+        :icon="Plus"
+        :disabled="state.loading"
+        aria-label="新建会话"
+        @click="startNewConversation"
+      >
+        新建会话
+      </el-button>
       <el-button
         data-test="knowledge-clear-chat"
         size="small"
@@ -124,6 +181,9 @@ watch(
         :intent="message.intent"
         :answer-boundary="message.answerBoundary"
         :sources="message.sources"
+        :fallback-used="message.fallbackUsed"
+        :degraded="message.degraded"
+        :degradation-reasons="message.degradationReasons"
         :deletable="!state.loading"
         :delete-test-id="`knowledge-delete-message-${index}`"
         @delete="deleteMessage(index)"
@@ -139,6 +199,14 @@ watch(
       <div v-if="state.loading && !state.answer" class="knowledge-chat__typing">
         {{ state.status || '正在思考...' }}
       </div>
+      <div
+        v-else-if="state.loading && state.status"
+        class="knowledge-chat__run-status"
+        data-test="knowledge-run-status"
+      >
+        <span>{{ state.status }}</span>
+        <small v-if="contextTraceId">Trace {{ contextTraceId }}</small>
+      </div>
     </section>
 
     <el-alert
@@ -149,6 +217,25 @@ watch(
       :title="state.errorMessage"
       show-icon
     />
+
+    <section
+      v-if="contextBudget"
+      class="knowledge-chat__context-budget"
+      data-test="knowledge-context-budget"
+      aria-label="上下文容量状态"
+    >
+      <strong>上下文容量</strong>
+      <span>已用 {{ formatTokenCount(contextBudget.estimatedUsedTokens) }} tokens</span>
+      <span>剩余 {{ formatRemainingRatio(contextBudget.remainingRatio) }}</span>
+      <span>{{ contextBudget.compressed ? '已压缩' : '未压缩' }}</span>
+      <span>记忆层 {{ memoryLayerCount }}</span>
+      <span v-if="contextBudget.maxInputTokens">总容量 {{ formatTokenCount(contextBudget.maxInputTokens) }} tokens</span>
+      <span v-if="contextUsedRatio !== undefined">已用比例 {{ formatRatio(contextUsedRatio) }}</span>
+      <span v-if="contextBudget.remainingTokens">剩余 {{ formatTokenCount(contextBudget.remainingTokens) }} tokens</span>
+      <span v-if="compressionThresholdTokens">压缩阈值 {{ formatTokenCount(compressionThresholdTokens) }} tokens</span>
+      <span>{{ memoryLayerSummary }}</span>
+      <span v-if="contextTraceId">Trace {{ contextTraceId }}</span>
+    </section>
 
     <form class="knowledge-chat__composer" @submit.prevent="sendQuestion">
       <div class="knowledge-chat__input" data-test="knowledge-question-input">
@@ -164,6 +251,17 @@ watch(
       </div>
 
       <div class="knowledge-chat__tools">
+        <el-segmented
+          v-model="state.reasoningMode"
+          data-test="knowledge-reasoning-mode"
+          size="small"
+          :options="[
+            { label: '快速', value: 'fast' },
+            { label: '深度', value: 'deep' },
+          ]"
+          :disabled="state.loading"
+          aria-label="AI 问答推理模式"
+        />
         <el-segmented
           v-model="state.chapterCount"
           size="small"
@@ -185,6 +283,7 @@ watch(
         />
       </div>
     </form>
+
   </main>
 </template>
 
@@ -197,15 +296,6 @@ watch(
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   padding-bottom: 1rem;
   overflow: hidden;
-}
-
-.knowledge-chat__projects {
-  width: min(100%, 880px);
-  justify-self: center;
-  display: grid;
-  grid-template-columns: minmax(10rem, 16rem) minmax(8rem, 1fr) auto;
-  gap: 0.5rem;
-  padding: 0 1rem 0.5rem;
 }
 
 .knowledge-chat__toolbar {
@@ -270,9 +360,46 @@ watch(
   font-size: 0.9rem;
 }
 
+.knowledge-chat__run-status {
+  align-self: flex-start;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+  color: var(--color-text-muted);
+  font-size: 0.86rem;
+}
+
+.knowledge-chat__run-status small {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
 .knowledge-chat__error {
   width: min(100%, 880px);
   justify-self: center;
+}
+
+.knowledge-chat__context-budget {
+  width: min(100%, 880px);
+  justify-self: center;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.knowledge-chat__context-budget strong {
+  color: var(--color-text);
+  font-weight: 650;
 }
 
 .knowledge-chat__composer {
@@ -298,6 +425,7 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .knowledge-chat__send {
@@ -308,25 +436,23 @@ watch(
 
 @media (max-width: 720px) {
   .knowledge-chat {
-    min-height: calc(100dvh - 56px);
-    height: calc(100dvh - 56px);
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: calc(
+      100dvh
+      - 56px
+      - var(--bottom-nav-height)
+      - env(safe-area-inset-bottom, 0px)
+      - 1.25rem
+      - var(--keyboard-offset)
+    );
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
     padding-bottom: 0;
   }
 
   .knowledge-chat__messages {
     width: 100%;
-    padding:
-      0.75rem
-      0.75rem
-      calc(9.5rem + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + var(--keyboard-offset));
-    scroll-padding-bottom: calc(9.5rem + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + var(--keyboard-offset));
-  }
-
-  .knowledge-chat__projects {
-    width: 100%;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-    padding: 0 0.75rem 0.5rem;
+    padding: 0.75rem 0.75rem 1rem;
+    scroll-padding-bottom: 1rem;
   }
 
   .knowledge-chat__toolbar {
@@ -343,20 +469,11 @@ watch(
   }
 
   .knowledge-chat__composer {
-    position: fixed;
-    left: 0.75rem;
-    right: 0.75rem;
-    bottom: calc(
-      var(--bottom-nav-height)
-      + env(safe-area-inset-bottom, 0px)
-      + 0.65rem
-      + var(--keyboard-offset)
-    );
-    z-index: 48;
-    width: auto;
-    margin: 0;
+    position: relative;
+    z-index: 2;
+    width: calc(100% - 1.5rem);
+    margin: 0 auto 0.75rem;
     padding: 0.65rem;
-    transition: bottom 180ms ease;
   }
 
   .knowledge-chat__tools :deep(.el-segmented) {

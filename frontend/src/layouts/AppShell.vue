@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import AppHeader from '@/components/layout/AppHeader.vue';
 import AppSidebar from '@/components/layout/AppSidebar.vue';
 import AppBottomNav from '@/components/layout/AppBottomNav.vue';
+import KnowledgeProjectSpace from '@/components/knowledge/KnowledgeProjectSpace.vue';
 
 defineProps<{
   username: string;
@@ -12,14 +15,40 @@ const emit = defineEmits<{
   changePassword: [];
   logout: [];
 }>();
+
+const route = useRoute();
+const knowledgeSidebarMode = ref<'projects' | 'nav'>('projects');
+const mobileProjectDrawerVisible = ref(false);
+const isKnowledgeChatRoute = computed(() => route.path === '/knowledge');
+
+watch(
+  () => route.path,
+  (path) => {
+    knowledgeSidebarMode.value = path === '/knowledge' ? 'projects' : 'nav';
+    if (path !== '/knowledge') {
+      mobileProjectDrawerVisible.value = false;
+    }
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
   <div class="app-shell">
     <div class="app-shell__backdrop"></div>
 
-    <div class="app-shell__sidebar">
-      <AppSidebar :roles="roles" />
+    <div class="app-shell__sidebar" data-test="knowledge-sidebar-mode">
+      <KnowledgeProjectSpace
+        v-if="isKnowledgeChatRoute && knowledgeSidebarMode === 'projects'"
+        :showMainNavAction="true"
+        @show-main-nav="knowledgeSidebarMode = 'nav'"
+      />
+      <AppSidebar
+        v-else
+        :roles="roles"
+        :show-knowledge-space-action="isKnowledgeChatRoute"
+        @open-knowledge-space="knowledgeSidebarMode = 'projects'"
+      />
     </div>
 
     <div class="app-shell__surface">
@@ -27,13 +56,31 @@ const emit = defineEmits<{
         :roles="roles"
         :username="username"
         @change-password="emit('changePassword')"
+        @open-knowledge-projects="mobileProjectDrawerVisible = true"
         @logout="emit('logout')"
       />
-      <main class="app-shell__content">
+      <main class="app-shell__content" :class="{ 'is-knowledge-chat': isKnowledgeChatRoute }">
         <slot />
       </main>
       <AppBottomNav class="app-shell__mobile-nav" />
     </div>
+
+    <el-drawer
+      v-if="isKnowledgeChatRoute"
+      v-model="mobileProjectDrawerVisible"
+      direction="ltr"
+      size="50%"
+      :with-header="false"
+      append-to-body
+      class="app-shell__knowledge-project-drawer"
+      data-test="knowledge-mobile-project-drawer"
+    >
+      <KnowledgeProjectSpace
+        embedded
+        close-on-select
+        @close="mobileProjectDrawerVisible = false"
+      />
+    </el-drawer>
   </div>
 </template>
 
@@ -172,5 +219,19 @@ const emit = defineEmits<{
     max-width: 100%;
     overflow-x: clip;
   }
+
+  .app-shell__content.is-knowledge-chat {
+    padding: calc(0.875rem + 56px) 0 0;
+    overflow: hidden;
+  }
+}
+
+:global(.app-shell__knowledge-project-drawer .el-drawer__body) {
+  padding: 0;
+  overflow: hidden;
+}
+
+:global(.app-shell__knowledge-project-drawer) {
+  max-width: 100vw;
 }
 </style>

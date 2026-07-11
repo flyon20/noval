@@ -11,4 +11,10 @@ describe('Markdown sanitizer', () => {
     expect(html).not.toContain('onerror');
     expect(html).toContain('<img');
   });
+  test('renders compact ATX headings without a space after hash markers', () => {
+    const html = renderAnalysisMarkdown('##Rank Evidence\ncontent\n\n###Outline');
+
+    expect(html).toContain('<h2>Rank Evidence</h2>');
+    expect(html).toContain('<h3>Outline</h3>');
+  });
 });

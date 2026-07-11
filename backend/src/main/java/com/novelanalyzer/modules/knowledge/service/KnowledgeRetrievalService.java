@@ -30,6 +30,8 @@ public class KnowledgeRetrievalService {
     }
 
     public List<KnowledgeSearchResultVO> search(KnowledgeSearchRequest request) {
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        diagnostics.put("requestedMinScore", effectiveMinScore(request.getMinScore()));
         try {
             List<Double> queryVector = embeddingClient.embed(request.getQuery().trim());
             qdrantClient.ensureCollection();
@@ -38,17 +40,19 @@ public class KnowledgeRetrievalService {
                 buildFilters(request),
                 normalizeLimit(request.getLimit())
             );
+            diagnostics.put("qdrantReturnedCount", qdrantResults.size());
             List<KnowledgeSearchResultVO> results = qdrantResults.stream()
                 .filter(result -> meetsMinScore(result, effectiveMinScore(request.getMinScore())))
                 .map(result -> knowledgeRepository.findSearchResultSource(resolveChunkId(result.payload()), result.id(), result.score()).orElse(null))
                 .filter(Objects::nonNull)
                 .toList();
             if (!results.isEmpty()) {
-                return results;
+                return markBackend(results, "qdrant", diagnostics);
             }
         } catch (RuntimeException ex) {
             // External embedding/vector services can fail independently of local indexed data.
             // Keep Q&A usable by falling back to lightweight lexical retrieval.
+            diagnostics.put("qdrantFailureClass", ex.getClass().getSimpleName());
         }
         List<KnowledgeSearchResultVO> lexicalResults = knowledgeRepository.findLexicalSearchResults(
             request.getQuery(),
@@ -60,21 +64,38 @@ public class KnowledgeRetrievalService {
             normalizeLimit(request.getLimit())
         );
         if (!lexicalResults.isEmpty()) {
-            return lexicalResults;
+            return markBackend(lexicalResults, "lexical", diagnostics);
         }
-        return fallbackToCrawledChapters(request);
+        return fallbackToCrawledChapters(request, diagnostics);
     }
 
-    private List<KnowledgeSearchResultVO> fallbackToCrawledChapters(KnowledgeSearchRequest request) {
+    private List<KnowledgeSearchResultVO> fallbackToCrawledChapters(KnowledgeSearchRequest request,
+                                                                    Map<String, Object> diagnostics) {
         if (request.getBookId() == null || !isChapterSearch(request.getSourceType())) {
             return List.of();
         }
-        return knowledgeRepository.findCrawledChapterSources(
+        return markBackend(knowledgeRepository.findCrawledChapterSources(
             request.getBookId(),
             request.getPlatform(),
             request.getChapterNo(),
             normalizeLimit(request.getLimit())
-        );
+        ), "crawler_fallback", diagnostics);
+    }
+
+    private List<KnowledgeSearchResultVO> markBackend(List<KnowledgeSearchResultVO> results,
+                                                      String retrievalBackend,
+                                                      Map<String, Object> diagnostics) {
+        Map<String, Object> resultDiagnostics = new LinkedHashMap<>(diagnostics);
+        resultDiagnostics.put("retrievalBackend", retrievalBackend);
+        resultDiagnostics.put("returnedCount", results.size());
+        if (!"qdrant".equals(retrievalBackend)) {
+            resultDiagnostics.put("fallbackBackend", retrievalBackend);
+        }
+        for (KnowledgeSearchResultVO result : results) {
+            result.setRetrievalBackend(retrievalBackend);
+            result.setRetrievalDiagnostics(resultDiagnostics);
+        }
+        return results;
     }
 
     private boolean isChapterSearch(String sourceType) {

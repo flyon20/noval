@@ -18,9 +18,20 @@ public class KnowledgeAgentTraceVO {
     private String intentDecision;
     private String contextUsed;
     private String memoryUsed;
+    private String memoryDiagnostics;
+    private String retrievalDiagnostics;
     private String sourcePolicy;
     private String supervisorDecision;
     private String memoryCandidates;
+    private String mcpToolCalls;
+    private String toolPermissionDecisions;
+    private String evidenceContract;
+    private String selectedSnapshotGroup;
+    private String rejectedSnapshotGroups;
+    private String specialistAgentResults;
+    private String selectedExperts;
+    private String expertRouter;
+    private String finalAnswerBoundary;
     private String snapshotTime;
     private LocalDateTime createdAt;
 
@@ -144,6 +155,22 @@ public class KnowledgeAgentTraceVO {
         this.memoryUsed = memoryUsed;
     }
 
+    public String getMemoryDiagnostics() {
+        return memoryDiagnostics;
+    }
+
+    public void setMemoryDiagnostics(String memoryDiagnostics) {
+        this.memoryDiagnostics = memoryDiagnostics;
+    }
+
+    public String getRetrievalDiagnostics() {
+        return retrievalDiagnostics;
+    }
+
+    public void setRetrievalDiagnostics(String retrievalDiagnostics) {
+        this.retrievalDiagnostics = retrievalDiagnostics;
+    }
+
     public String getSourcePolicy() {
         return sourcePolicy;
     }
@@ -166,6 +193,78 @@ public class KnowledgeAgentTraceVO {
 
     public void setMemoryCandidates(String memoryCandidates) {
         this.memoryCandidates = memoryCandidates;
+    }
+
+    public String getMcpToolCalls() {
+        return mcpToolCalls;
+    }
+
+    public void setMcpToolCalls(String mcpToolCalls) {
+        this.mcpToolCalls = mcpToolCalls;
+    }
+
+    public String getToolPermissionDecisions() {
+        return toolPermissionDecisions;
+    }
+
+    public void setToolPermissionDecisions(String toolPermissionDecisions) {
+        this.toolPermissionDecisions = toolPermissionDecisions;
+    }
+
+    public String getEvidenceContract() {
+        return evidenceContract;
+    }
+
+    public void setEvidenceContract(String evidenceContract) {
+        this.evidenceContract = evidenceContract;
+    }
+
+    public String getSelectedSnapshotGroup() {
+        return selectedSnapshotGroup;
+    }
+
+    public void setSelectedSnapshotGroup(String selectedSnapshotGroup) {
+        this.selectedSnapshotGroup = selectedSnapshotGroup;
+    }
+
+    public String getRejectedSnapshotGroups() {
+        return rejectedSnapshotGroups;
+    }
+
+    public void setRejectedSnapshotGroups(String rejectedSnapshotGroups) {
+        this.rejectedSnapshotGroups = rejectedSnapshotGroups;
+    }
+
+    public String getSpecialistAgentResults() {
+        return specialistAgentResults;
+    }
+
+    public void setSpecialistAgentResults(String specialistAgentResults) {
+        this.specialistAgentResults = specialistAgentResults;
+    }
+
+    public String getSelectedExperts() {
+        return selectedExperts;
+    }
+
+    public void setSelectedExperts(String selectedExperts) {
+        this.selectedExperts = selectedExperts;
+    }
+
+    public String getExpertRouter() {
+        return expertRouter;
+    }
+
+    public void setExpertRouter(String expertRouter) {
+        this.expertRouter = expertRouter;
+    }
+
+    public String getFinalAnswerBoundary() {
+        return finalAnswerBoundary;
+    }
+
+    public void setFinalAnswerBoundary(String finalAnswerBoundary) {
+        this.finalAnswerBoundary = finalAnswerBoundary;
     }
 
     public String getSnapshotTime() {

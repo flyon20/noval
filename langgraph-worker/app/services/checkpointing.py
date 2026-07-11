@@ -64,6 +64,7 @@ class _PersistentStateSaver(InMemorySaver):
     def delete_thread(self, thread_id: str) -> None:
         with self._lock:
             super().delete_thread(thread_id)
+            self._delete_thread_state(thread_id)
             self._persist_state()
 
     def _state_payload(self) -> bytes:
@@ -81,6 +82,37 @@ class _PersistentStateSaver(InMemorySaver):
         self.storage = self._restore_storage(decoded.get("storage", {}))
         self.writes = defaultdict(dict, decoded.get("writes", {}))
         self.blobs = dict(decoded.get("blobs", {}))
+
+    def _row_payload(self, thread_id: str, checkpoint_ns: str) -> bytes:
+        writes = {
+            key: value
+            for key, value in self.writes.items()
+            if len(key) >= 2 and key[0] == thread_id and key[1] == checkpoint_ns
+        }
+        blobs = {
+            key: value
+            for key, value in self.blobs.items()
+            if len(key) >= 2 and key[0] == thread_id and key[1] == checkpoint_ns
+        }
+        return pickle.dumps(
+            {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoints": self._plain_dict(self.storage[thread_id][checkpoint_ns]),
+                "writes": writes,
+                "blobs": blobs,
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+
+    def _restore_row_state(self, thread_id: str, checkpoint_ns: str, payload: bytes) -> None:
+        decoded = pickle.loads(payload)
+        restored_thread_id = str(decoded.get("thread_id") or thread_id)
+        restored_checkpoint_ns = str(decoded.get("checkpoint_ns") or checkpoint_ns)
+        self.storage[restored_thread_id][restored_checkpoint_ns] = dict(decoded.get("checkpoints") or {})
+        for key, value in dict(decoded.get("writes") or {}).items():
+            self.writes[key] = value
+        self.blobs.update(dict(decoded.get("blobs") or {}))
 
     def _restore_storage(self, payload: dict[str, Any]) -> defaultdict:
         storage = defaultdict(lambda: defaultdict(dict))
@@ -107,6 +139,9 @@ class _PersistentStateSaver(InMemorySaver):
     def _persist_state(self) -> None:
         raise NotImplementedError
 
+    def _delete_thread_state(self, thread_id: str) -> None:
+        return None
+
 
 class DurableMySqlSaver(_PersistentStateSaver):
     """MySQL-backed LangGraph saver for the production worker stack."""
@@ -130,11 +165,14 @@ class DurableMySqlSaver(_PersistentStateSaver):
             with closing(connection.cursor()) as cursor:
                 cursor.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS langgraph_checkpoint_state (
-                        namespace VARCHAR(191) PRIMARY KEY,
+                    CREATE TABLE IF NOT EXISTS langgraph_checkpoint_thread_state (
+                        namespace VARCHAR(191) NOT NULL,
+                        thread_id VARCHAR(191) NOT NULL,
+                        checkpoint_ns VARCHAR(191) NOT NULL,
                         payload LONGBLOB NOT NULL,
                         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                            ON UPDATE CURRENT_TIMESTAMP
+                            ON UPDATE CURRENT_TIMESTAMP,
+                        PRIMARY KEY(namespace, thread_id, checkpoint_ns)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                     """
                 )
@@ -144,25 +182,50 @@ class DurableMySqlSaver(_PersistentStateSaver):
         with closing(self._connect()) as connection:
             with closing(connection.cursor()) as cursor:
                 cursor.execute(
-                    "SELECT payload FROM langgraph_checkpoint_state WHERE namespace = %s",
+                    """
+                    SELECT thread_id, checkpoint_ns, payload
+                    FROM langgraph_checkpoint_thread_state
+                    WHERE namespace = %s
+                    """,
                     (self.namespace,),
                 )
-                row = cursor.fetchone()
-        if row is not None:
-            self._restore_state(row[0])
+                rows = cursor.fetchall()
+        for thread_id, checkpoint_ns, payload in rows:
+            self._restore_row_state(str(thread_id), str(checkpoint_ns or ""), payload)
 
     def _persist_state(self) -> None:
         with closing(self._connect()) as connection:
             with closing(connection.cursor()) as cursor:
+                for thread_id, namespaces in dict(self.storage).items():
+                    for checkpoint_ns in dict(namespaces).keys():
+                        cursor.execute(
+                            """
+                            INSERT INTO langgraph_checkpoint_thread_state(
+                                namespace, thread_id, checkpoint_ns, payload, updated_at
+                            )
+                            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                            ON DUPLICATE KEY UPDATE
+                                payload = VALUES(payload),
+                                updated_at = CURRENT_TIMESTAMP
+                            """,
+                            (
+                                self.namespace,
+                                str(thread_id),
+                                str(checkpoint_ns or ""),
+                                self._row_payload(str(thread_id), str(checkpoint_ns or "")),
+                            ),
+                        )
+            connection.commit()
+
+    def _delete_thread_state(self, thread_id: str) -> None:
+        with closing(self._connect()) as connection:
+            with closing(connection.cursor()) as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO langgraph_checkpoint_state(namespace, payload, updated_at)
-                    VALUES (%s, %s, CURRENT_TIMESTAMP)
-                    ON DUPLICATE KEY UPDATE
-                        payload = VALUES(payload),
-                        updated_at = CURRENT_TIMESTAMP
+                    DELETE FROM langgraph_checkpoint_thread_state
+                    WHERE namespace = %s AND thread_id = %s
                     """,
-                    (self.namespace, self._state_payload()),
+                    (self.namespace, thread_id),
                 )
             connection.commit()
 

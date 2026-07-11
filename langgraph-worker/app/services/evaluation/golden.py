@@ -8,6 +8,23 @@ from app.services.retrieval_eval import RetrievalEvalThresholds
 
 
 @dataclass(frozen=True)
+class GoldenEvalExpectedTrace:
+    required_tool_names: set[str] = field(default_factory=set)
+    required_source_types: set[str] = field(default_factory=set)
+    required_trace_fields: set[str] = field(default_factory=set)
+    required_source_policy_fields: set[str] = field(default_factory=set)
+    required_evidence_statuses: set[str] = field(default_factory=set)
+    required_answer_terms: set[str] = field(default_factory=set)
+    forbidden_answer_patterns: set[str] = field(default_factory=set)
+    require_valid_answer_boundary: bool = False
+    require_citations: bool = False
+    forbid_memory_cross_project: bool = False
+    forbid_fallback: bool = False
+    require_provider_success: bool = False
+    require_selected_experts: bool = False
+
+
+@dataclass(frozen=True)
 class GoldenEvalCase:
     case_id: str
     question: str
@@ -16,8 +33,10 @@ class GoldenEvalCase:
     expected_answer_mode: str | None = None
     expected_sub_intents: set[str] = field(default_factory=set)
     relevant_source_ids: set[str] = field(default_factory=set)
+    grounded_claims: list[str] = field(default_factory=list)
     forbidden_claims: list[str] = field(default_factory=list)
     retrieval_thresholds: RetrievalEvalThresholds = field(default_factory=RetrievalEvalThresholds)
+    expected_trace: GoldenEvalExpectedTrace = field(default_factory=GoldenEvalExpectedTrace)
     k: int = 5
 
 
@@ -34,7 +53,7 @@ class GoldenEvalCaseResult:
 
 
 def source_eval_id(source: KnowledgeSource) -> str:
-    source_type = str(source.sourceType or "source").lower()
+    source_type = _canonical_source_type(str(source.sourceType or "source").lower())
     if source.chunkId is not None:
         return f"chunk:{source.chunkId}"
     if source.sourceRefId is not None:
@@ -45,3 +64,9 @@ def source_eval_id(source: KnowledgeSource) -> str:
         return f"document:{source.documentId}"
     title = source.title or source.bookName or "unknown"
     return f"{source_type}:{title}"
+
+
+def _canonical_source_type(source_type: str) -> str:
+    if source_type == "chapter_pack":
+        return "chapter"
+    return source_type

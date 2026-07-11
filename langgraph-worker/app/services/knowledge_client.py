@@ -150,9 +150,235 @@ class KnowledgeBackendClient:
         data = await self._post_json("/internal/knowledge/research-pack/rank", payload)
         return RankResearchPack(**self._unwrap_object(data))
 
+    async def refresh_rank_board(
+        self,
+        *,
+        platform: str,
+        channel_code: str | None = None,
+        board_code: str | None = None,
+        category: str | None = None,
+        rank_fetch_count: int | None = None,
+        refresh_mode: str | None = None,
+        force_reason: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"platform": platform}
+        if channel_code:
+            payload["channelCode"] = channel_code
+        if board_code:
+            payload["boardCode"] = board_code
+        if category:
+            payload["category"] = category
+        if rank_fetch_count is not None:
+            payload["rankFetchCount"] = rank_fetch_count
+        if refresh_mode:
+            payload["refreshMode"] = refresh_mode
+        if force_reason:
+            payload["forceReason"] = force_reason
+        data = await self._post_json("/internal/knowledge/rank/refresh", payload)
+        return self._unwrap_object(data)
+
     async def get_project_memory(self, *, project_id: int, user_id: int) -> dict[str, Any]:
         payload = {"userId": user_id}
         data = await self._post_json(f"/internal/knowledge/projects/{project_id}/memory", payload)
+        return self._unwrap_object(data)
+
+    async def read_conversation_summary(self, *, user_id: int, conversation_id: str) -> dict[str, Any]:
+        payload = {"userId": user_id, "conversationId": conversation_id}
+        data = await self._post_json("/internal/knowledge/conversation-summary/read", payload)
+        return self._unwrap_object(data)
+
+    async def search_memory(
+        self,
+        *,
+        user_id: int,
+        project_id: int | None = None,
+        scope: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {"userId": user_id, "limit": limit}
+        if project_id is not None:
+            payload["projectId"] = project_id
+        if scope:
+            payload["scope"] = scope
+        data = await self._post_json("/internal/knowledge/memory/search", payload)
+        return self._unwrap_list(data)
+
+    async def search_project_chapters(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "userId": user_id,
+            "projectId": project_id,
+            "workId": work_id,
+            "limit": limit,
+        }
+        if query:
+            payload["query"] = query
+        data = await self._post_json("/internal/knowledge/projects/chapters/search", payload)
+        return self._unwrap_list(data)
+
+    async def resolve_project_work(
+        self,
+        *,
+        user_id: int,
+        project_id: int | None = None,
+        work_id: int | None = None,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"userId": user_id, "limit": limit}
+        if project_id is not None:
+            payload["projectId"] = project_id
+        if work_id is not None:
+            payload["workId"] = work_id
+        if query:
+            payload["query"] = query
+        data = await self._post_json("/internal/knowledge/projects/resolve", payload)
+        return self._unwrap_object(data)
+
+    async def search_project_chunks(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "userId": user_id,
+            "projectId": project_id,
+            "workId": work_id,
+            "limit": limit,
+        }
+        if query:
+            payload["query"] = query
+        data = await self._post_json("/internal/knowledge/projects/chunks/search", payload)
+        return self._unwrap_list(data)
+
+    async def list_project_foreshadowings(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+        status: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "userId": user_id,
+            "projectId": project_id,
+            "workId": work_id,
+            "limit": limit,
+        }
+        if status:
+            payload["status"] = status
+        data = await self._post_json("/internal/knowledge/projects/foreshadowings/list", payload)
+        return self._unwrap_list(data)
+
+    async def lookup_project_timeline(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        payload = self._project_lookup_payload(user_id=user_id, project_id=project_id, work_id=work_id, query=query, limit=limit)
+        data = await self._post_json("/internal/knowledge/projects/timeline/lookup", payload)
+        return self._unwrap_list(data)
+
+    async def lookup_project_character_states(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        payload = self._project_lookup_payload(user_id=user_id, project_id=project_id, work_id=work_id, query=query, limit=limit)
+        data = await self._post_json("/internal/knowledge/projects/character-states/lookup", payload)
+        return self._unwrap_list(data)
+
+    async def lookup_project_world_rules(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        payload = self._project_lookup_payload(user_id=user_id, project_id=project_id, work_id=work_id, query=query, limit=limit)
+        data = await self._post_json("/internal/knowledge/projects/world-rules/lookup", payload)
+        return self._unwrap_list(data)
+
+    async def create_memory_candidate(
+        self,
+        *,
+        user_id: int,
+        project_id: int | None,
+        conversation_id: str | None,
+        scope: str,
+        memory_type: str,
+        content: str,
+        summary: str | None,
+        confidence: float,
+        source_trace_id: str | None,
+        ttl_days: int = 30,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "userId": user_id,
+            "scope": scope,
+            "memoryType": memory_type,
+            "content": content,
+            "confidence": confidence,
+            "ttlDays": ttl_days,
+        }
+        if project_id is not None:
+            payload["projectId"] = project_id
+        if conversation_id:
+            payload["conversationId"] = conversation_id
+        if summary:
+            payload["summary"] = summary
+        if source_trace_id:
+            payload["sourceTraceId"] = source_trace_id
+        data = await self._post_json("/internal/knowledge/memory/candidates", payload)
+        return self._unwrap_object(data)
+
+    async def get_agent_runtime_config(self) -> dict[str, Any]:
+        data = await self._get_json("/internal/knowledge/agent/runtime-config")
+        return self._unwrap_object(data)
+
+    async def get_agent_expert_profiles(self) -> list[dict[str, Any]]:
+        data = await self._get_json("/internal/knowledge/agent/experts")
+        return self._unwrap_list(data)
+
+    async def get_runtime_skills(self) -> list[dict[str, Any]]:
+        data = await self._get_json("/internal/knowledge/runtime-skills")
+        return self._unwrap_list(data)
+
+    async def post_agent_telemetry(
+        self,
+        *,
+        trace_id: str,
+        cache_events: list[dict[str, Any]] | None = None,
+        token_metrics: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "traceId": trace_id,
+            "cacheEvents": list(cache_events or []),
+            "tokenMetrics": list(token_metrics or []),
+        }
+        data = await self._post_json("/internal/knowledge/agent/telemetry", payload)
         return self._unwrap_object(data)
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
@@ -161,6 +387,15 @@ class KnowledgeBackendClient:
             headers["X-Internal-Service-Token"] = self.internal_api_key
         client = self._get_client()
         response = await client.post(path, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+    async def _get_json(self, path: str) -> Any:
+        headers: dict[str, str] = {}
+        if self.internal_api_key:
+            headers["X-Internal-Service-Token"] = self.internal_api_key
+        client = self._get_client()
+        response = await client.get(path, headers=headers)
         response.raise_for_status()
         return response.json()
 
@@ -186,3 +421,22 @@ class KnowledgeBackendClient:
                 return data
             return payload
         return {}
+
+    def _project_lookup_payload(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+        query: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "userId": user_id,
+            "projectId": project_id,
+            "workId": work_id,
+            "limit": limit,
+        }
+        if query:
+            payload["query"] = query
+        return payload

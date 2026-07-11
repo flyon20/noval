@@ -40,6 +40,20 @@ class IntentRouter:
             )
 
         scores = self._score_intents(normalized, context_summary, history)
+        if (
+            self._has_strong_opening_strategy(normalized)
+            and not self._is_rank_fact_question(normalized)
+            and not self._has_mixed_task_marker(normalized)
+            and not self._has_explicit_market_scan_request(normalized)
+        ):
+            return self._decision(
+                Intent.opening_strategy,
+                confidence=0.88,
+                entities=entities,
+                tool_needs=self._tool_needs_for(Intent.opening_strategy, []),
+                answer_boundary=self._answer_boundary_for(Intent.opening_strategy),
+                routing_notes=["rule:strong-opening-strategy"],
+            )
         detected = [intent for intent, score in scores.items() if score >= 2]
         has_research = Intent.market_scan in detected or scores.get(Intent.book_breakdown, 0) >= 2
         has_creation = any(
@@ -182,11 +196,25 @@ class IntentRouter:
                 scores[Intent.book_breakdown] += 3
         if any(marker in normalized for marker in ("刚才", "上面", "前面", "继续", "这个题材", "这本")) and (context_summary or history):
             scores[Intent.followup_context] += 4
-        if any(term in normalized for term in ("榜单", "新书榜", "畅销榜", "榜一", "top", "前三", "前十")):
+        if any(term in normalized for term in ("榜单", "扫榜", "看榜", "新书榜", "畅销榜", "榜一", "top", "前三", "前十")):
             scores[Intent.market_scan] += 1
-        if any(term in normalized for term in ("最近", "热门", "趋势", "风向", "市场", "热度", "榜单", "新书榜", "畅销榜", "榜一", "top", "赛道")):
+        if any(term in normalized for term in ("当前", "目前", "最近", "热门", "趋势", "风向", "市场", "热度", "扫榜", "看榜", "榜单", "新书榜", "畅销榜", "榜一", "top", "赛道")):
             if any(term in normalized for term in ("都市脑洞", "新书榜", "榜单", "番茄", "起点", "男频", "女频", "赛道")):
                 scores[Intent.market_scan] += 4
+        board_terms = (
+            "男频",
+            "女频",
+            "都市",
+            "脑洞",
+            "\u9422\u70fd\ue576",
+            "\u95ae\u85c9\u7af6",
+            "\u9474\u621e\u790a",
+            "\u93c2\u9881\u529f",
+        )
+        if any(term in normalized for term in ("top", "op10", "\u6dedop", "新书榜", "榜单")) and any(
+            term in normalized for term in board_terms
+        ):
+            scores[Intent.market_scan] += 4
         if self._has_historical_market_window(normalized):
             scores[Intent.market_scan] += 4
         if self._is_rank_fact_question(normalized):
@@ -194,6 +222,8 @@ class IntentRouter:
         if "开" in normalized and any(term in normalized for term in ("书", "文", "一本")):
             scores[Intent.opening_strategy] += 2
         if any(term in normalized for term in ("立项", "开文", "开书", "开一本", "新书项目", "新书方向", "开书方向", "开文方向", "定位", "选题")):
+            scores[Intent.opening_strategy] += 2
+        if any(term in normalized for term in ("开一本", "同题材新书", "\u5bee\u20ac", "\u93c2\u9881\u529f")):
             scores[Intent.opening_strategy] += 2
         if self._has_strong_opening_strategy(normalized):
             scores[Intent.opening_strategy] += 2
@@ -280,6 +310,8 @@ class IntentRouter:
             return True
         if any(marker in normalized for marker in ("再帮我", "再给我")):
             return True
+        if any(marker in normalized for marker in ("\u951b\u5c7d", "\u5540\u752f")):
+            return True
         if "先" in normalized and any(marker in normalized for marker in ("再", "然后", "之后")):
             return True
         return any(marker in normalized for marker in ("参考", "根据", "基于", "后，", "后,", "之后"))
@@ -301,6 +333,23 @@ class IntentRouter:
         if "人设" in normalized and any(marker in normalized for marker in ("设计", "怎么写", "如何写", "搭", "生成")):
             return True
         return any(marker in normalized for marker in ("参考榜单", "根据榜单", "基于榜单"))
+
+    def _has_explicit_market_scan_request(self, normalized: str) -> bool:
+        return any(marker in normalized for marker in (
+            "扫榜",
+            "看榜",
+            "榜单趋势",
+            "整体",
+            "最近热门",
+            "热门题材",
+            "目前都是哪些题材",
+            "都是哪些题材",
+            "哪些题材",
+            "题材趋势",
+            "市场趋势",
+            "市场风向",
+            "类似题材",
+        ))
 
     def _has_strong_opening_strategy(self, normalized: str) -> bool:
         if any(marker in normalized for marker in ("新书项目", "新书方向", "开书方向", "开文方向", "立项", "选题", "定位")):

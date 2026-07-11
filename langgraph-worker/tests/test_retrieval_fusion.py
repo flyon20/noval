@@ -216,6 +216,35 @@ class RetrievalFusionTest(unittest.TestCase):
 
         self.assertEqual("CHAPTER", sources[0].sourceType)
 
+    def test_returns_selection_diagnostics_for_operator_trace(self) -> None:
+        top1 = KnowledgeSource(score=0.88, bookId=201, bookName="Top One", sourceType="RANK", rankNo=1)
+        duplicate_top1 = KnowledgeSource(score=0.77, bookId=201, bookName="Top One", sourceType="RANK", rankNo=1)
+        chapter = KnowledgeSource(
+            chunkId=31,
+            score=0.7,
+            bookId=201,
+            bookName="Top One",
+            sourceType="CHAPTER",
+            title="Top One chapter",
+            preview="chapter evidence",
+        )
+        state = {"intent": "trend_research"}
+
+        sources = fuse_and_rerank_sources(
+            request=KnowledgeChatRequest(question="recent trend"),
+            state=state,
+            sources=[top1, duplicate_top1, chapter],
+            limit=2,
+        )
+
+        diagnostics = state["retrieval_diagnostics"]
+        self.assertEqual(3, diagnostics["inputCount"])
+        self.assertEqual(2, diagnostics["dedupedCount"])
+        self.assertEqual(len(sources), diagnostics["selectedCount"])
+        self.assertEqual("trend_research", diagnostics["intent"])
+        self.assertEqual({"CHAPTER": 1, "RANK": 2}, diagnostics["inputSourceTypeCounts"])
+        self.assertIn("trend_quota_selection", diagnostics["reasonTags"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ import com.novelanalyzer.modules.analysis.client.LangGraphWorkerClient;
 import com.novelanalyzer.modules.asyncjob.dto.AsyncJobSubmitResponse;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
+import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.knowledge.dto.KnowledgeChatRequest;
 import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
 import org.slf4j.Logger;
@@ -28,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 @Service
 public class KnowledgeChatService {
@@ -40,6 +42,9 @@ public class KnowledgeChatService {
     private static final int MAX_HISTORY_CONTENT_LENGTH = 64_000;
     private static final int MAX_TIMEOUT_MILLIS = 600_000;
     private static final int MAX_TOOL_TIMEOUT_MILLIS = 600_000;
+    private static final int DEFAULT_MAX_INPUT_TOKENS = 1_000_000;
+    private static final int MIN_MAX_INPUT_TOKENS = 4_096;
+    private static final int MAX_MAX_INPUT_TOKENS = 1_200_000;
     private static final int FALLBACK_STREAM_CHUNK_SIZE = 96;
 
     private final LangGraphWorkerClient langGraphWorkerClient;
@@ -50,13 +55,23 @@ public class KnowledgeChatService {
     private final KnowledgeAgentTraceService agentTraceService;
     private final KnowledgeProjectService projectService;
     private final KnowledgeMemoryCandidateService memoryCandidateService;
+    private final SystemConfigService systemConfigService;
+    private final KnowledgeConversationSummaryService conversationSummaryService;
     private final Map<String, ChatMemory> fallbackMemoryStore = new ConcurrentHashMap<>();
+
+    public interface ChatProgressListener {
+        default void onProgress(String phase, String message) {
+        }
+
+        default void onDelta(String delta) {
+        }
+    }
 
     public KnowledgeChatService(LangGraphWorkerClient langGraphWorkerClient,
                                 KnowledgeIndexJobExecutor knowledgeIndexJobExecutor,
                                 CrawlerService crawlerService,
                                 @Qualifier("analysisStreamTaskExecutor") AsyncTaskExecutor streamTaskExecutor) {
-        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, null, null, null, null);
+        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, null, null, null, null, null);
     }
 
     public KnowledgeChatService(LangGraphWorkerClient langGraphWorkerClient,
@@ -64,7 +79,7 @@ public class KnowledgeChatService {
                                 CrawlerService crawlerService,
                                 @Qualifier("analysisStreamTaskExecutor") AsyncTaskExecutor streamTaskExecutor,
                                 KnowledgeChatMemoryStore chatMemoryStore) {
-        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore, null, null, null);
+        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore, null, null, null, null);
     }
 
     public KnowledgeChatService(LangGraphWorkerClient langGraphWorkerClient,
@@ -73,7 +88,7 @@ public class KnowledgeChatService {
                                 @Qualifier("analysisStreamTaskExecutor") AsyncTaskExecutor streamTaskExecutor,
                                 KnowledgeChatMemoryStore chatMemoryStore,
                                 KnowledgeAgentTraceService agentTraceService) {
-        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore, agentTraceService, null, null);
+        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore, agentTraceService, null, null, null);
     }
 
     public KnowledgeChatService(LangGraphWorkerClient langGraphWorkerClient,
@@ -83,7 +98,31 @@ public class KnowledgeChatService {
                                 KnowledgeChatMemoryStore chatMemoryStore,
                                 KnowledgeAgentTraceService agentTraceService,
                                 KnowledgeProjectService projectService) {
-        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore, agentTraceService, projectService, null);
+        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore, agentTraceService, projectService, null, null);
+    }
+
+    public KnowledgeChatService(LangGraphWorkerClient langGraphWorkerClient,
+                                KnowledgeIndexJobExecutor knowledgeIndexJobExecutor,
+                                CrawlerService crawlerService,
+                                @Qualifier("analysisStreamTaskExecutor") AsyncTaskExecutor streamTaskExecutor,
+                                KnowledgeChatMemoryStore chatMemoryStore,
+                                KnowledgeAgentTraceService agentTraceService,
+                                KnowledgeProjectService projectService,
+                                KnowledgeMemoryCandidateService memoryCandidateService) {
+        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore, agentTraceService, projectService, memoryCandidateService, null);
+    }
+
+    public KnowledgeChatService(LangGraphWorkerClient langGraphWorkerClient,
+                                KnowledgeIndexJobExecutor knowledgeIndexJobExecutor,
+                                CrawlerService crawlerService,
+                                @Qualifier("analysisStreamTaskExecutor") AsyncTaskExecutor streamTaskExecutor,
+                                KnowledgeChatMemoryStore chatMemoryStore,
+                                KnowledgeAgentTraceService agentTraceService,
+                                KnowledgeProjectService projectService,
+                                KnowledgeMemoryCandidateService memoryCandidateService,
+                                SystemConfigService systemConfigService) {
+        this(langGraphWorkerClient, knowledgeIndexJobExecutor, crawlerService, streamTaskExecutor, chatMemoryStore,
+            agentTraceService, projectService, memoryCandidateService, systemConfigService, null);
     }
 
     @Autowired
@@ -94,7 +133,9 @@ public class KnowledgeChatService {
                                 KnowledgeChatMemoryStore chatMemoryStore,
                                 KnowledgeAgentTraceService agentTraceService,
                                 KnowledgeProjectService projectService,
-                                KnowledgeMemoryCandidateService memoryCandidateService) {
+                                KnowledgeMemoryCandidateService memoryCandidateService,
+                                SystemConfigService systemConfigService,
+                                KnowledgeConversationSummaryService conversationSummaryService) {
         this.langGraphWorkerClient = langGraphWorkerClient;
         this.knowledgeIndexJobExecutor = knowledgeIndexJobExecutor;
         this.crawlerService = crawlerService;
@@ -103,6 +144,67 @@ public class KnowledgeChatService {
         this.agentTraceService = agentTraceService;
         this.projectService = projectService;
         this.memoryCandidateService = memoryCandidateService;
+        this.systemConfigService = systemConfigService;
+        this.conversationSummaryService = conversationSummaryService;
+    }
+
+    public KnowledgeChatResponseVO chatWithProgress(KnowledgeChatRequest request,
+                                                    ChatProgressListener progressListener,
+                                                    BooleanSupplier cancelledSupplier) {
+        AuthUser authUser = AuthUserHolder.get();
+        if (authUser == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "unauthorized");
+        }
+        ChatProgressListener listener = progressListener == null ? new ChatProgressListener() { } : progressListener;
+        BooleanSupplier cancelled = cancelledSupplier == null ? () -> false : cancelledSupplier;
+        try {
+            ensureProjectOwned(authUser, request);
+            listener.onProgress("prepare", "\u6b63\u5728\u51c6\u5907\u77e5\u8bc6\u5e93\u95ee\u7b54");
+            Long completedBookId = completeSelectedCandidateIfNeeded(request);
+            listener.onProgress("index", completedBookId == null
+                ? "\u6b63\u5728\u68c0\u7d22\u77e5\u8bc6\u5e93"
+                : "\u6b63\u5728\u8865\u5168\u5e76\u7d22\u5f15\u9009\u4e2d\u4f5c\u54c1");
+            AsyncJobSubmitResponse completedIndexJob = indexCompletedCandidateIfNeeded(completedBookId, authUser.getUserId());
+            String conversationId = resolveConversationId(request);
+            bindProjectConversation(authUser, request, conversationId);
+            Map<String, Object> payload = buildWorkerPayload(request, authUser.getUserId(), completedBookId, conversationId);
+            listener.onProgress("retrieve", "\u6b63\u5728\u68c0\u7d22\u8d44\u6599\u5e76\u751f\u6210\u56de\u7b54");
+            AtomicBoolean answerStarted = new AtomicBoolean(false);
+            KnowledgeChatResponseVO response;
+            try {
+                response = langGraphWorkerClient.streamKnowledgeChat(
+                    payload,
+                    delta -> {
+                        answerStarted.set(true);
+                        listener.onDelta(delta);
+                    },
+                    listener::onProgress,
+                    cancelled
+                );
+            } catch (RuntimeException ex) {
+                if (cancelled.getAsBoolean() || answerStarted.get()) {
+                    throw ex;
+                }
+                listener.onProgress("fallback", "\u6d41\u5f0f\u8fde\u63a5\u77ed\u6682\u4e2d\u65ad\uff0c\u6b63\u5728\u7a33\u5b9a\u751f\u6210\u5b8c\u6574\u56de\u7b54");
+                response = langGraphWorkerClient.runKnowledgeChat(payload);
+            }
+            if (response == null || cancelled.getAsBoolean()) {
+                return null;
+            }
+            attachConversationId(response, conversationId);
+            attachCompletedBookId(response, completedBookId);
+            attachCompletedIndexJob(response, completedIndexJob);
+            updateChatMemory(conversationId, authUser.getUserId(), request, response);
+            persistAgentTrace(authUser.getUserId(), request, conversationId, response);
+            persistMemoryCandidates(authUser.getUserId(), request, response);
+            maybeSubmitIndexJob(request, response, authUser.getUserId(), completedBookId);
+            maybeSubmitChapterMissingIndexJob(response, authUser.getUserId());
+            return response;
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new BusinessException(ResultCode.BAD_GATEWAY, "knowledge candidate continuation failed");
+        }
     }
 
     public KnowledgeChatResponseVO chat(KnowledgeChatRequest request) {
@@ -292,6 +394,7 @@ public class KnowledgeChatService {
             putIfPresent(payload, "bookName", effectiveBookName);
         }
         putIfPresent(payload, "mode", trimToNull(request.getMode()));
+        payload.put("reasoningMode", resolveReasoningMode(request));
         String contextSummary = resolveContextSummary(request, conversationId, userId);
         putIfPresent(payload, "contextSummary", contextSummary);
         List<Map<String, Object>> history = toHistoryPayload(request.getHistory());
@@ -467,6 +570,71 @@ public class KnowledgeChatService {
             );
         }
         fallbackMemoryStore.put(conversationId, new ChatMemory(userId, summary));
+        updateConversationSummary(conversationId, userId, request, response, summary);
+    }
+
+    private void updateConversationSummary(String conversationId,
+                                           Long userId,
+                                           KnowledgeChatRequest request,
+                                           KnowledgeChatResponseVO response,
+                                           String summary) {
+        if (conversationSummaryService == null || request == null || response == null) {
+            return;
+        }
+        try {
+            conversationSummaryService.updateSummary(
+                userId,
+                request.getProjectId(),
+                conversationId,
+                buildConversationSummary(request, response, summary),
+                resolveSourceTraceId(response)
+            );
+        } catch (Exception ex) {
+            LOGGER.warn(
+                "knowledge conversation summary update skipped: conversationId={}, reason={}",
+                conversationId,
+                ex.getMessage()
+            );
+        }
+    }
+
+    private String buildConversationSummary(KnowledgeChatRequest request,
+                                            KnowledgeChatResponseVO response,
+                                            String runtimeSummary) {
+        String question = trimToNull(request == null ? null : request.getQuestion());
+        String answer = trimToNull(response == null ? null : response.getAnswer());
+        StringBuilder builder = new StringBuilder();
+        if (question != null) {
+            builder.append("\u6700\u8fd1\u7528\u6237\u76ee\u6807\uff1a").append(question);
+        }
+        if (runtimeSummary != null) {
+            appendLine(builder, "\u8fd0\u884c\u6458\u8981\uff1a" + runtimeSummary);
+        }
+        if (answer != null) {
+            appendLine(builder, "\u4e0a\u4e00\u8f6e\u7ed3\u8bba\uff1a" + answer);
+        }
+        String merged = trimToNull(builder.toString());
+        return merged == null ? runtimeSummary : truncate(merged, 12000);
+    }
+
+    private void appendLine(StringBuilder builder, String value) {
+        if (builder.length() > 0) {
+            builder.append('\n');
+        }
+        builder.append(value);
+    }
+
+    private String resolveSourceTraceId(KnowledgeChatResponseVO response) {
+        String traceId = trimToNull(TraceIdHolder.get());
+        if (traceId != null || response == null || response.getResultJson() == null) {
+            return traceId;
+        }
+        Object trace = response.getResultJson().get("trace");
+        if (trace instanceof Map<?, ?> traceMap) {
+            Object value = traceMap.get("traceId");
+            return trimToNull(value == null ? null : String.valueOf(value));
+        }
+        return null;
     }
 
     private void persistAgentTrace(Long userId,
@@ -575,20 +743,32 @@ public class KnowledgeChatService {
     }
 
     private Map<String, Object> sanitizeLimits(Map<String, Object> limits) {
-        if (limits == null || limits.isEmpty()) {
-            return Map.of();
-        }
         Map<String, Object> sanitized = new LinkedHashMap<>();
-        putLimitIfPresent(sanitized, limits, "chapterCount", 1, 10);
-        putLimitIfPresent(sanitized, limits, "candidateLimit", 1, 20);
-        putLimitIfPresent(sanitized, limits, "evidenceLimit", 1, 20);
-        putLimitIfPresent(sanitized, limits, "chapterLimit", 1, 20);
-        putLimitIfPresent(sanitized, limits, "analysisLimit", 1, 20);
-        putLimitIfPresent(sanitized, limits, "rankLimit", 1, 20);
-        putLimitIfPresent(sanitized, limits, "chapterLimitPerBook", 1, 5);
-        putLimitIfPresent(sanitized, limits, "timeoutMillis", 1, MAX_TIMEOUT_MILLIS);
-        putLimitIfPresent(sanitized, limits, "toolTimeoutMillis", 1, MAX_TOOL_TIMEOUT_MILLIS);
+        if (limits != null && !limits.isEmpty()) {
+            putLimitIfPresent(sanitized, limits, "chapterCount", 1, 10);
+            putLimitIfPresent(sanitized, limits, "candidateLimit", 1, 20);
+            putLimitIfPresent(sanitized, limits, "evidenceLimit", 1, 20);
+            putLimitIfPresent(sanitized, limits, "chapterLimit", 1, 20);
+            putLimitIfPresent(sanitized, limits, "analysisLimit", 1, 20);
+            putLimitIfPresent(sanitized, limits, "rankLimit", 1, 50);
+            putLimitIfPresent(sanitized, limits, "chapterLimitPerBook", 1, 5);
+            putLimitIfPresent(sanitized, limits, "timeoutMillis", 1, MAX_TIMEOUT_MILLIS);
+            putLimitIfPresent(sanitized, limits, "toolTimeoutMillis", 1, MAX_TOOL_TIMEOUT_MILLIS);
+        }
+        putMaxInputTokens(sanitized, limits);
         return sanitized;
+    }
+
+    private void putMaxInputTokens(Map<String, Object> target, Map<String, Object> source) {
+        Integer requested = source == null ? null : parseInteger(source.get("maxInputTokens"));
+        if (requested == null && source != null) {
+            requested = parseInteger(source.get("max_input_tokens"));
+        }
+        int configured = systemConfigService == null
+            ? DEFAULT_MAX_INPUT_TOKENS
+            : systemConfigService.getIntValueOrDefault("ai.agent.runtime.max-total-input-tokens", DEFAULT_MAX_INPUT_TOKENS);
+        int value = requested == null ? configured : requested;
+        target.put("maxInputTokens", Math.min(Math.max(value, MIN_MAX_INPUT_TOKENS), MAX_MAX_INPUT_TOKENS));
     }
 
     private void putLimitIfPresent(Map<String, Object> target,
@@ -616,7 +796,37 @@ public class KnowledgeChatService {
         putIfPresent(payload, "intro", trimToNull(candidate.getIntro()));
         putIfPresent(payload, "bookUrl", trimToNull(candidate.getBookUrl()));
         putIfPresent(payload, "local", candidate.getLocal());
+        putIfPresent(payload, "contentType", trimToNull(candidate.getContentType()));
+        putIfPresent(payload, "readableNovel", candidate.getReadableNovel());
+        putIfPresent(payload, "unavailableReason", trimToNull(candidate.getUnavailableReason()));
         return payload;
+    }
+
+    private String resolveReasoningMode(KnowledgeChatRequest request) {
+        String requested = normalizeReasoningMode(request == null ? null : request.getReasoningMode());
+        if (requested != null) {
+            return requested;
+        }
+        String configured = systemConfigService == null
+            ? "fast"
+            : systemConfigService.getValueOrDefault("ai.knowledge.reasoning-mode.default", "fast");
+        String normalized = normalizeReasoningMode(configured);
+        return normalized == null ? "fast" : normalized;
+    }
+
+    private String normalizeReasoningMode(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        normalized = normalized.toLowerCase();
+        if ("deep".equals(normalized) || "reasoning".equals(normalized) || "thinking".equals(normalized)) {
+            return "deep";
+        }
+        if ("fast".equals(normalized) || "quick".equals(normalized) || "normal".equals(normalized)) {
+            return "fast";
+        }
+        return null;
     }
 
     private void maybeSubmitIndexJob(KnowledgeChatRequest request,
@@ -679,6 +889,9 @@ public class KnowledgeChatService {
         KnowledgeChatRequest.CandidateDTO selectedCandidate = request.getSelectedCandidate();
         if (selectedCandidate == null) {
             return null;
+        }
+        if (Boolean.FALSE.equals(selectedCandidate.getReadableNovel())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "selected candidate is not a readable novel");
         }
         if (selectedCandidate.getBookId() != null) {
             fetchLocalCandidateChaptersIfNeeded(selectedCandidate, request);

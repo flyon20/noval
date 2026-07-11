@@ -152,6 +152,48 @@ class IntentRouterTest(unittest.TestCase):
         self.assertTrue(decision.toolNeeds.needsCreativeGeneration)
         self.assertEqual(AnswerBoundary.market_evidence_plus_author_inference, decision.answerBoundary)
 
+    def test_multintent_male_urban_board_without_platform_routes_to_mixed(self) -> None:
+        decision = classify("鍏堢湅鐢烽閮藉競鑴戞礊鏂颁功姒淭op10锛屽啀甯垜寮€涓€鏈悓棰樻潗鏂颁功")
+
+        self.assertEqual(Intent.mixed_creation_research, decision.primaryIntent)
+        self.assertIn(Intent.market_scan, decision.subIntents)
+        self.assertIn(Intent.opening_strategy, decision.subIntents)
+        self.assertTrue(decision.toolNeeds.needsRankData)
+        self.assertTrue(decision.toolNeeds.needsCreativeGeneration)
+        self.assertEqual(AnswerBoundary.market_evidence_plus_author_inference, decision.answerBoundary)
+
+    def test_scan_board_and_opening_advice_routes_to_mixed_latest_market_research(self) -> None:
+        decision = classify(
+            "你帮我扫榜男频都市脑洞，给我些开文建议，还有目前都是哪些题材，"
+            "我太久没看了不太清楚，我现在打算开书推荐写那种题材"
+        )
+
+        self.assertEqual(Intent.mixed_creation_research, decision.primaryIntent)
+        self.assertIn(Intent.market_scan, decision.subIntents)
+        self.assertIn(Intent.opening_strategy, decision.subIntents)
+        self.assertTrue(decision.toolNeeds.needsRankData)
+        self.assertTrue(decision.toolNeeds.needsCreativeGeneration)
+        self.assertEqual("latest", decision.sourcePolicy.get("freshness"))
+        self.assertFalse(decision.sourcePolicy.get("allowHistorical"))
+        self.assertTrue(decision.sourcePolicy.get("requireSnapshotTime"))
+        self.assertEqual(AnswerBoundary.market_evidence_plus_author_inference, decision.answerBoundary)
+
+    def test_full_low_level_job_urban_brainstorm_question_routes_to_mixed_research(self) -> None:
+        decision = classify(
+            "现在我要写一篇底层职业的都市脑洞文，结合当前榜单趋势你觉得如何，"
+            "可以给出我一些大纲吗，我设计是都市里有诸天万界外包来做特效，"
+            "金手指采用“三端一体”的形态。"
+        )
+
+        self.assertEqual(Intent.mixed_creation_research, decision.primaryIntent)
+        self.assertIn(Intent.market_scan, decision.subIntents)
+        self.assertIn(Intent.outline_building, decision.subIntents)
+        self.assertTrue(decision.toolNeeds.needsRankData)
+        self.assertTrue(decision.toolNeeds.needsCreativeGeneration)
+        self.assertEqual("latest", decision.sourcePolicy.get("freshness"))
+        self.assertTrue(decision.sourcePolicy.get("requireSnapshotTime"))
+        self.assertEqual(AnswerBoundary.market_evidence_plus_author_inference, decision.answerBoundary)
+
     def test_book_breakdown_then_creation_or_revision_routes_to_mixed(self) -> None:
         cases = [
             ("拆《直播算命》的爽点，再帮我扩一个同类脑洞", Intent.inspiration_expand),

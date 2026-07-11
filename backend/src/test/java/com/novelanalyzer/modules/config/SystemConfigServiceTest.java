@@ -67,6 +67,7 @@ class SystemConfigServiceTest {
         assertThat(result).extracting(SystemConfigVO::getConfigKey)
             .contains(
                 "ai.langgraph-worker.timeout-millis",
+                "ai.knowledge.reasoning-mode.default",
                 "crawler.rank.force-cooldown-days",
                 "crawler.book.refresh-days"
             );

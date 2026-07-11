@@ -32,8 +32,63 @@ def fuse_and_rerank_sources(
         reverse=True,
     )
     if intent == "trend_research":
-        return _select_trend_sources(ranked, max(1, limit))
-    return ranked[: max(1, limit)]
+        selected = _select_trend_sources(ranked, max(1, limit))
+        _attach_retrieval_diagnostics(
+            state,
+            intent=intent,
+            input_sources=sources,
+            deduped_sources=deduped,
+            selected_sources=selected,
+            reason_tags=["static_weight_rerank", "trend_quota_selection"],
+            needs_chapter_evidence=needs_chapter_evidence,
+        )
+        return selected
+    selected = ranked[: max(1, limit)]
+    _attach_retrieval_diagnostics(
+        state,
+        intent=intent,
+        input_sources=sources,
+        deduped_sources=deduped,
+        selected_sources=selected,
+        reason_tags=["static_weight_rerank"],
+        needs_chapter_evidence=needs_chapter_evidence,
+    )
+    return selected
+
+
+def _attach_retrieval_diagnostics(
+    state: dict[str, Any],
+    *,
+    intent: str,
+    input_sources: list[KnowledgeSource],
+    deduped_sources: list[KnowledgeSource],
+    selected_sources: list[KnowledgeSource],
+    reason_tags: list[str],
+    needs_chapter_evidence: bool,
+) -> None:
+    tags = list(reason_tags)
+    if len(deduped_sources) < len(input_sources):
+        tags.append("deduped_sources")
+    if needs_chapter_evidence:
+        tags.append("chapter_level_boost")
+    state["retrieval_diagnostics"] = {
+        "inputCount": len(input_sources),
+        "dedupedCount": len(deduped_sources),
+        "selectedCount": len(selected_sources),
+        "intent": intent,
+        "inputSourceTypeCounts": _source_type_counts(input_sources),
+        "dedupedSourceTypeCounts": _source_type_counts(deduped_sources),
+        "selectedSourceTypeCounts": _source_type_counts(selected_sources),
+        "reasonTags": sorted(set(tags)),
+    }
+
+
+def _source_type_counts(sources: list[KnowledgeSource]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for source in sources:
+        source_type = _source_type(source) or "UNKNOWN"
+        counts[source_type] = counts.get(source_type, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _dedupe_sources(sources: list[KnowledgeSource]) -> list[KnowledgeSource]:
@@ -79,7 +134,7 @@ def _select_trend_sources(ranked: list[KnowledgeSource], limit: int) -> list[Kno
 
 
 def _front_rank_cutoff(limit: int) -> int:
-    return max(3, min(limit, 10))
+    return max(3, limit)
 
 
 def _is_low_priority_rank_source(source: KnowledgeSource, front_rank_cutoff: int) -> bool:

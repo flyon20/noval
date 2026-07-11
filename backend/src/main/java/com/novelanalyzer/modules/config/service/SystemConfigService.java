@@ -47,6 +47,7 @@ public class SystemConfigService {
         Map.entry("ai.langgraph-worker.base-url", new DefaultSystemConfig("", "ai", "LangGraph worker 服务地址，留空时使用环境配置。", true)),
         Map.entry("ai.langgraph-worker.internal-api-key", new DefaultSystemConfig("", "ai", "后端调用 LangGraph worker 的内部鉴权令牌。", true)),
         Map.entry("ai.langgraph-worker.timeout-millis", new DefaultSystemConfig("30000", "ai", "后端等待 LangGraph worker 响应的超时时间。", true)),
+        Map.entry("ai.knowledge.reasoning-mode.default", new DefaultSystemConfig("fast", "ai", "AI 问答默认推理模式：fast 为快速模式，deep 为 DeepSeek 思考模式并使用 max 强度。", true)),
         Map.entry("ai.available-models", new DefaultSystemConfig("deepseek-chat", "ai", "旧版逗号分隔模型列表，模型注册表保存后会同步。", true)),
         Map.entry("auth.bootstrap-admin-phones", new DefaultSystemConfig("15599316908", "auth", "逗号分隔的管理员手机号列表，登录或刷新时自动补齐 ADMIN 角色。", true)),
         Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "扫榜页默认抓取的章节数量。", true)),

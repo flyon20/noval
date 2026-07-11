@@ -45,15 +45,15 @@ class ContextAssembler:
             return layer
         if request.projectId is None:
             return None
-        return self._project_placeholder_layer(request)
+        return self._project_placeholder_layer(request, reason="sync_project_memory_not_loaded")
 
     async def _project_layer_async(self, request: KnowledgeChatRequest, incoming: dict[str, Any]) -> ContextLayer | None:
         layer = self._layer(incoming.get("projectProfile"))
-        if layer is not None:
+        if layer is not None and not self._is_shell_project_layer(layer):
             return layer
         if request.projectId is None:
             return None
-        memory = await self._fetch_project_memory(request)
+        memory, status, reason = await self._fetch_project_memory(request)
         if memory:
             content = {
                 "projectId": memory.get("projectId") or request.projectId,
@@ -71,21 +71,42 @@ class ContextAssembler:
                 content={key: value for key, value in content.items() if value is not None},
                 sourceIds=["ai_project_memory"],
             )
-        return self._project_placeholder_layer(request)
+        return self._project_placeholder_layer(request, reason=reason or status)
 
-    async def _fetch_project_memory(self, request: KnowledgeChatRequest) -> dict[str, Any] | None:
+    def _is_shell_project_layer(self, layer: ContextLayer) -> bool:
+        if layer.scope != "project":
+            return False
+        if layer.sourceIds:
+            return False
+        content = dict(layer.content or {})
+        if isinstance(content.get("memories"), dict) and content["memories"]:
+            return False
+        diagnostics = content.get("_diagnostics") if isinstance(content.get("_diagnostics"), dict) else {}
+        if diagnostics.get("projectProfileStatus") == "placeholder":
+            return True
+        meaningful_keys = {
+            key
+            for key, value in content.items()
+            if value is not None and key != "_diagnostics"
+        }
+        shell_keys = {"projectId", "userId", "bookId", "bookName"}
+        return bool(meaningful_keys) and meaningful_keys.issubset(shell_keys)
+
+    async def _fetch_project_memory(self, request: KnowledgeChatRequest) -> tuple[dict[str, Any] | None, str, str | None]:
         if request.projectId is None or request.userId is None:
-            return None
+            return None, "skipped", "missing_project_or_user"
         method = getattr(self.memory_client, "get_project_memory", None)
         if not callable(method):
-            return None
+            return None, "skipped", "client_method_missing"
         try:
             payload = await method(project_id=request.projectId, user_id=request.userId)
-        except Exception:
-            return None
-        return payload if isinstance(payload, dict) else None
+        except Exception as exc:
+            return None, "unavailable", exc.__class__.__name__
+        if isinstance(payload, dict) and payload:
+            return payload, "loaded", None
+        return None, "empty", "empty"
 
-    def _project_placeholder_layer(self, request: KnowledgeChatRequest) -> ContextLayer:
+    def _project_placeholder_layer(self, request: KnowledgeChatRequest, *, reason: str) -> ContextLayer:
         return ContextLayer(
             scope="project",
             content={
@@ -94,6 +115,10 @@ class ContextAssembler:
                     "projectId": request.projectId,
                     "bookId": request.bookId,
                     "bookName": request.bookName,
+                    "_diagnostics": {
+                        "projectProfileStatus": "placeholder",
+                        "reason": reason,
+                    },
                 }.items()
                 if value is not None
             },

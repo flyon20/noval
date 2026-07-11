@@ -98,6 +98,43 @@ class GoldenEvalRepositoryTest(unittest.TestCase):
         self.assertEqual("trace-1", case_row["trace_id"])
         self.assertEqual("thread-1", case_row["checkpoint_thread_id"])
 
+    def test_marks_eval_run_failed_when_background_execution_errors(self) -> None:
+        connector = FakeEvalMySqlConnector()
+        repository = MySqlGoldenEvalRepository(
+            mysql_config=_mysql_config(),
+            connector_factory=connector,
+        )
+        run_id = repository.create_run(
+            run_key="run-error",
+            suite_name="rag-smoke",
+            runner_name="admin-trigger",
+            evaluator_name="rule-based",
+            model_name=None,
+            settings_json={},
+        )
+
+        repository.fail_run(run_id=run_id, error_message="provider timeout")
+
+        self.assertEqual("FAILED", connector.tables["ai_eval_run"][0]["status"])
+        self.assertIn("provider timeout", connector.tables["ai_eval_run"][0]["metrics_json"])
+
+    def test_create_run_persists_initial_total_cases(self) -> None:
+        connector = FakeEvalMySqlConnector()
+        repository = MySqlGoldenEvalRepository(
+            mysql_config=_mysql_config(),
+            connector_factory=connector,
+        )
+
+        repository.create_run(
+            run_key="run-total",
+            suite_name="rag-smoke",
+            runner_name="admin-trigger",
+            evaluator_name="rule-based",
+            total_cases=3,
+        )
+
+        self.assertEqual(3, connector.tables["ai_eval_run"][0]["total_cases"])
+
 
 def _mysql_config() -> MySqlCheckpointConfig:
     return MySqlCheckpointConfig(
@@ -162,6 +199,9 @@ class FakeEvalMySqlCursor:
                 "model_name": params[4],
                 "settings_json": params[5],
                 "status": "RUNNING",
+                "total_cases": params[6],
+                "passed_cases": 0,
+                "failed_cases": 0,
             }
             self.tables["ai_eval_run"].append(row)
             self.lastrowid = row["id"]
@@ -189,13 +229,30 @@ class FakeEvalMySqlCursor:
             run_id = params[-1]
             for row in self.tables["ai_eval_run"]:
                 if row["id"] == run_id:
-                    row.update({
-                        "status": params[0],
-                        "total_cases": params[1],
-                        "passed_cases": params[2],
-                        "failed_cases": params[3],
-                        "metrics_json": params[4],
-                    })
+                    if "status = 'failed'" in normalized:
+                        row.update({
+                            "status": "FAILED",
+                            "metrics_json": params[0],
+                            "error_message": params[1],
+                            "progress_message": params[2],
+                        })
+                    elif "progress_current" in normalized and "status =" not in normalized:
+                        row.update({
+                            "progress_current": params[0],
+                            "progress_total": params[1],
+                            "progress_message": params[2],
+                        })
+                    else:
+                        row.update({
+                            "status": params[0],
+                            "total_cases": params[1],
+                            "passed_cases": params[2],
+                            "failed_cases": params[3],
+                            "progress_current": params[4],
+                            "progress_total": params[5],
+                            "progress_message": params[6],
+                            "metrics_json": params[7],
+                        })
             return
         raise AssertionError(f"unexpected SQL: {sql}")
 

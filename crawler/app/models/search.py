@@ -21,4 +21,7 @@ class BookSearchItem(BaseModel):
     author: str
     intro: str
     bookUrl: str
-    platformBookId: str
+    platformBookId: str
+    contentType: str = "novel"
+    readableNovel: bool = True
+    unavailableReason: str | None = None

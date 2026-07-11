@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { Moon, Sunny, SwitchButton, UserFilled } from '@element-plus/icons-vue';
+import { FolderOpened, Moon, Sunny, SwitchButton, UserFilled } from '@element-plus/icons-vue';
 import { getCurrentTheme, THEME_EVENT_NAME, toggleTheme, type AppTheme } from '@/lib/theme';
 
 defineProps<{
@@ -12,10 +12,12 @@ defineProps<{
 const emit = defineEmits<{
   changePassword: [];
   logout: [];
+  openKnowledgeProjects: [];
 }>();
 
 const route = useRoute();
 const currentTheme = ref<AppTheme>('light');
+const isKnowledgeChatRoute = computed(() => route.path === '/knowledge');
 
 const pageCopy = computed(() => {
   if (route.path.startsWith('/rank')) {
@@ -29,6 +31,9 @@ const pageCopy = computed(() => {
   }
   if (route.path.startsWith('/history')) {
     return { title: '历史回看' };
+  }
+  if (route.path.startsWith('/knowledge')) {
+    return { title: 'AI 问答' };
   }
   if (route.path.startsWith('/config/prompt')) {
     return { title: '提示词配置' };
@@ -91,6 +96,17 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="app-header__mobile-actions">
+        <el-button
+          v-if="isKnowledgeChatRoute"
+          class="app-header__mobile-project"
+          circle
+          plain
+          :icon="FolderOpened"
+          size="small"
+          aria-label="项目空间"
+          data-test="knowledge-mobile-project-open"
+          @click="emit('openKnowledgeProjects')"
+        />
         <el-dropdown trigger="click">
           <button class="app-header__avatar-button" type="button" aria-label="账户菜单">
             <span class="app-header__avatar">{{ username ? username.charAt(0).toUpperCase() : 'U' }}</span>
@@ -167,9 +183,15 @@ onBeforeUnmount(() => {
 }
 
 .app-header__theme-toggle,
+.app-header__mobile-project,
 .app-header__mobile-theme {
   border-color: color-mix(in srgb, var(--color-border-strong) 76%, transparent);
   background: color-mix(in srgb, var(--color-surface-strong) 88%, transparent);
+}
+
+.app-header__mobile-project {
+  width: 36px;
+  height: 36px;
 }
 
 .app-header__desktop-only {

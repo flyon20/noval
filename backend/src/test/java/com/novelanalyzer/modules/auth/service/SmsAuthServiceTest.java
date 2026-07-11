@@ -17,6 +17,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockedConstruction;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.RecoverableDataAccessException;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -225,6 +226,33 @@ class SmsAuthServiceTest {
             ArgumentCaptor<SendSmsVerifyCodeRequest> requestCaptor = ArgumentCaptor.forClass(SendSmsVerifyCodeRequest.class);
             verify(mocked.constructed().get(0)).getAcsResponse(requestCaptor.capture());
             assertThat(requestCaptor.getValue().getValidTime()).isEqualTo(300L);
+        }
+    }
+
+    @Test
+    void shouldReturnOutIdWhenSmsWasSentButLocalLogConnectionIsRecovering() throws Exception {
+        SmsAuthService service = new SmsAuthService(buildProperties(), smsCodeLogRepository, smsRiskControlService);
+
+        SendSmsVerifyCodeResponse response = new SendSmsVerifyCodeResponse();
+        response.setSuccess(true);
+        SendSmsVerifyCodeResponse.Model model = new SendSmsVerifyCodeResponse.Model();
+        model.setVerifyCode("gtwai9");
+        model.setRequestId("request-001");
+        model.setBizId("biz-001");
+        response.setModel(model);
+
+        org.mockito.Mockito.doThrow(new RecoverableDataAccessException("stale mysql connection"))
+            .when(smsCodeLogRepository)
+            .insert(any(SmsCodeLogEntity.class));
+
+        try (MockedConstruction<DefaultAcsClient> mocked = mockConstruction(DefaultAcsClient.class, (mock, context) -> {
+            when(mock.getAcsResponse(any(SendSmsVerifyCodeRequest.class))).thenReturn(response);
+        })) {
+            SmsAuthService.SendResult result = service.sendVerifyCode("13800138000", "REGISTER", "127.0.0.1");
+
+            assertThat(result.debugVerifyCode()).isEqualTo("gtwai9");
+            assertThat(result.outId()).isNotBlank();
+            assertThat(mocked.constructed()).hasSize(1);
         }
     }
 

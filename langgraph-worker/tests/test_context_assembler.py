@@ -22,6 +22,12 @@ class ProjectMemoryClient:
         }
 
 
+class FailingProjectMemoryClient(ProjectMemoryClient):
+    async def get_project_memory(self, *, project_id: int, user_id: int) -> dict:
+        self.calls.append({"project_id": project_id, "user_id": user_id})
+        raise RuntimeError("project memory unavailable")
+
+
 class ContextAssemblerTest(unittest.TestCase):
     def test_builds_current_turn_layer_from_request(self) -> None:
         bundle = ContextAssembler().assemble(
@@ -97,6 +103,30 @@ class AsyncContextAssemblerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("urban fantasy", bundle.projectProfile.content["memories"]["genre"])
         self.assertEqual(900, bundle.projectProfile.content["projectId"])
 
+    async def test_fetches_project_memory_when_incoming_project_profile_is_shell(self) -> None:
+        client = ProjectMemoryClient()
+        bundle = await ContextAssembler(memory_client=client).assemble_async(
+            KnowledgeChatRequest(
+                question="continue the outsourcing project",
+                userId=7,
+                projectId=900,
+                bookName="My Project",
+                contextBundle={
+                    "projectProfile": {
+                        "scope": "project",
+                        "content": {"projectId": 900, "bookName": "My Project"},
+                        "sourceIds": [],
+                    }
+                },
+            )
+        )
+
+        self.assertEqual([{"project_id": 900, "user_id": 7}], client.calls)
+        self.assertIsNotNone(bundle.projectProfile)
+        assert bundle.projectProfile is not None
+        self.assertEqual("urban fantasy", bundle.projectProfile.content["memories"]["genre"])
+        self.assertEqual(["ai_project_memory"], bundle.projectProfile.sourceIds)
+
     async def test_does_not_fetch_project_memory_without_project_id(self) -> None:
         client = ProjectMemoryClient()
         bundle = await ContextAssembler(memory_client=client).assemble_async(
@@ -105,6 +135,18 @@ class AsyncContextAssemblerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([], client.calls)
         self.assertIsNone(bundle.projectProfile)
+
+    async def test_project_placeholder_reports_diagnostics_when_memory_fetch_fails(self) -> None:
+        client = FailingProjectMemoryClient()
+        bundle = await ContextAssembler(memory_client=client).assemble_async(
+            KnowledgeChatRequest(question="continue project", userId=7, projectId=900)
+        )
+
+        self.assertIsNotNone(bundle.projectProfile)
+        assert bundle.projectProfile is not None
+        diagnostics = bundle.projectProfile.content["_diagnostics"]
+        self.assertEqual("placeholder", diagnostics["projectProfileStatus"])
+        self.assertEqual("RuntimeError", diagnostics["reason"])
 
 
 if __name__ == "__main__":

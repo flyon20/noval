@@ -5,6 +5,11 @@ import { PRIMARY_NAV_ITEMS } from '@/constants/navigation';
 
 const props = defineProps<{
   roles: string[];
+  showKnowledgeSpaceAction?: boolean;
+}>();
+
+const emit = defineEmits<{
+  openKnowledgeSpace: [];
 }>();
 
 const configNavItems = computed(() => {
@@ -13,8 +18,10 @@ const configNavItems = computed(() => {
   ];
 
   if (props.roles.includes('ADMIN')) {
-    items.push({ to: '/knowledge/admin/traces', label: 'Agent Trace', icon: 'Monitor' });
-    items.push({ to: '/knowledge/admin/skills', label: 'Skills', icon: 'Operation' });
+    items.push({ to: '/knowledge/admin/traces', label: '智能体 Trace', icon: 'Monitor' });
+    items.push({ to: '/knowledge/admin/agent-governance', label: '智能体治理', icon: 'SetUp' });
+    items.push({ to: '/knowledge/admin/skills', label: '技能管理', icon: 'Operation' });
+    items.push({ to: '/knowledge/admin/memories', label: '记忆管理', icon: 'Collection' });
     items.push({ to: '/config/system', label: '系统配置', icon: 'Setting' });
   }
 
@@ -57,6 +64,17 @@ function getIcon(name: string) {
         <span>{{ item.label }}</span>
       </RouterLink>
     </nav>
+
+    <el-button
+      v-if="showKnowledgeSpaceAction"
+      class="app-sidebar__project-switch"
+      data-test="knowledge-project-space-toggle"
+      plain
+      @click="emit('openKnowledgeSpace')"
+    >
+      <el-icon :size="17"><component :is="getIcon('FolderOpened')" /></el-icon>
+      <span>问答项目空间</span>
+    </el-button>
 
     <section class="app-sidebar__section">
       <p class="app-sidebar__section-title">配置中心</p>
@@ -154,6 +172,13 @@ function getIcon(name: string) {
 .app-sidebar__nav {
   display: grid;
   gap: 0.3rem;
+}
+
+.app-sidebar__project-switch {
+  justify-content: flex-start;
+  min-height: 42px;
+  border-radius: 8px;
+  font-weight: 650;
 }
 
 .app-sidebar__link {

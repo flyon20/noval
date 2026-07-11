@@ -54,6 +54,22 @@ class QdrantClientTest {
     }
 
     @Test
+    void shouldEnsureMemoryCollectionSeparately() throws Exception {
+        String baseUrl = startServer();
+        QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
+
+        client.ensureMemoryCollection();
+
+        CapturedRequest request = requests.get(0);
+        assertThat(request.method()).isEqualTo("PUT");
+        assertThat(request.path()).isEqualTo("/collections/noval_ai_memory");
+        Map<String, Object> body = objectMapper.readValue(request.body(), new TypeReference<>() {});
+        Map<String, Object> vectors = objectMapper.convertValue(body.get("vectors"), new TypeReference<>() {});
+        assertThat(vectors).containsEntry("size", 3);
+        assertThat(vectors).containsEntry("distance", "Cosine");
+    }
+
+    @Test
     void shouldTreatExistingCollectionAsSuccess() throws Exception {
         String baseUrl = startServerWithStatus(409, "{\"status\":\"error\",\"result\":\"already exists\"}");
         QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
@@ -167,6 +183,7 @@ class QdrantClientTest {
         KnowledgeProperties properties = new KnowledgeProperties();
         properties.getQdrant().setBaseUrl(baseUrl);
         properties.getQdrant().setCollection("novel_knowledge_chunks");
+        properties.getQdrant().setMemoryCollection("noval_ai_memory");
         properties.getEmbedding().setDimension(3);
         return properties;
     }

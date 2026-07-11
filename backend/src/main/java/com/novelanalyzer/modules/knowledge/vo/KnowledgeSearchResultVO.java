@@ -1,5 +1,7 @@
 package com.novelanalyzer.modules.knowledge.vo;
 
+import java.util.Map;
+
 public class KnowledgeSearchResultVO {
 
     private Long chunkId;
@@ -14,6 +16,8 @@ public class KnowledgeSearchResultVO {
     private String analysisType;
     private String title;
     private String preview;
+    private String retrievalBackend;
+    private Map<String, Object> retrievalDiagnostics;
 
     public Long getChunkId() {
         return chunkId;
@@ -109,5 +113,21 @@ public class KnowledgeSearchResultVO {
 
     public void setPreview(String preview) {
         this.preview = preview;
+    }
+
+    public String getRetrievalBackend() {
+        return retrievalBackend;
+    }
+
+    public void setRetrievalBackend(String retrievalBackend) {
+        this.retrievalBackend = retrievalBackend;
+    }
+
+    public Map<String, Object> getRetrievalDiagnostics() {
+        return retrievalDiagnostics;
+    }
+
+    public void setRetrievalDiagnostics(Map<String, Object> retrievalDiagnostics) {
+        this.retrievalDiagnostics = retrievalDiagnostics;
     }
 }

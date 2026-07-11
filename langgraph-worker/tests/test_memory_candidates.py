@@ -63,8 +63,15 @@ class MemoryCandidateAgentIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 }
 
         class Client:
+            def __init__(self) -> None:
+                self.memory_candidate_calls: list[dict] = []
+
             async def search_books(self, **_kwargs) -> list:
                 return []
+
+            async def create_memory_candidate(self, **kwargs) -> dict:
+                self.memory_candidate_calls.append(dict(kwargs))
+                return {"id": len(self.memory_candidate_calls)}
 
         class Router:
             def classify(self, *_args, **_kwargs) -> IntentDecision:
@@ -75,12 +82,15 @@ class MemoryCandidateAgentIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     answerBoundary=AnswerBoundary.creative_inference,
                 )
 
-        agent = NovelResearchAgent(knowledge_client=Client(), provider_client=Provider())
+        client = Client()
+        agent = NovelResearchAgent(knowledge_client=client, provider_client=Provider())
         agent.intent_router = Router()
         response = await agent.run(
             KnowledgeChatRequest(
                 question="这个项目不后宫，前三章快节奏一点。",
+                userId=7,
                 projectId=900,
+                conversationId="conv-memory-1",
                 traceId="trace-memory-1",
             )
         )
@@ -89,6 +99,10 @@ class MemoryCandidateAgentIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("project", candidates[0]["scope"])
         self.assertEqual("constraint", candidates[0]["type"])
         self.assertEqual(candidates, response.resultJson["trace"]["memoryCandidates"])
+        self.assertEqual(1, len(client.memory_candidate_calls))
+        self.assertEqual(7, client.memory_candidate_calls[0]["user_id"])
+        self.assertEqual(900, client.memory_candidate_calls[0]["project_id"])
+        self.assertEqual("conv-memory-1", client.memory_candidate_calls[0]["conversation_id"])
 
 
 if __name__ == "__main__":

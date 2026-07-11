@@ -9,6 +9,20 @@ defineProps<{
 const emit = defineEmits<{
   select: [candidate: KnowledgeBookCandidate];
 }>();
+
+function isUnreadable(candidate: KnowledgeBookCandidate) {
+  return candidate.readableNovel === false;
+}
+
+function unavailableText(candidate: KnowledgeBookCandidate) {
+  if (candidate.unavailableReason === 'search_result_is_audiobook') {
+    return '听书结果，暂不支持章节采集';
+  }
+  if (candidate.unavailableReason === 'search_result_is_video') {
+    return '视频结果，暂不支持章节采集';
+  }
+  return '该结果暂不支持章节采集';
+}
 </script>
 
 <template>
@@ -19,11 +33,13 @@ const emit = defineEmits<{
         <button
           data-test="candidate-select-button"
           type="button"
-          :disabled="loading"
+          :class="{ 'is-unreadable': isUnreadable(candidate) }"
+          :disabled="loading || isUnreadable(candidate)"
           @click="emit('select', candidate)"
         >
           <strong>{{ candidate.bookName }}</strong>
           <span>{{ candidate.author || '未知作者' }}</span>
+          <em v-if="isUnreadable(candidate)">{{ unavailableText(candidate) }}</em>
           <small v-if="candidate.intro">{{ candidate.intro }}</small>
         </button>
       </li>
@@ -73,6 +89,10 @@ const emit = defineEmits<{
   opacity: 0.7;
 }
 
+.candidate-picker button.is-unreadable {
+  cursor: not-allowed;
+}
+
 .candidate-picker strong {
   min-width: 0;
   overflow: hidden;
@@ -83,6 +103,13 @@ const emit = defineEmits<{
 .candidate-picker span {
   color: var(--color-text-muted);
   font-size: 0.82rem;
+}
+
+.candidate-picker em {
+  grid-column: 1 / -1;
+  color: var(--color-danger, #b42318);
+  font-size: 0.78rem;
+  font-style: normal;
 }
 
 .candidate-picker small {

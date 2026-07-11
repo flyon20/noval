@@ -113,6 +113,8 @@ class AgentTraceAttachmentTest(unittest.IsolatedAsyncioTestCase):
                 "assemble_context",
                 "classify_intent",
                 "plan_tasks",
+                "validate_preconditions",
+                "route_experts",
                 "execute_tools",
                 "supervise_evidence",
                 "compose_answer",

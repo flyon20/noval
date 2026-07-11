@@ -1,5 +1,30 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import ElementPlus from 'element-plus';
+import { mount } from '@vue/test-utils';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import AppHeader from '../AppHeader.vue';
+
+async function mountHeader(pathname: string) {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/knowledge', component: { template: '<div />' } },
+      { path: '/rank', component: { template: '<div />' } },
+    ],
+  });
+  await router.push(pathname);
+
+  return mount(AppHeader, {
+    props: {
+      username: 'demo',
+      roles: ['USER'],
+    },
+    global: {
+      plugins: [router, ElementPlus],
+    },
+  });
+}
 
 describe('AppHeader styles', () => {
   test('mobile fixed header avoids explicit full-width sizing that can cause horizontal overflow', () => {
@@ -20,7 +45,19 @@ describe('AppHeader styles', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../AppHeader.vue'), 'utf-8');
 
     expect(source).toContain('changePassword');
-    expect(source.match(/修改密码/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(source).toContain('账户菜单');
+    expect(source.match(/emit\('changePassword'\)/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(source).toContain('app-header__avatar-button');
+  });
+
+  test('shows a mobile project-space action only on the AI chat route', async () => {
+    const knowledgeHeader = await mountHeader('/knowledge');
+    const projectButton = knowledgeHeader.find('[data-test="knowledge-mobile-project-open"]');
+
+    expect(projectButton.exists()).toBe(true);
+    await projectButton.trigger('click');
+    expect(knowledgeHeader.emitted('openKnowledgeProjects')).toHaveLength(1);
+
+    const rankHeader = await mountHeader('/rank');
+    expect(rankHeader.find('[data-test="knowledge-mobile-project-open"]').exists()).toBe(false);
   });
 });

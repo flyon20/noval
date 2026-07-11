@@ -6,6 +6,9 @@ from app.services.agents.base import BaseSpecialistAgent
 class WorldbuildingAgent(BaseSpecialistAgent):
     agent_name = "worldbuilding"
     answer_mode = "creative"
+    llm_enabled = True
+    tool_route = "mixed_creation_research"
+    deep_reasoning_effort = "high"
     generation_instructions = (
         "围绕世界规则、势力结构、金手指成本和升级反馈设计世界观。",
         "规则必须能制造持续冲突和阶段目标。",

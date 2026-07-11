@@ -60,6 +60,7 @@ class MySqlGoldenEvalRepository:
         evaluator_name: str,
         model_name: str | None = None,
         settings_json: dict[str, Any] | None = None,
+        total_cases: int = 0,
     ) -> int:
         row_id = self._execute_insert(
             """
@@ -67,11 +68,41 @@ class MySqlGoldenEvalRepository:
                 run_key, suite_name, runner_name, evaluator_name, model_name,
                 settings_json, status, total_cases, passed_cases, failed_cases
             )
-            VALUES (%s, %s, %s, %s, %s, %s, 'RUNNING', 0, 0, 0)
+            VALUES (%s, %s, %s, %s, %s, %s, 'RUNNING', %s, 0, 0)
             """,
-            (run_key, suite_name, runner_name, evaluator_name, model_name, self._dump_json(settings_json or {})),
+            (
+                run_key,
+                suite_name,
+                runner_name,
+                evaluator_name,
+                model_name,
+                self._dump_json(settings_json or {}),
+                max(0, int(total_cases or 0)),
+            ),
         )
+        if total_cases > 0:
+            self.update_run_progress(run_id=row_id, current=0, total=total_cases, message="created")
         return row_id
+
+    def update_run_progress(
+        self,
+        *,
+        run_id: int,
+        current: int,
+        total: int,
+        message: str,
+    ) -> None:
+        self._execute(
+            """
+            UPDATE ai_eval_run
+            SET progress_current = %s,
+                progress_total = %s,
+                progress_message = %s,
+                last_heartbeat_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (current, total, message, run_id),
+        )
 
     def record_case_result(
         self,
@@ -168,12 +199,71 @@ class MySqlGoldenEvalRepository:
                 total_cases = %s,
                 passed_cases = %s,
                 failed_cases = %s,
+                progress_current = %s,
+                progress_total = %s,
+                progress_message = %s,
                 metrics_json = %s,
                 finished_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (status, total_cases, passed_cases, failed_cases, self._dump_json(metrics_json), run_id),
+            (
+                status,
+                total_cases,
+                passed_cases,
+                failed_cases,
+                total_cases,
+                total_cases,
+                "completed",
+                self._dump_json(metrics_json),
+                run_id,
+            ),
         )
+
+    def fail_run(self, *, run_id: int, error_message: str) -> None:
+        self._execute(
+            """
+            UPDATE ai_eval_run
+            SET status = 'FAILED',
+                metrics_json = %s,
+                error_message = %s,
+                progress_message = %s,
+                finished_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (self._dump_json({"error": error_message}), error_message, "failed", run_id),
+        )
+
+    def cancel_run(self, *, run_id: int, completed_cases: int, total_cases: int) -> None:
+        self._execute(
+            """
+            UPDATE ai_eval_run
+            SET status = 'CANCELLED',
+                cancel_requested = TRUE,
+                progress_current = %s,
+                progress_total = %s,
+                progress_message = %s,
+                cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP),
+                finished_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (completed_cases, total_cases, "cancelled", run_id),
+        )
+
+    def is_run_cancelled(self, run_id: int) -> bool:
+        rows = self._fetch_all(
+            """
+            SELECT status, cancel_requested
+            FROM ai_eval_run
+            WHERE id = %s AND deleted = 0
+            LIMIT 1
+            """,
+            (run_id,),
+        )
+        if not rows:
+            return False
+        status = str(self._row_value(rows[0], 0, "status") or "").upper()
+        cancel_requested = self._row_value(rows[0], 1, "cancel_requested")
+        return status in {"CANCELLING", "CANCELLED"} or self._bool_value(cancel_requested)
 
     def _fetch_all(self, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         with closing(self._connect()) as connection:
@@ -235,6 +325,13 @@ class MySqlGoldenEvalRepository:
         if value in {None, ""}:
             return None
         return str(value)
+
+    def _bool_value(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _default_mysql_connector(config: MySqlCheckpointConfig) -> Any:

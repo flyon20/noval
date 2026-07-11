@@ -16,12 +16,17 @@ spring:
         max-concurrency: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
         prefetch: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:novel_analyzer}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:novel_analyzer}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=${MYSQL_CONNECT_TIMEOUT_MS:10000}&socketTimeout=${MYSQL_SOCKET_TIMEOUT_MS:300000}&tcpKeepAlive=true
     username: ${MYSQL_USER:root}
     password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       initialization-fail-timeout: -1
+      connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}
+      validation-timeout: ${DB_POOL_VALIDATION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_POOL_IDLE_TIMEOUT_MS:60000}
+      max-lifetime: ${DB_POOL_MAX_LIFETIME_MS:120000}
+      keepalive-time: ${DB_POOL_KEEPALIVE_TIME_MS:60000}
   data:
     redis:
       host: ${REDIS_HOST:127.0.0.1}
@@ -131,6 +136,7 @@ app:
     qdrant:
       base-url: ${KNOWLEDGE_QDRANT_BASE_URL:http://127.0.0.1:6333}
       collection: ${KNOWLEDGE_QDRANT_COLLECTION:novel_knowledge_chunks}
+      memory-collection: ${KNOWLEDGE_QDRANT_MEMORY_COLLECTION:noval_ai_memory}
     embedding:
       provider: ${KNOWLEDGE_EMBEDDING_PROVIDER:dashscope}
       base-url: ${KNOWLEDGE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
