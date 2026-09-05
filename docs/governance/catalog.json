@@ -168,8 +168,8 @@
           "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeInternalControllerTest.java",
           "langgraph-worker/tests/test_webnovel_harness.py"
         ],
-        "verified_at": null,
-        "verified_commit": null
+        "verified_at": "2026-09-05",
+        "verified_commit": "aa4c0adf6edc54df028cbd9bf1222f6c510bb6e5"
       }
     },
     {
@@ -282,7 +282,7 @@
           "backend/src/test/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAiCacheContinuityServiceTest.java"
         ],
         "verified_at": "2026-09-05",
-        "verified_commit": null
+        "verified_commit": "aa4c0adf6edc54df028cbd9bf1222f6c510bb6e5"
       }
     },
     {

@@ -140,7 +140,9 @@ Phase 174 为新增 strategy/settings scope 将 Redis namespace 从 v3 断代为
 生产前仍需：
 
 1. 采集 Redis `used_memory`、key 数量、`MEMORY USAGE` 样本、executor reject 数和 projection 延迟。
-2. 当前候选源码默认 `AI_CACHE_CONTINUITY_ENABLED=true`，而已部署生产仍显式为 `false`；发布前必须复核环境覆盖、Redis 容量与回滚边界，不能因源码默认值直接宣称线上启用。
+2. 2026-09-05 Phase 175 已在 J3160 完成可回滚切换，线上 `AI_CACHE_CONTINUITY_ENABLED=true`，并通过 Redis continuity v4 marker、服务健康、活动任务、重启/OOM、非目标容器与严重日志 postverify；仍需持续采集 Redis 容量、key 数量、executor reject 数和 projection 延迟，不能因开关与 marker 存在直接宣称真实 Provider cache 命中。
 3. 运行真实 GPT 与 DeepSeek Responses 同会话工具轮 + follow-up：GPT-5.6+ 检查 key/options/breakpoint 与 read/write tokens，早期 GPT 检查 retention/`cached_tokens`，DeepSeek 检查匿名 `user` 且无 OpenAI cache 字段；三者都联合检查 `prefixExtended` 与 Provider `cacheReadTokens > 0`。
 4. 确认线上每个当前模型的 `providerCapabilities.promptCache`；旧条目才回落到 `AI_OPENAI_COMPATIBLE_PROMPT_CACHE_KEY_MODELS` / `AI_OPENAI_COMPATIBLE_PROVIDER_USER_MODELS`。未知模型默认不发送专属缓存身份字段。
 5. OpenAI 字段与模型边界以官方 [Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching) 为准；真实网关若拒绝声明字段，回到该 Profile capability 修正，不扩大 Provider 全局特判。
+
+2026-09-05 生产验收：release `aa4c0adf6edc54df028cbd9bf1222f6c510bb6e5` 已上线；Worker/Backend/Nginx running，Worker healthy，目标 restart `0`、OOM `false`，origin/public health `200/200`，活动任务 `0,0,0,0`，非目标容器 identity unchanged，目标服务启动后严重日志 `0`。本次部署未调用真实 GPT/DeepSeek Provider，因此 `cache_read` token、实际 prefix 命中率和第三方 Responses 网关字段 acceptance 仍保持为后续门禁。
