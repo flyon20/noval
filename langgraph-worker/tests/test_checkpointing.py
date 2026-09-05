@@ -79,6 +79,57 @@ class CheckpointingTest(unittest.TestCase):
         assert thread_b is not None
         self.assertEqual(11, thread_b.checkpoint["channel_values"]["value"])
 
+    def test_mysql_checkpointer_only_persists_the_current_thread(self) -> None:
+        connector = FakeMySqlConnector()
+        mysql_config = MySqlCheckpointConfig(
+            host="mysql",
+            port=3306,
+            database="novel_analyzer",
+            user="novel",
+            password="pw",
+        )
+
+        saver = DurableMySqlSaver(mysql_config, namespace="test-agent", connector_factory=connector)
+        graph = _build_counter_graph(saver)
+        graph.invoke({"value": 1}, config={"configurable": {"thread_id": "thread-a"}})
+        graph.invoke({"value": 10}, config={"configurable": {"thread_id": "thread-b"}})
+
+        connector.upserted_keys.clear()
+        graph.invoke({"value": 20}, config={"configurable": {"thread_id": "thread-a"}})
+
+        self.assertTrue(connector.upserted_keys)
+        self.assertEqual(
+            {("test-agent", "thread-a", "")},
+            set(connector.upserted_keys),
+        )
+
+    def test_mysql_checkpointer_delete_does_not_rewrite_other_threads(self) -> None:
+        connector = FakeMySqlConnector()
+        mysql_config = MySqlCheckpointConfig(
+            host="mysql",
+            port=3306,
+            database="novel_analyzer",
+            user="novel",
+            password="pw",
+        )
+
+        saver = DurableMySqlSaver(mysql_config, namespace="test-agent", connector_factory=connector)
+        graph = _build_counter_graph(saver)
+        graph.invoke({"value": 1}, config={"configurable": {"thread_id": "thread-a"}})
+        graph.invoke({"value": 10}, config={"configurable": {"thread_id": "thread-b"}})
+
+        connector.upserted_keys.clear()
+        saver.delete_thread("thread-missing")
+
+        self.assertEqual([], connector.upserted_keys)
+        self.assertEqual(
+            {
+                ("test-agent", "thread-a", ""),
+                ("test-agent", "thread-b", ""),
+            },
+            set(connector.rows),
+        )
+
     def test_factory_uses_mysql_when_checkpoint_backend_is_mysql(self) -> None:
         connector = FakeMySqlConnector()
         mysql_config = MySqlCheckpointConfig(
@@ -102,19 +153,25 @@ class CheckpointingTest(unittest.TestCase):
 class FakeMySqlConnector:
     def __init__(self) -> None:
         self.rows: dict[tuple[str, str, str], bytes] = {}
+        self.upserted_keys: list[tuple[str, str, str]] = []
 
     def __call__(self, config: MySqlCheckpointConfig):
-        return FakeMySqlConnection(self.rows)
+        return FakeMySqlConnection(self.rows, self.upserted_keys)
 
 
 class FakeMySqlConnection:
-    def __init__(self, rows: dict[tuple[str, str, str], bytes]) -> None:
+    def __init__(
+        self,
+        rows: dict[tuple[str, str, str], bytes],
+        upserted_keys: list[tuple[str, str, str]],
+    ) -> None:
         self.rows = rows
+        self.upserted_keys = upserted_keys
         self.committed = False
         self.closed = False
 
     def cursor(self):
-        return FakeMySqlCursor(self.rows)
+        return FakeMySqlCursor(self.rows, self.upserted_keys)
 
     def commit(self) -> None:
         self.committed = True
@@ -124,8 +181,13 @@ class FakeMySqlConnection:
 
 
 class FakeMySqlCursor:
-    def __init__(self, rows: dict[tuple[str, str, str], bytes]) -> None:
+    def __init__(
+        self,
+        rows: dict[tuple[str, str, str], bytes],
+        upserted_keys: list[tuple[str, str, str]],
+    ) -> None:
         self.rows = rows
+        self.upserted_keys = upserted_keys
         self._row = None
         self._rows = []
 
@@ -148,7 +210,9 @@ class FakeMySqlCursor:
             return
         if normalized.startswith("insert into"):
             namespace, thread_id, checkpoint_ns, payload = params[:4]
-            self.rows[(namespace, thread_id, checkpoint_ns)] = bytes(payload)
+            key = (namespace, thread_id, checkpoint_ns)
+            self.rows[key] = bytes(payload)
+            self.upserted_keys.append(key)
             return
         if normalized.startswith("delete from"):
             namespace, thread_id = params[:2]

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { knowledgeDomainLabel } from '@/utils/knowledgeDisplay';
 
 interface Props {
   taskGraphJson?: string;
@@ -35,17 +36,17 @@ const getPerspectiveColor = (perspective: string) => {
 <template>
   <div class="task-graph-display">
     <template v-if="!taskGraph">
-      <p class="task-graph-display__empty">No TaskGraph data</p>
+      <p class="task-graph-display__empty">暂无任务图数据</p>
     </template>
     <template v-else>
       <div class="task-graph-display__header">
         <el-tag type="info" size="small">{{ taskGraph.schemaVersion }}</el-tag>
         <el-tag v-if="taskGraph.answerBoundary" size="small">
-          {{ taskGraph.answerBoundary }}
+          {{ knowledgeDomainLabel(taskGraph.answerBoundary) }}
         </el-tag>
       </div>
       <p v-if="taskGraph.userGoal" class="task-graph-display__goal">
-        <strong>User Goal:</strong> {{ taskGraph.userGoal }}
+        <strong>用户目标：</strong> {{ taskGraph.userGoal }}
       </p>
       <div class="task-graph-display__tasks">
         <el-card
@@ -58,19 +59,19 @@ const getPerspectiveColor = (perspective: string) => {
             <div class="task-card-header">
               <span class="task-card-header__id">{{ task.id }}</span>
               <el-tag :color="getPerspectiveColor(task.perspective)" size="small">
-                {{ task.perspective }}
+                {{ knowledgeDomainLabel(task.perspective) }}
               </el-tag>
-              <el-tag type="info" size="small">{{ task.type }}</el-tag>
+              <el-tag type="info" size="small">{{ knowledgeDomainLabel(task.type) }}</el-tag>
             </div>
           </template>
           <p class="task-card__goal">{{ task.goal }}</p>
           <el-descriptions v-if="task.tools?.length || task.dependsOn?.length" :column="1" size="small">
-            <el-descriptions-item v-if="task.tools?.length" label="Tools">
+            <el-descriptions-item v-if="task.tools?.length" label="工具">
               <el-tag v-for="tool in task.tools" :key="tool" size="small" class="task-card__tool-tag">
                 {{ tool }}
               </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item v-if="task.dependsOn?.length" label="Depends On">
+            <el-descriptions-item v-if="task.dependsOn?.length" label="依赖任务">
               <el-tag v-for="dep in task.dependsOn" :key="dep" type="warning" size="small">
                 {{ dep }}
               </el-tag>

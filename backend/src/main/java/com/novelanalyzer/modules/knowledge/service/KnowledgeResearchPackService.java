@@ -45,6 +45,7 @@ public class KnowledgeResearchPackService {
     }
 
     public BookResearchPackVO buildBookPack(BookResearchPackRequest request) {
+        Long userId = requireUserScope(request.getUserId());
         CrawlBookEntity book = findRequestedBook(request)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
         BookResearchPackVO pack = new BookResearchPackVO();
@@ -57,6 +58,7 @@ public class KnowledgeResearchPackService {
             .map(this::toRankRow)
             .toList());
         pack.setAnalyses(knowledgeRepository.findLatestAnalysisResultsForBook(
+                userId,
                 book.getId(),
                 normalizeLimit(request.getAnalysisLimit(), DEFAULT_ANALYSIS_LIMIT, 20)
             ).stream()
@@ -66,6 +68,7 @@ public class KnowledgeResearchPackService {
     }
 
     public RankResearchPackVO buildRankPack(RankResearchPackRequest request) {
+        Long userId = requireUserScope(request.getUserId());
         RankLookupRequest lookupRequest = new RankLookupRequest();
         lookupRequest.setPlatform(request.getPlatform());
         lookupRequest.setChannelCode(request.getChannelCode());
@@ -76,6 +79,8 @@ public class KnowledgeResearchPackService {
         lookupRequest.setFreshness(request.getFreshness());
         lookupRequest.setAllowHistorical(request.getAllowHistorical());
         lookupRequest.setTimeWindowDays(request.getTimeWindowDays());
+        lookupRequest.setSnapshotStartDate(request.getSnapshotStartDate());
+        lookupRequest.setSnapshotEndDate(request.getSnapshotEndDate());
         lookupRequest.setRequireSnapshotTime(request.getRequireSnapshotTime());
 
         List<RankLookupResultVO> rankRows = rankToolService.lookupRank(lookupRequest);
@@ -93,7 +98,7 @@ public class KnowledgeResearchPackService {
             CrawlChapterEntity::getBookId
         );
         Map<Long, List<AnalysisResultEntity>> analysesByBookId = groupByBookId(
-            knowledgeRepository.findLatestAnalysisResultsForBooks(bookIds, 1),
+            knowledgeRepository.findLatestAnalysisResultsForBooks(userId, bookIds, 1),
             AnalysisResultEntity::getBookId
         );
         List<BookProfileVO> books = new ArrayList<>();
@@ -119,6 +124,13 @@ public class KnowledgeResearchPackService {
         pack.setChapters(chapters);
         pack.setAnalyses(analyses);
         return pack;
+    }
+
+    private Long requireUserScope(Long userId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "user scope required");
+        }
+        return userId;
     }
 
     private <T> Map<Long, List<T>> groupByBookId(List<T> items, java.util.function.Function<T, Long> bookIdReader) {

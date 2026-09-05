@@ -98,11 +98,16 @@ class MemoryCandidateAgentIntegrationTest(unittest.IsolatedAsyncioTestCase):
         candidates = response.resultJson["memoryCandidates"]
         self.assertEqual("project", candidates[0]["scope"])
         self.assertEqual("constraint", candidates[0]["type"])
+        self.assertIn("factKey", candidates[0])
+        self.assertNotIn("content", candidates[0])
+        self.assertIn("content", response.resultJson["memoryCandidatePayloads"][0])
+        self.assertNotIn("memoryCandidatePayloads", response.resultJson["trace"])
         self.assertEqual(candidates, response.resultJson["trace"]["memoryCandidates"])
         self.assertEqual(1, len(client.memory_candidate_calls))
         self.assertEqual(7, client.memory_candidate_calls[0]["user_id"])
         self.assertEqual(900, client.memory_candidate_calls[0]["project_id"])
         self.assertEqual("conv-memory-1", client.memory_candidate_calls[0]["conversation_id"])
+        self.assertEqual(candidates[0]["factKey"], client.memory_candidate_calls[0]["fact_key"])
 
 
 if __name__ == "__main__":

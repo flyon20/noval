@@ -10,6 +10,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 
 @Service
@@ -51,6 +53,11 @@ public class CrawlerRankBackfillScheduler {
                 request.setBoardCode(board.getBoardCode());
                 request.setRefreshMode(CrawlerRankRequest.REFRESH_MODE_AUTO);
                 request.setRankFetchCount(rankFetchCount);
+                request.setIdempotencyKey(CrawlerRankIdempotencyKeyFactory.generate(
+                    "rank-backfill",
+                    request,
+                    LocalDate.now(ZoneOffset.UTC).toString()
+                ));
                 crawlerService.refreshRankBoard(request);
                 submitted++;
             } catch (RuntimeException ex) {

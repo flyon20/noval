@@ -49,6 +49,9 @@ describe('LangGraphRuntimeGraph', () => {
     });
 
     expect(wrapper.text()).toContain('运行路径');
+    expect(wrapper.text()).toContain('组装上下文');
+    expect(wrapper.text()).toContain('识别意图');
+    expect(wrapper.text()).toContain('生成回答');
     expect(wrapper.findAll('[data-test="runtime-edge"]')).toHaveLength(2);
     expect(wrapper.find('[data-test="runtime-node-card-assemble_context"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="runtime-node-card-compose_answer"]').exists()).toBe(true);
@@ -62,6 +65,7 @@ describe('LangGraphRuntimeGraph', () => {
 
     expect(wrapper.find('[data-test="runtime-node-detail"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('节点详情');
+    expect(wrapper.text()).toContain('生成回答');
     expect(wrapper.text()).toContain('compose_answer');
     expect(wrapper.text()).toContain('missing evidence contract');
     expect(wrapper.text()).toContain('节点原始 JSON');

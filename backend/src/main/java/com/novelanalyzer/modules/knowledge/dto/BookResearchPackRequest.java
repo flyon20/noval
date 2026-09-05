@@ -1,12 +1,26 @@
 package com.novelanalyzer.modules.knowledge.dto;
 
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+
 public class BookResearchPackRequest {
 
+    @NotNull(message = "user scope is required")
+    @Positive(message = "user scope is invalid")
+    private Long userId;
     private String platform;
     private Long bookId;
     private String bookName;
     private Integer chapterLimit;
     private Integer analysisLimit;
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
+    }
 
     public String getPlatform() {
         return platform;

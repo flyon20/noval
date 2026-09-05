@@ -4,13 +4,19 @@ import com.novelanalyzer.config.KnowledgeProperties;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeIndexQueueService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 
 import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -20,6 +26,7 @@ class KnowledgeIndexQueueServiceTest {
     @Test
     void shouldPublishNewIndexJobToRabbitWorkQueue() {
         RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+        confirmPublishes(rabbitTemplate, true);
         KnowledgeIndexQueueService service = newService(rabbitTemplate, mock(RabbitAdmin.class), new KnowledgeProperties());
         KnowledgeIndexQueueService.IndexQueueItem item = item(1L, 0);
 
@@ -28,7 +35,12 @@ class KnowledgeIndexQueueServiceTest {
         assertThat(published).isTrue();
         ArgumentCaptor<KnowledgeIndexQueueService.IndexQueueItem> captor =
             ArgumentCaptor.forClass(KnowledgeIndexQueueService.IndexQueueItem.class);
-        verify(rabbitTemplate).convertAndSend(eq("noval.knowledge.index"), eq("knowledge.index.book"), captor.capture());
+        verify(rabbitTemplate).convertAndSend(
+            eq("noval.knowledge.index"),
+            eq("knowledge.index.book"),
+            captor.capture(),
+            any(CorrelationData.class)
+        );
         assertThat(captor.getValue().jobId()).isEqualTo(1L);
         assertThat(captor.getValue().attempt()).isZero();
         assertThat(captor.getValue().rawPayload()).isNull();
@@ -37,6 +49,7 @@ class KnowledgeIndexQueueServiceTest {
     @Test
     void shouldPublishRetryJobToDelayQueueWithNextAttempt() {
         RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+        confirmPublishes(rabbitTemplate, true);
         KnowledgeIndexQueueService service = newService(rabbitTemplate, mock(RabbitAdmin.class), new KnowledgeProperties());
         KnowledgeIndexQueueService.IndexQueueItem item = item(2L, 0).withRawPayload("{\"jobId\":2}");
 
@@ -45,10 +58,49 @@ class KnowledgeIndexQueueServiceTest {
         assertThat(published).isTrue();
         ArgumentCaptor<KnowledgeIndexQueueService.IndexQueueItem> captor =
             ArgumentCaptor.forClass(KnowledgeIndexQueueService.IndexQueueItem.class);
-        verify(rabbitTemplate).convertAndSend(eq("noval.knowledge.index.retry"), eq("knowledge.index.book.retry.120s"), captor.capture());
+        verify(rabbitTemplate).convertAndSend(
+            eq("noval.knowledge.index.retry"),
+            eq("knowledge.index.book.retry.120s"),
+            captor.capture(),
+            any(CorrelationData.class)
+        );
         assertThat(captor.getValue().jobId()).isEqualTo(2L);
         assertThat(captor.getValue().attempt()).isEqualTo(2);
         assertThat(captor.getValue().rawPayload()).isNull();
+    }
+
+    @Test
+    void shouldTreatPublisherNackAsFailure() {
+        RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+        confirmPublishes(rabbitTemplate, false);
+        KnowledgeIndexQueueService service = newService(rabbitTemplate, mock(RabbitAdmin.class), new KnowledgeProperties());
+
+        assertThat(service.enqueue(item(3L, 0))).isFalse();
+    }
+
+    @Test
+    void shouldTreatMandatoryPublisherReturnAsFailureEvenWhenBrokerConfirms() {
+        RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+        doAnswer(invocation -> {
+            CorrelationData correlationData = invocation.getArgument(3);
+            correlationData.setReturned(new ReturnedMessage(
+                new Message(new byte[0], new MessageProperties()),
+                312,
+                "NO_ROUTE",
+                "noval.knowledge.index",
+                "knowledge.index.book"
+            ));
+            correlationData.getFuture().complete(new CorrelationData.Confirm(true, null));
+            return null;
+        }).when(rabbitTemplate).convertAndSend(
+            any(String.class),
+            any(String.class),
+            any(KnowledgeIndexQueueService.IndexQueueItem.class),
+            any(CorrelationData.class)
+        );
+        KnowledgeIndexQueueService service = newService(rabbitTemplate, mock(RabbitAdmin.class), new KnowledgeProperties());
+
+        assertThat(service.enqueue(item(4L, 0))).isFalse();
     }
 
     @Test
@@ -82,6 +134,19 @@ class KnowledgeIndexQueueServiceTest {
                                                   RabbitAdmin rabbitAdmin,
                                                   KnowledgeProperties properties) {
         return new KnowledgeIndexQueueService(rabbitTemplate, rabbitAdmin, properties);
+    }
+
+    private void confirmPublishes(RabbitTemplate rabbitTemplate, boolean ack) {
+        doAnswer(invocation -> {
+            CorrelationData correlationData = invocation.getArgument(3);
+            correlationData.getFuture().complete(new CorrelationData.Confirm(ack, ack ? null : "broker-nack"));
+            return null;
+        }).when(rabbitTemplate).convertAndSend(
+            any(String.class),
+            any(String.class),
+            any(KnowledgeIndexQueueService.IndexQueueItem.class),
+            any(CorrelationData.class)
+        );
     }
 
     private Properties propertiesWithMessageCount(long count) {

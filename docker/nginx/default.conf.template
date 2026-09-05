@@ -1,5 +1,9 @@
+resolver 127.0.0.11 valid=10s ipv6=off;
+resolver_timeout 5s;
+
 upstream noval_backend {
-    server ${BACKEND_UPSTREAM_HOST}:${BACKEND_UPSTREAM_PORT};
+    zone noval_backend 64k;
+    server ${BACKEND_UPSTREAM_HOST}:${BACKEND_UPSTREAM_PORT} resolve;
     keepalive 32;
 }
 
@@ -12,26 +16,33 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name ${ROOT_DOMAIN};
 
     ssl_certificate     /etc/nginx/ssl/panch-origin.crt;
     ssl_certificate_key /etc/nginx/ssl/panch-origin.key;
 
+    ssl_client_certificate /etc/nginx/ssl/cloudflare-origin-pull-ca.pem;
+    ssl_verify_client ${NGINX_SSL_VERIFY_CLIENT};
+
     return 301 https://${APP_DOMAIN}$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 8080;
+    listen [::]:8080;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name ${APP_DOMAIN};
 
     ssl_certificate     /etc/nginx/ssl/panch-origin.crt;
     ssl_certificate_key /etc/nginx/ssl/panch-origin.key;
 
     ssl_client_certificate /etc/nginx/ssl/cloudflare-origin-pull-ca.pem;
-    ssl_verify_client on;
+    ssl_verify_client ${NGINX_SSL_VERIFY_CLIENT};
 
     real_ip_header CF-Connecting-IP;
     real_ip_recursive on;
@@ -71,6 +82,17 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # The app shell and service worker must revalidate so clients discover releases promptly.
+    location = /index.html {
+        try_files $uri =404;
+        expires -1;
+    }
+
+    location = /sw.js {
+        try_files $uri =404;
+        expires -1;
+    }
+
     location /assets/ {
         try_files $uri =404;
         access_log off;
@@ -82,7 +104,7 @@ server {
         proxy_pass http://noval_backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $realip_remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Connection "";
@@ -100,7 +122,7 @@ server {
         proxy_pass http://noval_backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $realip_remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Connection "";
@@ -115,11 +137,26 @@ server {
         proxy_send_timeout 3600s;
     }
 
+    location ~ ^/api/knowledge/projects/[0-9]+/works/[0-9]+/document-batches$ {
+        client_max_body_size 100m;
+
+        proxy_pass http://noval_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
     location /api/ {
         proxy_pass http://noval_backend;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $realip_remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header Connection "";

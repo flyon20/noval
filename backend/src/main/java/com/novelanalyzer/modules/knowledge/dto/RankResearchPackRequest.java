@@ -1,9 +1,16 @@
 package com.novelanalyzer.modules.knowledge.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+
+import java.time.LocalDate;
 
 public class RankResearchPackRequest {
 
+    @NotNull(message = "user scope is required")
+    @Positive(message = "user scope is invalid")
+    private Long userId;
     @NotBlank
     private String platform;
     private String channelCode;
@@ -15,7 +22,17 @@ public class RankResearchPackRequest {
     private String freshness = "latest";
     private Boolean allowHistorical = false;
     private Integer timeWindowDays;
+    private LocalDate snapshotStartDate;
+    private LocalDate snapshotEndDate;
     private Boolean requireSnapshotTime = true;
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
+    }
 
     public String getPlatform() {
         return platform;
@@ -95,6 +112,22 @@ public class RankResearchPackRequest {
 
     public void setTimeWindowDays(Integer timeWindowDays) {
         this.timeWindowDays = timeWindowDays;
+    }
+
+    public LocalDate getSnapshotStartDate() {
+        return snapshotStartDate;
+    }
+
+    public void setSnapshotStartDate(LocalDate snapshotStartDate) {
+        this.snapshotStartDate = snapshotStartDate;
+    }
+
+    public LocalDate getSnapshotEndDate() {
+        return snapshotEndDate;
+    }
+
+    public void setSnapshotEndDate(LocalDate snapshotEndDate) {
+        this.snapshotEndDate = snapshotEndDate;
     }
 
     public Boolean getRequireSnapshotTime() {

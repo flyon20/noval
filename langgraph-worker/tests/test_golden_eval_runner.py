@@ -10,9 +10,121 @@ from app.services.evaluation import (
     RetrievalEvalThresholds,
     RuleBasedFaithfulnessEvaluator,
 )
+from app.services.agents.expert_registry import current_eval_delegation
 
 
 class GoldenEvalRunnerTest(unittest.IsolatedAsyncioTestCase):
+    def test_each_eval_execution_gets_a_unique_fresh_trace_identity(self) -> None:
+        runner = GoldenEvalRunner(
+            agent=object(),
+            faithfulness_evaluator=RuleBasedFaithfulnessEvaluator(),
+        )
+        case = GoldenEvalCase(
+            case_id="unique-eval-trace",
+            question="market",
+            request_payload={"traceId": "stale-fixture-trace", "resumeFromCheckpoint": True},
+        )
+
+        first = runner._build_request(case)
+        second = runner._build_request(case)
+
+        self.assertNotEqual(first.traceId, second.traceId)
+        self.assertTrue(first.traceId.startswith("eval-unique-eval-trace-"))
+        self.assertFalse(first.resumeFromCheckpoint)
+
+    async def test_delegation_eval_uses_control_arm_and_requires_completed_candidate(self) -> None:
+        profile = {
+            "name": "market_scan",
+            "category": "Delegated",
+            "maxTokens": 1200,
+            "maxToolCalls": 4,
+            "requestedToolCapabilities": ["market.read"],
+            "promptVersion": "default",
+        }
+        profile_hash = "a" * 64
+        agent = DelegationEvalAgent(profile=profile, profile_hash=profile_hash, specialist_status="completed")
+        runner = GoldenEvalRunner(agent=agent, faithfulness_evaluator=RuleBasedFaithfulnessEvaluator())
+        base_case_id = "delegation-control-production-case-identity-length-000000000001"
+        case = GoldenEvalCase(
+            case_id=base_case_id,
+            question="market",
+            expected_intent="market_scan",
+            expected_answer_mode="trend",
+            expected_trace=GoldenEvalExpectedTrace(
+                required_tool_names={"rank.lookup"},
+                require_selected_experts=True,
+                expected_delegated_count=1,
+            ),
+        )
+
+        report = await runner.run_suite([case], suite_name="market")
+
+        self.assertEqual("passed", report["status"], report)
+        self.assertEqual(1, report["totalCases"])
+        self.assertEqual(2, report["executedCaseCount"])
+        self.assertEqual(0.25, report["metrics"]["delegated_eval_config_gains"][profile_hash])
+        self.assertEqual(1.0, report["metrics"]["delegated_eval_config_presence_rates"][profile_hash])
+        self.assertEqual([profile_hash], report["metrics"]["delegated_eval_config_fingerprints"])
+        self.assertNotIn("delegated_profile_hashes", report["metrics"])
+        self.assertEqual(["control", "candidate"], agent.eval_modes)
+        self.assertEqual(
+            f"{base_case_id}::candidate::{profile_hash}",
+            report["results"][1].case_id,
+        )
+        self.assertGreater(len(report["results"][1].case_id), 128)
+
+    async def test_delegation_eval_does_not_credit_selected_but_failed_specialist(self) -> None:
+        profile = {
+            "name": "market_scan",
+            "category": "Delegated",
+            "maxTokens": 1200,
+            "maxToolCalls": 4,
+            "requestedToolCapabilities": ["market.read"],
+            "promptVersion": "default",
+        }
+        profile_hash = "a" * 64
+        runner = GoldenEvalRunner(
+            agent=DelegationEvalAgent(profile=profile, profile_hash=profile_hash, specialist_status="failed"),
+            faithfulness_evaluator=RuleBasedFaithfulnessEvaluator(),
+        )
+
+        report = await runner.run_suite([
+            GoldenEvalCase(case_id="delegation-failed-001", question="market")
+        ], suite_name="market")
+
+        self.assertEqual(0.0, report["metrics"]["delegated_eval_config_gains"][profile_hash])
+        self.assertEqual(0.0, report["metrics"]["delegated_eval_config_presence_rates"][profile_hash])
+        self.assertEqual([], report["metrics"]["delegated_eval_config_fingerprints"])
+
+    def test_trace_metrics_does_not_guess_legacy_profile_fingerprint(self) -> None:
+        runner = GoldenEvalRunner(agent=object(), faithfulness_evaluator=RuleBasedFaithfulnessEvaluator())
+        response = KnowledgeChatResponse(
+            status="answered",
+            answer="market answer",
+            resultJson={
+                "domainIntent": "market_scan",
+                "answerBoundary": "market_evidence",
+                "sourcePolicy": {"evidenceContract": {"status": "verified_latest"}},
+                "taskGraph": {"tasks": [{"type": "market_scan"}]},
+                "expertRouter": {
+                    "evaluationMode": "candidate",
+                    "delegatedCount": 1,
+                    "maxParallel": 1,
+                    "selectedExperts": [{
+                        "name": "market_scan",
+                        "category": "Delegated",
+                        "profileFingerprint": "a" * 64,
+                    }],
+                },
+                "specialistDiagnostics": [{"agentName": "market_scan", "status": "completed"}],
+            },
+        )
+
+        metrics = runner._trace_metrics(response)
+
+        self.assertEqual([], metrics["delegated_eval_config_fingerprints"])
+        self.assertNotIn("delegated_profile_hashes", metrics)
+
     async def test_runs_golden_case_with_retrieval_thresholds_and_faithfulness(self) -> None:
         agent = FakeAgent(
             KnowledgeChatResponse(
@@ -54,7 +166,172 @@ class GoldenEvalRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1.0, result.retrieval_metrics["hit_rate_at_k"])
         self.assertTrue(result.faithfulness["passed"])
 
+    async def test_scores_project_retrieval_evidence_by_chapter_generation_and_graph_edge(self) -> None:
+        agent = FakeAgent(
+            KnowledgeChatResponse(
+                status="answered",
+                answer="The signal is planted in chapter 12.[1]",
+                sources=[KnowledgeSource(
+                    sourceType="CHAPTER",
+                    sourceRefId=12,
+                    chapterId=12,
+                    chapterNo=12,
+                    projectId=900,
+                    workId=901,
+                    generationId=77,
+                )],
+                resultJson={
+                    "domainIntent": "project_knowledge_qa",
+                    "answerMode": "evidence",
+                    "projectKnowledge": {
+                        "retrievedEvidence": [
+                            {
+                                "sourceType": "CHAPTER",
+                                "chapterId": 12,
+                                "chapterNo": 12,
+                                "generationId": 77,
+                                "userId": 7,
+                            },
+                            {
+                                "sourceType": "FORESHADOWING",
+                                "sourceId": "moon",
+                                "chapterId": 12,
+                                "generationId": 77,
+                                "userId": 7,
+                            },
+                            {
+                                "sourceType": "STORY_EDGE",
+                                "sourceId": 101,
+                                "chapterId": 12,
+                                "generationId": 77,
+                                "userId": 7,
+                                "edge": {"edgeId": 101, "evidenceChapterId": 12},
+                            },
+                        ],
+                        "structuredValues": {"character:hero:status": "injured"},
+                    },
+                    "retrievalDiagnostics": {"staleRejected": True},
+                },
+            )
+        )
+        runner = GoldenEvalRunner(agent=agent, faithfulness_evaluator=RuleBasedFaithfulnessEvaluator())
+        case = GoldenEvalCase(
+            case_id="project-graph-001",
+            question="Where was the signal planted?",
+            request_payload={"userId": 7, "projectId": 900},
+            relevant_source_ids={"chapter:12"},
+            expected_chapter_ids={"chapter:12"},
+            expected_foreshadowing_ids={"foreshadowing:moon"},
+            expected_structured_values={"character:hero:status": "injured"},
+            expected_path_edges={"edge:101": {"chapter:12"}},
+            require_stale_rejection=True,
+            require_cross_user_isolation=True,
+            retrieval_thresholds=RetrievalEvalThresholds(
+                min_recall_at_5=1.0,
+                min_chapter_location_accuracy=1.0,
+                min_foreshadowing_coverage=1.0,
+                min_multi_hop_path_evidence=1.0,
+                min_stale_rejection_rate=1.0,
+                min_cross_user_isolation_rate=1.0,
+            ),
+        )
+
+        result = await runner.run_case(case)
+
+        self.assertEqual("passed", result.status, result.failures)
+        self.assertEqual(1.0, result.retrieval_metrics["chapter_location_accuracy"])
+        self.assertEqual(1.0, result.retrieval_metrics["foreshadowing_coverage"])
+        self.assertEqual(1.0, result.retrieval_metrics["multi_hop_path_evidence"])
+        self.assertEqual(1.0, result.retrieval_metrics["stale_rejection_rate"])
+        self.assertEqual(1.0, result.retrieval_metrics["cross_user_isolation_rate"])
+
+
+    async def test_run_suite_project_release_gate_fails_without_mutating_case_results(self) -> None:
+        agent = FakeAgent(
+            KnowledgeChatResponse(
+                status="answered",
+                answer="The signal is planted in chapter 12.[1]",
+                sources=[KnowledgeSource(
+                    sourceType="CHAPTER",
+                    sourceRefId=12,
+                    chapterId=12,
+                    chapterNo=12,
+                    projectId=900,
+                    workId=901,
+                    generationId=77,
+                )],
+                resultJson={
+                    "domainIntent": "project_knowledge_qa",
+                    "answerMode": "evidence",
+                    "projectKnowledge": {
+                        "retrievedEvidence": [
+                            {
+                                "sourceType": "CHAPTER",
+                                "chapterId": 12,
+                                "chapterNo": 12,
+                                "generationId": 77,
+                                "userId": 7,
+                            },
+                            {
+                                "sourceType": "FORESHADOWING",
+                                "sourceId": "moon",
+                                "chapterId": 12,
+                                "generationId": 77,
+                                "userId": 7,
+                            },
+                            {
+                                "sourceType": "STORY_EDGE",
+                                "sourceId": 101,
+                                "chapterId": 12,
+                                "generationId": 77,
+                                "userId": 7,
+                                "edge": {"edgeId": 101, "evidenceChapterId": 12},
+                            },
+                        ],
+                        "structuredValues": {"character:hero:status": "injured"},
+                    },
+                    "retrievalDiagnostics": {"staleRejected": True},
+                },
+            )
+        )
+        runner = GoldenEvalRunner(agent=agent, faithfulness_evaluator=RuleBasedFaithfulnessEvaluator())
+        case = GoldenEvalCase(
+            case_id="project-gate-001",
+            question="Where was the signal planted?",
+            request_payload={"userId": 7, "projectId": 900},
+            relevant_source_ids={"chapter:12"},
+            expected_chapter_ids={"chapter:12"},
+            expected_foreshadowing_ids={"foreshadowing:moon"},
+            expected_structured_values={"character:hero:status": "injured"},
+            expected_path_edges={"edge:101": {"chapter:12"}},
+            require_stale_rejection=True,
+            require_cross_user_isolation=True,
+            evaluation_cohort={"genre": "urban", "generation": "77"},
+            apply_project_release_gate=True,
+            retrieval_thresholds=RetrievalEvalThresholds(
+                min_recall_at_5=1.0,
+                min_chapter_location_accuracy=1.0,
+                min_foreshadowing_coverage=1.0,
+                min_multi_hop_path_evidence=1.0,
+                min_stale_rejection_rate=1.0,
+                min_cross_user_isolation_rate=1.0,
+            ),
+        )
+
+        report = await runner.run_suite([case], suite_name="project-retrieval-gate")
+
+        self.assertEqual("passed", report["results"][0].status)
+        self.assertEqual(1, report["passedCases"])
+        self.assertEqual(0, report["failedCases"])
+        self.assertEqual("passed", report["status"])
+        self.assertIsNotNone(report["projectRetrievalReleaseGate"])
+        self.assertTrue(report["projectRetrievalReleaseGate"]["passed"])
+        self.assertIn("genre:urban", report["metrics"]["projectRetrievalCohorts"])
+        self.assertEqual(1.0, report["metrics"]["projectRetrieval"]["chapter_location_accuracy"])
+        self.assertEqual(0.0, report["metrics"]["projectRetrieval"]["old_generation_misretrieval_rate"])
+
     async def test_reports_retrieval_and_faithfulness_failures_separately(self) -> None:
+
         agent = FakeAgent(
             KnowledgeChatResponse(
                 status="answered",
@@ -177,6 +454,10 @@ class GoldenEvalRunnerTest(unittest.IsolatedAsyncioTestCase):
                         "selectedSnapshotGroup": {"snapshotId": 9001},
                     },
                     "toolRuns": [{"name": "rank.lookup", "status": "succeeded"}],
+                    "toolLedger": {
+                        "status": "available",
+                        "calls": [{"name": "rank.lookup", "status": "succeeded", "executed": True}],
+                    },
                     "taskGraph": {"route": "mixed_creation_research"},
                     "contextUsed": {
                         "memoryContext": {
@@ -269,6 +550,30 @@ class GoldenEvalRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("trace:missing_citation", result.failures)
         self.assertIn("trace:memory_cross_project", result.failures)
 
+    async def test_required_tool_gate_rejects_failed_or_unexecuted_ledger_calls(self) -> None:
+        for call in (
+            {"name": "rank.lookup", "status": "failed", "executed": True},
+            {"name": "rank.lookup", "status": "succeeded", "executed": False, "reused": False},
+        ):
+            agent = FakeAgent(KnowledgeChatResponse(
+                status="answered",
+                answer="answer",
+                resultJson={
+                    "toolRuns": [{"name": "rank.lookup", "status": "succeeded"}],
+                    "toolLedger": {"status": "available", "calls": [call]},
+                },
+            ))
+            runner = GoldenEvalRunner(agent=agent, faithfulness_evaluator=RuleBasedFaithfulnessEvaluator())
+            case = GoldenEvalCase(
+                case_id="tool-ledger-required",
+                question="question",
+                expected_trace=GoldenEvalExpectedTrace(required_tool_names={"rank.lookup"}),
+            )
+
+            result = await runner.run_case(case)
+
+            self.assertIn("trace:missing_tool:rank.lookup", result.failures)
+
     async def test_fails_when_grounded_claim_is_not_supported_by_sources(self) -> None:
         agent = FakeAgent(
             KnowledgeChatResponse(
@@ -311,6 +616,10 @@ class GoldenEvalRunnerTest(unittest.IsolatedAsyncioTestCase):
                     "domainIntent": "mixed_creation_research",
                     "answerMode": "mixed_creation",
                     "toolRuns": [{"name": "rank.lookup", "status": "succeeded"}],
+                    "toolLedger": {
+                        "status": "available",
+                        "calls": [{"name": "rank.lookup", "status": "succeeded", "executed": True}],
+                    },
                 },
             )
         )
@@ -371,6 +680,63 @@ class GoldenEvalRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("trace:missing_answer_term:诸天万界", result.failures)
         self.assertIn("trace:missing_answer_term:三端一体", result.failures)
         self.assertIn("trace:forbidden_answer_pattern:围绕用户问题拆出", result.failures)
+
+    async def test_selected_capability_gate_requires_successful_execution(self) -> None:
+        agent = FakeAgent(KnowledgeChatResponse(
+            status="answered",
+            answer="answer",
+            resultJson={
+                "selectedCapabilities": [{"name": "market_scan"}],
+                "specialistDiagnostics": [],
+            },
+        ))
+        result = await GoldenEvalRunner(
+            agent=agent,
+            faithfulness_evaluator=RuleBasedFaithfulnessEvaluator(),
+        ).run_case(GoldenEvalCase(
+            case_id="capability-execution-001",
+            question="market",
+            expected_trace=GoldenEvalExpectedTrace(require_selected_capabilities=True),
+        ))
+
+        self.assertEqual("failed", result.status)
+        self.assertIn("trace:selected_capabilities_empty", result.failures)
+
+        failed_agent = FakeAgent(KnowledgeChatResponse(
+            status="answered",
+            answer="answer",
+            resultJson={
+                "selectedCapabilities": [{"name": "market_scan"}],
+                "specialistDiagnostics": [{"agentName": "market_scan", "status": "failed"}],
+            },
+        ))
+        failed_result = await GoldenEvalRunner(
+            agent=failed_agent,
+            faithfulness_evaluator=RuleBasedFaithfulnessEvaluator(),
+        ).run_case(GoldenEvalCase(
+            case_id="capability-execution-002",
+            question="market",
+            expected_trace=GoldenEvalExpectedTrace(require_selected_capabilities=True),
+        ))
+        self.assertIn("trace:selected_capabilities_empty", failed_result.failures)
+
+        missing_status_agent = FakeAgent(KnowledgeChatResponse(
+            status="answered",
+            answer="answer",
+            resultJson={
+                "selectedCapabilities": [{"name": "market_scan"}],
+                "specialistDiagnostics": [{"agentName": "market_scan"}],
+            },
+        ))
+        missing_status_result = await GoldenEvalRunner(
+            agent=missing_status_agent,
+            faithfulness_evaluator=RuleBasedFaithfulnessEvaluator(),
+        ).run_case(GoldenEvalCase(
+            case_id="capability-execution-003",
+            question="market",
+            expected_trace=GoldenEvalExpectedTrace(require_selected_capabilities=True),
+        ))
+        self.assertIn("trace:selected_capabilities_empty", missing_status_result.failures)
 
     async def test_trace_metrics_tolerate_null_context_used(self) -> None:
         agent = FakeAgent(
@@ -446,6 +812,66 @@ class FakeAgent:
     async def run(self, request):
         self.requests.append(request)
         return self.response
+
+
+class DelegationEvalAgent:
+    def __init__(self, *, profile: dict, profile_hash: str, specialist_status: str) -> None:
+        self.profile = profile
+        self.profile_hash = profile_hash
+        self.specialist_status = specialist_status
+        self.requests = []
+        self.eval_modes = []
+
+    async def eval_delegation_candidates(self, suite_name: str):
+        return [{"name": self.profile["name"], "evalConfigFingerprint": self.profile_hash}]
+
+    async def run(self, request):
+        self.requests.append(request)
+        eval_mode, _ = current_eval_delegation()
+        self.eval_modes.append(eval_mode)
+        candidate = eval_mode == "candidate"
+        selected = [
+            {
+                **self.profile,
+                "evalConfigFingerprint": self.profile_hash,
+                "runtimeBindingFingerprint": "b" * 64,
+                "qualityGainVerified": False,
+                "qualityGainSource": "unverified",
+            }
+        ] if candidate else []
+        return KnowledgeChatResponse(
+            status="answered",
+            answer="market answer",
+            resultJson={
+                "domainIntent": "market_scan",
+                "answerMode": "trend",
+                "answerBoundary": "market_evidence",
+                "sourcePolicy": {"evidenceContract": {"status": "verified_latest"}},
+                "taskGraph": {"tasks": [{"type": "market_scan"}]},
+                "toolLedger": {
+                    "status": "available",
+                    "calls": [
+                        {
+                            "name": "rank.lookup",
+                            "status": "succeeded",
+                            "executed": True,
+                            "reused": False,
+                        }
+                    ] if candidate else [],
+                },
+                "expertRouter": {
+                    "selectedExperts": selected,
+                    "delegatedCount": len(selected),
+                    "maxParallel": 1,
+                    "reasoningMode": "fast",
+                    "evaluationMode": eval_mode,
+                },
+                "specialistDiagnostics": [
+                    {"agentName": self.profile["name"], "status": self.specialist_status}
+                ] if candidate else [],
+                "trace": {"nodes": [{"name": "compose_answer"}]},
+            },
+        )
 
 
 class FakeEvalRepository:

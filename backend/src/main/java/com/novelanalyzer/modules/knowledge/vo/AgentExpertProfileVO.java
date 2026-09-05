@@ -12,13 +12,25 @@ public class AgentExpertProfileVO {
     private String costClass;
     private Integer maxTokens;
     private Integer maxToolCalls;
-    private List<String> allowedTools = new ArrayList<>();
+    private List<String> capabilityIds = new ArrayList<>();
+    private List<String> defaultSkillIds = new ArrayList<>();
+    private List<String> requestedToolCapabilities = new ArrayList<>();
+    private String outputContract;
+    private String executionKind;
     private List<String> triggerIntents = new ArrayList<>();
     private List<String> triggerTasks = new ArrayList<>();
     private Integer priority;
     private String promptVersion;
     private String evalSuiteId;
     private Boolean guardrail;
+    private String category;
+    private Double expectedQualityGain;
+    private Boolean qualityGainVerified;
+    private String qualityGainSource;
+    private Long qualityGainEvalRunId;
+    private Double latencyCost;
+    private Double tokenCost;
+    private Double resourceCost;
 
     public String getExpertName() {
         return expertName;
@@ -76,12 +88,44 @@ public class AgentExpertProfileVO {
         this.maxToolCalls = maxToolCalls;
     }
 
-    public List<String> getAllowedTools() {
-        return allowedTools;
+    public List<String> getCapabilityIds() {
+        return capabilityIds;
     }
 
-    public void setAllowedTools(List<String> allowedTools) {
-        this.allowedTools = allowedTools == null ? new ArrayList<>() : new ArrayList<>(allowedTools);
+    public void setCapabilityIds(List<String> capabilityIds) {
+        this.capabilityIds = capabilityIds == null ? new ArrayList<>() : new ArrayList<>(capabilityIds);
+    }
+
+    public List<String> getDefaultSkillIds() {
+        return defaultSkillIds;
+    }
+
+    public void setDefaultSkillIds(List<String> defaultSkillIds) {
+        this.defaultSkillIds = defaultSkillIds == null ? new ArrayList<>() : new ArrayList<>(defaultSkillIds);
+    }
+
+    public List<String> getRequestedToolCapabilities() {
+        return requestedToolCapabilities;
+    }
+
+    public void setRequestedToolCapabilities(List<String> requestedToolCapabilities) {
+        this.requestedToolCapabilities = requestedToolCapabilities == null ? new ArrayList<>() : new ArrayList<>(requestedToolCapabilities);
+    }
+
+    public String getOutputContract() {
+        return outputContract;
+    }
+
+    public void setOutputContract(String outputContract) {
+        this.outputContract = outputContract;
+    }
+
+    public String getExecutionKind() {
+        return executionKind;
+    }
+
+    public void setExecutionKind(String executionKind) {
+        this.executionKind = executionKind;
     }
 
     public List<String> getTriggerIntents() {
@@ -130,5 +174,69 @@ public class AgentExpertProfileVO {
 
     public void setGuardrail(Boolean guardrail) {
         this.guardrail = guardrail;
+    }
+
+    public String getCategory() {
+        return category;
+    }
+
+    public void setCategory(String category) {
+        this.category = category;
+    }
+
+    public Double getExpectedQualityGain() {
+        return expectedQualityGain;
+    }
+
+    public void setExpectedQualityGain(Double expectedQualityGain) {
+        this.expectedQualityGain = expectedQualityGain;
+    }
+
+    public Boolean getQualityGainVerified() {
+        return qualityGainVerified;
+    }
+
+    public void setQualityGainVerified(Boolean qualityGainVerified) {
+        this.qualityGainVerified = qualityGainVerified;
+    }
+
+    public String getQualityGainSource() {
+        return qualityGainSource;
+    }
+
+    public void setQualityGainSource(String qualityGainSource) {
+        this.qualityGainSource = qualityGainSource;
+    }
+
+    public Long getQualityGainEvalRunId() {
+        return qualityGainEvalRunId;
+    }
+
+    public void setQualityGainEvalRunId(Long qualityGainEvalRunId) {
+        this.qualityGainEvalRunId = qualityGainEvalRunId;
+    }
+
+    public Double getLatencyCost() {
+        return latencyCost;
+    }
+
+    public void setLatencyCost(Double latencyCost) {
+        this.latencyCost = latencyCost;
+    }
+
+    public Double getTokenCost() {
+        return tokenCost;
+    }
+
+    public void setTokenCost(Double tokenCost) {
+        this.tokenCost = tokenCost;
+    }
+
+    public Double getResourceCost() {
+        return resourceCost;
+    }
+
+    public void setResourceCost(Double resourceCost) {
+        this.resourceCost = resourceCost;
     }
 }

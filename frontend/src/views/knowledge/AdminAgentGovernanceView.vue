@@ -11,6 +11,12 @@ import type {
   AgentRuntimeConfig,
   AgentTraceSummary,
 } from '@/types/knowledge';
+import {
+  capabilityLabel,
+  expertLabel,
+  knowledgeDomainLabel,
+  knowledgeStatusLabel,
+} from '@/utils/knowledgeDisplay';
 
 defineOptions({
   name: 'AdminAgentGovernanceView',
@@ -20,14 +26,16 @@ type RuntimeValue = string | number | boolean;
 type RuntimeRow = {
   key: keyof AgentRuntimeConfig;
   label: string;
-  type: 'text' | 'number' | 'boolean';
+  type: 'text' | 'number' | 'boolean' | 'reasoning';
   effect?: string;
 };
 
 const runtimeRows: RuntimeRow[] = [
-  { key: 'reasoningModeDefault', label: '默认推理模式', type: 'text' },
+  { key: 'reasoningModeDefault', label: '默认推理模式', type: 'reasoning' },
   { key: 'maxParallelSpecialists', label: '最大并行专家数', type: 'number' },
   { key: 'maxTotalInputTokens', label: '最大输入 Token', type: 'number' },
+  { key: 'contextCompactionThresholdPercent', label: '上下文压缩触发比例(%)', type: 'number' },
+  { key: 'runTokenBudgetPercent', label: '单轮 Token 预算比例(%)', type: 'number' },
   { key: 'maxFinalOutputTokensFast', label: '快速回答 Token 上限', type: 'number' },
   { key: 'maxFinalOutputTokensDeep', label: '深度回答 Token 上限', type: 'number' },
   { key: 'enableIntentCache', label: '意图缓存', type: 'boolean' },
@@ -35,7 +43,8 @@ const runtimeRows: RuntimeRow[] = [
   { key: 'enableToolCache', label: '工具缓存', type: 'boolean' },
   { key: 'enableEvidenceCache', label: '证据缓存', type: 'boolean' },
   { key: 'enableSpecialistCache', label: '专家缓存', type: 'boolean' },
-  { key: 'maxPromptCharsPerExpert', label: '单专家提示字符', type: 'number' },
+  { key: 'specialistMcpEnabled', label: '专家工具调用', type: 'boolean' },
+  { key: 'maxPromptCharsPerExpert', label: '单专家提示字符上限', type: 'number' },
   { key: 'maxSkillPromptChars', label: '技能提示字符', type: 'number' },
   { key: 'maxEvidenceItems', label: '最大证据条数', type: 'number' },
 ];
@@ -106,7 +115,13 @@ async function loadGovernance() {
     experts.value = (expertResponse.data.data ?? []).map(normalizeExpert);
     stats.value = statsResponse.data.data ?? stats.value;
     evalRuns.value = evalRunResponse.data.data ?? [];
-    latestTrace.value = traceResponse.data.data?.items?.[0] ?? null;
+    const latestSummary = traceResponse.data.data?.items?.[0] ?? null;
+    if (latestSummary) {
+      const detailResponse = await knowledgeApi.getAgentTrace(latestSummary.id);
+      latestTrace.value = detailResponse.data.data ?? latestSummary;
+    } else {
+      latestTrace.value = null;
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载失败';
   } finally {
@@ -135,10 +150,27 @@ function normalizeExpert(expert: AgentExpertProfile): AgentExpertProfile {
     priority: expert.priority ?? 100,
     maxTokens: expert.maxTokens ?? 900,
     maxToolCalls: expert.maxToolCalls ?? 3,
-    allowedTools: expert.allowedTools ?? [],
+    capabilityIds: expert.capabilityIds ?? [],
+    defaultSkillIds: expert.defaultSkillIds ?? [],
+    requestedToolCapabilities: expert.requestedToolCapabilities ?? [],
+    outputContract: expert.outputContract ?? null,
+    executionKind: expert.executionKind
+      ?? (expert.category === 'Delegated'
+        ? 'DELEGATED'
+        : expert.category === 'Deterministic'
+          ? 'DETERMINISTIC'
+          : 'INLINE'),
     triggerIntents: expert.triggerIntents ?? [],
     triggerTasks: expert.triggerTasks ?? [],
     promptVersion: expert.promptVersion ?? 'default',
+    category: expert.category ?? 'Skill',
+    expectedQualityGain: expert.expectedQualityGain ?? 0,
+    qualityGainVerified: expert.qualityGainVerified ?? false,
+    qualityGainSource: expert.qualityGainSource ?? 'unverified',
+    qualityGainEvalRunId: expert.qualityGainEvalRunId,
+    latencyCost: expert.latencyCost ?? 0,
+    tokenCost: expert.tokenCost ?? 0,
+    resourceCost: expert.resourceCost ?? 0,
   };
 }
 
@@ -150,16 +182,19 @@ function runtimeEffect(row: RuntimeRow) {
   const effects: Record<string, string> = {
     reasoningModeDefault: '请求未指定推理模式时由 worker 使用；实际模型和模式可在 Agent Trace 核对。',
     maxParallelSpecialists: 'worker 按该值限制并行专家数量，避免专家调用失控。',
-    maxTotalInputTokens: 'worker 用该 Token 预算计算上下文容量、剩余比例和压缩阈值。',
-    maxFinalOutputTokensFast: 'worker 在快速模式下按该值限制最终回答长度；填 0 表示不设置 worker 侧 max_tokens，由模型/API 上限控制。',
-    maxFinalOutputTokensDeep: 'worker 在深度模式下按该值限制最终回答长度；填 0 表示不设置 worker 侧 max_tokens，由模型/API 上限控制。',
+    maxTotalInputTokens: '模型上下文治理上限，对所有模型统一生效（不再被 per-model 能力表压回去）。worker 由此推导压缩阈值和单轮 Token 预算。',
+    contextCompactionThresholdPercent: '输入达到「最大输入 Token × 该比例」时自动压缩历史与工具结果；压缩目标比例按原档差同步下移。取值 50–95。',
+    runTokenBudgetPercent: '单轮问答全部模型调用的 Token 总预算 = 最大输入 Token × 该比例。设得过低会让证据较多的问答第一刀就吃光预算并降级。取值 50–400。',
+    maxFinalOutputTokensFast: '0 表示按模型窗口和任务类型自动计算；正数只作为快速模式最终回答 Token 上限。',
+    maxFinalOutputTokensDeep: '0 表示按模型窗口和任务类型自动计算；正数只作为深度模式最终回答 Token 上限。',
     enableIntentCache: '开启后 worker 可复用稳定意图判断，提高重复问题缓存命中。',
     enableTaskGraphCache: '开启后 worker 可复用稳定任务图规划，减少重复规划开销。',
     enableToolCache: '开启后 worker 可复用可缓存工具结果，降低重复工具调用。',
     enableEvidenceCache: '开启后 worker 可复用证据裁决结果，提升同类问题响应速度。',
     enableSpecialistCache: '开启后 worker 可复用专家输出，减少重复专家模型调用。',
-    maxPromptCharsPerExpert: 'worker 会按该字符预算截断每个专家的提示上下文。',
-    maxSkillPromptChars: 'worker 会按该字符预算截断已发布技能 Markdown 后再放入提示词。',
+    specialistMcpEnabled: '开启后，仅具备用户与项目作用域、工具权限和调用预算的 Delegated 专家可调用 MCP 工具。',
+    maxPromptCharsPerExpert: '0 表示按模型窗口和实际专家数自动分配；正数只作为每个专家完整提示上下文的治理上限。',
+    maxSkillPromptChars: '0 表示不设置独立 Skill 字符上限；正数仅作为管理员治理上限，完整提示仍受模型总上下文预算控制。',
     maxEvidenceItems: 'worker 会按该值限制进入回答和专家上下文的证据条数。',
   };
   return row.effect || effects[String(row.key)] || 'worker 会把该配置应用到后续 AI 问答请求。';
@@ -192,11 +227,25 @@ async function saveExpert(expert: AgentExpertProfile) {
       priority: Number(expert.priority ?? 100),
       maxTokens: Number(expert.maxTokens ?? 900),
       maxToolCalls: Number(expert.maxToolCalls ?? 3),
-      allowedTools: expert.allowedTools ?? [],
+      capabilityIds: expert.capabilityIds ?? [],
+      defaultSkillIds: expert.defaultSkillIds ?? [],
+      requestedToolCapabilities: expert.requestedToolCapabilities ?? [],
+      outputContract: expert.outputContract ?? undefined,
+      executionKind: expert.executionKind
+        ?? (expert.category === 'Delegated'
+          ? 'DELEGATED'
+          : expert.category === 'Deterministic'
+            ? 'DETERMINISTIC'
+            : 'INLINE'),
       triggerIntents: expert.triggerIntents ?? [],
       triggerTasks: expert.triggerTasks ?? [],
       promptVersion: expert.promptVersion ?? 'default',
       evalSuiteId: expert.evalSuiteId,
+      category: expert.category ?? 'Skill',
+      expectedQualityGain: 0,
+      latencyCost: Number(expert.latencyCost ?? 0),
+      tokenCost: Number(expert.tokenCost ?? 0),
+      resourceCost: Number(expert.resourceCost ?? 0),
     });
     experts.value = experts.value.map((item) =>
       item.expertName === expert.expertName ? normalizeExpert(response.data.data) : item,
@@ -294,6 +343,15 @@ function retryLabel(run: AgentEvalRun) {
   return `重试 ${retryCount}`;
 }
 
+function evalProgressMessage(run: AgentEvalRun) {
+  const message = String(run.progressMessage ?? '').trim();
+  const completed = /^case\s+(\d+)\/(\d+)\s+completed$/i.exec(message);
+  if (completed) {
+    return `已完成用例 ${completed[1]} / ${completed[2]}`;
+  }
+  return message;
+}
+
 function isEvalRunCancellable(run: AgentEvalRun) {
   return ['QUEUED', 'RUNNING', 'CANCELLING'].includes(String(run.status ?? '').toUpperCase());
 }
@@ -352,8 +410,17 @@ function isEvalRunRetryable(run: AgentEvalRun) {
         </el-table-column>
         <el-table-column label="当前值" min-width="220">
           <template #default="{ row }">
+            <select
+              v-if="row.type === 'reasoning'"
+              v-model="runtimeForm[row.key]"
+              class="governance-input"
+              :aria-label="row.label"
+            >
+              <option value="fast">快速模式</option>
+              <option value="deep">深度模式</option>
+            </select>
             <input
-              v-if="row.type === 'number'"
+              v-else-if="row.type === 'number'"
               v-model.number="runtimeForm[row.key]"
               class="governance-input"
               type="number"
@@ -487,14 +554,16 @@ function isEvalRunRetryable(run: AgentEvalRun) {
       <el-table :data="evalRuns" size="small" class="governance-table">
         <el-table-column prop="runKey" label="运行批次" min-width="190" show-overflow-tooltip />
         <el-table-column prop="suiteName" label="套件" min-width="140" show-overflow-tooltip />
-        <el-table-column prop="status" label="状态" width="110" />
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">{{ knowledgeStatusLabel(row.status) }}</template>
+        </el-table-column>
         <el-table-column prop="totalCases" label="用例" width="90" />
         <el-table-column prop="passedCases" label="通过" width="90" />
         <el-table-column prop="failedCases" label="失败" width="90" />
         <el-table-column label="进度" min-width="150">
           <template #default="{ row }">
             <span>{{ evalProgressLabel(row) }}</span>
-            <small v-if="row.progressMessage" class="eval-progress-message">{{ row.progressMessage }}</small>
+            <small v-if="evalProgressMessage(row)" class="eval-progress-message">{{ evalProgressMessage(row) }}</small>
           </template>
         </el-table-column>
         <el-table-column label="重试" width="95">
@@ -543,9 +612,15 @@ function isEvalRunRetryable(run: AgentEvalRun) {
         data-test="eval-case-results"
       >
         <el-table-column prop="caseKey" label="用例" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="status" label="状态" width="110" />
-        <el-table-column prop="intent" label="意图" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="answerMode" label="回答模式" min-width="140" show-overflow-tooltip />
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">{{ knowledgeStatusLabel(row.status) }}</template>
+        </el-table-column>
+        <el-table-column label="意图" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">{{ knowledgeDomainLabel(row.intent) }}</template>
+        </el-table-column>
+        <el-table-column label="回答模式" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ knowledgeDomainLabel(row.answerMode) }}</template>
+        </el-table-column>
         <el-table-column prop="traceId" label="Trace" min-width="150" show-overflow-tooltip />
         <el-table-column prop="durationMs" label="ms" width="80" />
         <el-table-column prop="failures" label="失败原因" min-width="240" show-overflow-tooltip />
@@ -564,12 +639,37 @@ function isEvalRunRetryable(run: AgentEvalRun) {
               class="governance-checkbox"
               type="checkbox"
               :data-test="`expert-enabled-${row.expertName}`"
-              :aria-label="`${row.expertName} enabled`"
+              :aria-label="`${expertLabel(row.expertName, row.displayName)}启用`"
             />
           </template>
         </el-table-column>
         <el-table-column prop="expertName" label="专家" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="displayName" label="显示名" min-width="170" show-overflow-tooltip />
+        <el-table-column label="显示名" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">{{ expertLabel(row.expertName, row.displayName) }}</template>
+        </el-table-column>
+        <el-table-column label="能力类型" width="150">
+          <template #default="{ row }">
+            <select
+              v-model="row.category"
+              class="governance-input"
+              :data-test="`expert-category-${row.expertName}`"
+              @change="row.executionKind = row.category === 'Delegated' ? 'DELEGATED' : row.category === 'Deterministic' ? 'DETERMINISTIC' : 'INLINE'"
+            >
+              <option value="Skill">{{ capabilityLabel('Skill') }}</option>
+              <option value="Deterministic">{{ capabilityLabel('Deterministic') }}</option>
+              <option value="Delegated">{{ capabilityLabel('Delegated') }}</option>
+            </select>
+          </template>
+        </el-table-column>
+        <el-table-column label="执行形态" width="150">
+          <template #default="{ row }">
+            <select v-model="row.executionKind" class="governance-input" :data-test="`expert-execution-kind-${row.expertName}`">
+              <option value="INLINE">INLINE</option>
+              <option value="DETERMINISTIC">DETERMINISTIC</option>
+              <option value="DELEGATED">DELEGATED</option>
+            </select>
+          </template>
+        </el-table-column>
         <el-table-column label="优先级" width="110">
           <template #default="{ row }">
             <input v-model.number="row.priority" class="governance-input governance-input--short" type="number" />
@@ -585,17 +685,47 @@ function isEvalRunRetryable(run: AgentEvalRun) {
             <input v-model.number="row.maxToolCalls" class="governance-input governance-input--short" type="number" />
           </template>
         </el-table-column>
+        <el-table-column label="预期收益" width="110">
+          <template #default="{ row }">
+            <input :value="row.expectedQualityGain ?? 0" class="governance-input governance-input--short" type="number" disabled />
+          </template>
+        </el-table-column>
+        <el-table-column label="收益依据" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.qualityGainVerified ? `Eval #${row.qualityGainEvalRunId}` : '未通过评测' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="延迟成本" width="110">
+          <template #default="{ row }">
+            <input v-model.number="row.latencyCost" class="governance-input governance-input--short" type="number" min="0" step="0.05" />
+          </template>
+        </el-table-column>
+        <el-table-column label="Token 成本" width="110">
+          <template #default="{ row }">
+            <input v-model.number="row.tokenCost" class="governance-input governance-input--short" type="number" min="0" step="0.05" />
+          </template>
+        </el-table-column>
+        <el-table-column label="资源成本" width="110">
+          <template #default="{ row }">
+            <input v-model.number="row.resourceCost" class="governance-input governance-input--short" type="number" min="0" step="0.05" />
+          </template>
+        </el-table-column>
         <el-table-column label="触发条件" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <span>{{ [...(row.triggerIntents ?? []), ...(row.triggerTasks ?? [])].join(', ') || '-' }}</span>
+            <span>
+              {{ [...(row.triggerIntents ?? []), ...(row.triggerTasks ?? [])]
+                .map((value: string) => knowledgeDomainLabel(value)).join('、') || '-' }}
+            </span>
           </template>
         </el-table-column>
-        <el-table-column label="允许工具" min-width="180" show-overflow-tooltip>
+        <el-table-column label="请求能力" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <span>{{ (row.allowedTools ?? []).join(', ') || '-' }}</span>
+            <span>{{ (row.requestedToolCapabilities ?? []).join(', ') || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="promptVersion" label="Prompt 版本" width="120" show-overflow-tooltip />
+        <el-table-column label="提示词版本" width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.promptVersion === 'default' ? '默认' : row.promptVersion }}</template>
+        </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
             <el-button

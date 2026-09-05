@@ -13,7 +13,11 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Service;
 
 import java.sql.PreparedStatement;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class KnowledgeProjectService {
@@ -86,6 +90,75 @@ public class KnowledgeProjectService {
             return;
         }
         findActiveOwned(projectId, userId);
+    }
+
+    public void ensureWorkOwned(Long projectId, Long workId, Long userId) {
+        if (projectId == null || workId == null || userId == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "work not found");
+        }
+        findActiveOwned(projectId, userId);
+        Integer count = jdbcTemplate.queryForObject(
+            "select count(1) from ai_project_work where project_id = ? and work_id = ? and user_id = ? and status <> 'ARCHIVED'",
+            Integer.class,
+            projectId,
+            workId,
+            userId
+        );
+        if (count == null || count == 0) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "work not found");
+        }
+    }
+
+    public List<ReferenceWorkScope> resolveReferenceWorks(Long userId,
+                                                          List<Long> referenceWorkIds,
+                                                          Long activeProjectId,
+                                                          Long activeWorkId) {
+        if (referenceWorkIds == null || referenceWorkIds.isEmpty()) {
+            return List.of();
+        }
+        if (userId == null || activeProjectId == null || activeWorkId == null) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "active project and work are required for references");
+        }
+        ensureWorkOwned(activeProjectId, activeWorkId, userId);
+        LinkedHashSet<Long> orderedIds = new LinkedHashSet<>();
+        for (Long workId : referenceWorkIds) {
+            if (workId == null || workId <= 0) {
+                throw new BusinessException(ResultCode.BAD_REQUEST, "reference work id is invalid");
+            }
+            if (!workId.equals(activeWorkId)) {
+                orderedIds.add(workId);
+            }
+        }
+        if (orderedIds.isEmpty()) {
+            return List.of();
+        }
+        if (orderedIds.size() > 8) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "too many reference works");
+        }
+        String placeholders = String.join(",", java.util.Collections.nCopies(orderedIds.size(), "?"));
+        List<Object> params = new ArrayList<>();
+        params.add(userId);
+        params.addAll(orderedIds);
+        List<ReferenceWorkScope> rows = jdbcTemplate.query(
+            "select w.project_id, w.work_id, w.title from ai_project_work w " +
+                "join ai_project p on p.project_id = w.project_id and p.user_id = w.user_id " +
+                "where w.user_id = ? and w.status <> 'ARCHIVED' and p.status <> 'ARCHIVED' " +
+                "and w.work_id in (" + placeholders + ")",
+            (rs, rowNum) -> new ReferenceWorkScope(
+                rs.getLong("project_id"),
+                rs.getLong("work_id"),
+                rs.getString("title")
+            ),
+            params.toArray()
+        );
+        Map<Long, ReferenceWorkScope> byWorkId = new LinkedHashMap<>();
+        for (ReferenceWorkScope row : rows) {
+            byWorkId.put(row.workId(), row);
+        }
+        if (byWorkId.size() != orderedIds.size()) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "reference work not found");
+        }
+        return orderedIds.stream().map(byWorkId::get).toList();
     }
 
     public void bindConversation(Long projectId, Long userId, String conversationId) {
@@ -190,5 +263,8 @@ public class KnowledgeProjectService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    public record ReferenceWorkScope(Long projectId, Long workId, String title) {
     }
 }

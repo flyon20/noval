@@ -47,7 +47,7 @@ class _PersistentStateSaver(InMemorySaver):
     def put(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
         with self._lock:
             updated = super().put(config, checkpoint, metadata, new_versions)
-            self._persist_state()
+            self._persist_config_state(updated)
             return updated
 
     def put_writes(
@@ -59,13 +59,22 @@ class _PersistentStateSaver(InMemorySaver):
     ) -> None:
         with self._lock:
             super().put_writes(config, writes, task_id, task_path)
-            self._persist_state()
+            self._persist_config_state(config)
 
     def delete_thread(self, thread_id: str) -> None:
         with self._lock:
             super().delete_thread(thread_id)
             self._delete_thread_state(thread_id)
-            self._persist_state()
+
+    def _persist_config_state(self, config: Any) -> None:
+        configurable = config.get("configurable") if isinstance(config, dict) else None
+        if not isinstance(configurable, dict):
+            raise ValueError("checkpoint config is missing configurable values")
+        thread_id = str(configurable.get("thread_id") or "").strip()
+        if not thread_id:
+            raise ValueError("checkpoint config is missing thread_id")
+        checkpoint_ns = str(configurable.get("checkpoint_ns") or "")
+        self._persist_thread_state(thread_id, checkpoint_ns)
 
     def _state_payload(self) -> bytes:
         return pickle.dumps(
@@ -136,7 +145,7 @@ class _PersistentStateSaver(InMemorySaver):
     def _load_state(self) -> None:
         raise NotImplementedError
 
-    def _persist_state(self) -> None:
+    def _persist_thread_state(self, thread_id: str, checkpoint_ns: str) -> None:
         raise NotImplementedError
 
     def _delete_thread_state(self, thread_id: str) -> None:
@@ -193,28 +202,26 @@ class DurableMySqlSaver(_PersistentStateSaver):
         for thread_id, checkpoint_ns, payload in rows:
             self._restore_row_state(str(thread_id), str(checkpoint_ns or ""), payload)
 
-    def _persist_state(self) -> None:
+    def _persist_thread_state(self, thread_id: str, checkpoint_ns: str) -> None:
         with closing(self._connect()) as connection:
             with closing(connection.cursor()) as cursor:
-                for thread_id, namespaces in dict(self.storage).items():
-                    for checkpoint_ns in dict(namespaces).keys():
-                        cursor.execute(
-                            """
-                            INSERT INTO langgraph_checkpoint_thread_state(
-                                namespace, thread_id, checkpoint_ns, payload, updated_at
-                            )
-                            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                            ON DUPLICATE KEY UPDATE
-                                payload = VALUES(payload),
-                                updated_at = CURRENT_TIMESTAMP
-                            """,
-                            (
-                                self.namespace,
-                                str(thread_id),
-                                str(checkpoint_ns or ""),
-                                self._row_payload(str(thread_id), str(checkpoint_ns or "")),
-                            ),
-                        )
+                cursor.execute(
+                    """
+                    INSERT INTO langgraph_checkpoint_thread_state(
+                        namespace, thread_id, checkpoint_ns, payload, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON DUPLICATE KEY UPDATE
+                        payload = VALUES(payload),
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        self.namespace,
+                        thread_id,
+                        checkpoint_ns,
+                        self._row_payload(thread_id, checkpoint_ns),
+                    ),
+                )
             connection.commit()
 
     def _delete_thread_state(self, thread_id: str) -> None:

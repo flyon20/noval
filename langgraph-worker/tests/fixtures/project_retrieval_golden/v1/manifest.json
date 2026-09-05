@@ -1,0 +1,144 @@
+{
+  "corpusVersion": "v1",
+  "description": "Executable synthetic project retrieval corpus and release gate.",
+  "books": [
+    {
+      "bookId": "book-urban-1",
+      "genre": "urban",
+      "title": "Synthetic Urban Tale 1",
+      "projectId": 900,
+      "workId": 1000,
+      "activeGenerationId": 77,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-urban-2",
+      "genre": "urban",
+      "title": "Synthetic Urban Tale 2",
+      "projectId": 900,
+      "workId": 1001,
+      "activeGenerationId": 78,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-xianxia-1",
+      "genre": "xianxia",
+      "title": "Synthetic Xianxia Tale 1",
+      "projectId": 901,
+      "workId": 1000,
+      "activeGenerationId": 79,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-xianxia-2",
+      "genre": "xianxia",
+      "title": "Synthetic Xianxia Tale 2",
+      "projectId": 901,
+      "workId": 1001,
+      "activeGenerationId": 80,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-system-1",
+      "genre": "system",
+      "title": "Synthetic System Tale 1",
+      "projectId": 902,
+      "workId": 1000,
+      "activeGenerationId": 81,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-system-2",
+      "genre": "system",
+      "title": "Synthetic System Tale 2",
+      "projectId": 902,
+      "workId": 1001,
+      "activeGenerationId": 82,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-history-1",
+      "genre": "history",
+      "title": "Synthetic History Tale 1",
+      "projectId": 903,
+      "workId": 1000,
+      "activeGenerationId": 83,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-history-2",
+      "genre": "history",
+      "title": "Synthetic History Tale 2",
+      "projectId": 903,
+      "workId": 1001,
+      "activeGenerationId": 84,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-romance-1",
+      "genre": "romance",
+      "title": "Synthetic Romance Tale 1",
+      "projectId": 904,
+      "workId": 1000,
+      "activeGenerationId": 85,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    },
+    {
+      "bookId": "book-romance-2",
+      "genre": "romance",
+      "title": "Synthetic Romance Tale 2",
+      "projectId": 904,
+      "workId": 1001,
+      "activeGenerationId": 86,
+      "chapterCount": 150,
+      "publicSynthetic": true,
+      "notes": "Self-authored synthetic test text only; no private user content."
+    }
+  ],
+  "caseCount": 1200,
+  "targetCaseCount": 1200,
+  "documentCount": 3900,
+  "chapterCountMinimum": 150,
+  "chapterCountMaximum": 150,
+  "publicSyntheticOnly": true,
+  "genres": [
+    "urban",
+    "xianxia",
+    "system",
+    "history",
+    "romance"
+  ],
+  "intents": [
+    "chapter_recall",
+    "character_setting",
+    "foreshadowing",
+    "multi_hop"
+  ],
+  "lengthBuckets": [
+    "short",
+    "mid",
+    "long"
+  ],
+  "casesFile": "cases.json",
+  "corpusFile": "corpus.json",
+  "baselineFile": "baseline.json",
+  "releaseReportFile": "release-gate-report.json"
+}

@@ -3,7 +3,7 @@ skillId: rank-evidence-arbitration
 version: 1.0.0
 intents: [market_scan, mixed_creation_research]
 appliesTo: [mixed_structured_rank_snapshot, degraded_directional, conflict, rejected_snapshot_groups]
-allowedTools: [rank.lookup, rank.research_pack, knowledge.vector_search]
+requestedCapabilities: [market.read, book.read]
 requiredEvidence: [current_structured_rank_topn]
 triggers: [snapshot, arbitration, evidence-contract]
 ---

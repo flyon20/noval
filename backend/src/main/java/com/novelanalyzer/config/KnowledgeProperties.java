@@ -9,6 +9,10 @@ public class KnowledgeProperties {
     private Embedding embedding = new Embedding();
     private Index index = new Index();
     private Eval eval = new Eval();
+    private ChatRun chatRun = new ChatRun();
+    private ProjectIngest projectIngest = new ProjectIngest();
+    private DocumentBatch documentBatch = new DocumentBatch();
+    private ResourcePolicy resourcePolicy = new ResourcePolicy();
 
     public Qdrant getQdrant() {
         return qdrant;
@@ -40,6 +44,79 @@ public class KnowledgeProperties {
 
     public void setEval(Eval eval) {
         this.eval = eval == null ? new Eval() : eval;
+    }
+
+    public ChatRun getChatRun() {
+        return chatRun;
+    }
+
+    public void setChatRun(ChatRun chatRun) {
+        this.chatRun = chatRun == null ? new ChatRun() : chatRun;
+    }
+
+    public ProjectIngest getProjectIngest() {
+        return projectIngest;
+    }
+
+    public DocumentBatch getDocumentBatch() {
+        return documentBatch;
+    }
+
+    public void setDocumentBatch(DocumentBatch documentBatch) {
+        this.documentBatch = documentBatch == null ? new DocumentBatch() : documentBatch;
+    }
+
+    public void setProjectIngest(ProjectIngest projectIngest) {
+        this.projectIngest = projectIngest == null ? new ProjectIngest() : projectIngest;
+    }
+
+
+    public ResourcePolicy getResourcePolicy() {
+        return resourcePolicy;
+    }
+
+    public void setResourcePolicy(ResourcePolicy resourcePolicy) {
+        this.resourcePolicy = resourcePolicy == null ? new ResourcePolicy() : resourcePolicy;
+    }
+
+    public static class ResourcePolicy {
+        private int maxActiveDeepRuns = 1;
+        private int maxActiveFastRuns = 2;
+        private int maxActiveLlmCalls = 2;
+        private int maxDelegatedAgentConcurrency = 1;
+        private int maxIndexConcurrency = 1;
+        private int maxCrawlerConcurrency = 2;
+        private int memoryPausePercent = 85;
+        private int memoryRejectDeepPercent = 92;
+        private int diskWarnPercent = 80;
+        private int diskStopImportPercent = 90;
+        private int queueBacklogWarnCount = 20;
+        private int queueOldestWarnMinutes = 5;
+
+        public int getMaxActiveDeepRuns() { return maxActiveDeepRuns; }
+        public void setMaxActiveDeepRuns(int value) { this.maxActiveDeepRuns = value; }
+        public int getMaxActiveFastRuns() { return maxActiveFastRuns; }
+        public void setMaxActiveFastRuns(int value) { this.maxActiveFastRuns = value; }
+        public int getMaxActiveLlmCalls() { return maxActiveLlmCalls; }
+        public void setMaxActiveLlmCalls(int value) { this.maxActiveLlmCalls = value; }
+        public int getMaxDelegatedAgentConcurrency() { return maxDelegatedAgentConcurrency; }
+        public void setMaxDelegatedAgentConcurrency(int value) { this.maxDelegatedAgentConcurrency = value; }
+        public int getMaxIndexConcurrency() { return maxIndexConcurrency; }
+        public void setMaxIndexConcurrency(int value) { this.maxIndexConcurrency = value; }
+        public int getMaxCrawlerConcurrency() { return maxCrawlerConcurrency; }
+        public void setMaxCrawlerConcurrency(int value) { this.maxCrawlerConcurrency = value; }
+        public int getMemoryPausePercent() { return memoryPausePercent; }
+        public void setMemoryPausePercent(int value) { this.memoryPausePercent = value; }
+        public int getMemoryRejectDeepPercent() { return memoryRejectDeepPercent; }
+        public void setMemoryRejectDeepPercent(int value) { this.memoryRejectDeepPercent = value; }
+        public int getDiskWarnPercent() { return diskWarnPercent; }
+        public void setDiskWarnPercent(int value) { this.diskWarnPercent = value; }
+        public int getDiskStopImportPercent() { return diskStopImportPercent; }
+        public void setDiskStopImportPercent(int value) { this.diskStopImportPercent = value; }
+        public int getQueueBacklogWarnCount() { return queueBacklogWarnCount; }
+        public void setQueueBacklogWarnCount(int value) { this.queueBacklogWarnCount = value; }
+        public int getQueueOldestWarnMinutes() { return queueOldestWarnMinutes; }
+        public void setQueueOldestWarnMinutes(int value) { this.queueOldestWarnMinutes = value; }
     }
 
     public static class Qdrant {
@@ -138,7 +215,7 @@ public class KnowledgeProperties {
         private int chunkTargetChars = 1000;
         private int chunkOverlapChars = 160;
         private boolean queueEnabled = true;
-        private int workerConcurrency = 2;
+        private int workerConcurrency = 1;
         private int maxRetries = 3;
         private long visibilityTimeoutSeconds = 600;
         private String retryBackoffSeconds = "30,120,600";
@@ -487,4 +564,232 @@ public class KnowledgeProperties {
             }
         }
     }
+
+    public static class ChatRun {
+
+        private boolean queueEnabled = false;
+        private int workerConcurrency = 1;
+        private int leaseSeconds = 45;
+        private int heartbeatSeconds = 10;
+        private Rabbit rabbit = new Rabbit();
+
+        public boolean isQueueEnabled() {
+            return queueEnabled;
+        }
+
+        public void setQueueEnabled(boolean queueEnabled) {
+            this.queueEnabled = queueEnabled;
+        }
+
+        public int getWorkerConcurrency() {
+            return workerConcurrency;
+        }
+
+        public void setWorkerConcurrency(int workerConcurrency) {
+            this.workerConcurrency = workerConcurrency;
+        }
+
+        public int getLeaseSeconds() {
+            return leaseSeconds;
+        }
+
+        public void setLeaseSeconds(int leaseSeconds) {
+            this.leaseSeconds = leaseSeconds;
+        }
+
+        public int getHeartbeatSeconds() {
+            return heartbeatSeconds;
+        }
+
+        public void setHeartbeatSeconds(int heartbeatSeconds) {
+            this.heartbeatSeconds = heartbeatSeconds;
+        }
+
+        public Rabbit getRabbit() {
+            return rabbit;
+        }
+
+        public void setRabbit(Rabbit rabbit) {
+            this.rabbit = rabbit == null ? new Rabbit() : rabbit;
+        }
+
+        public static class Rabbit {
+            private String exchange = "noval.knowledge.chat.run";
+            private String queue = "noval.knowledge.chat.run";
+            private String routingKey = "knowledge.chat.run";
+            private String deadLetterExchange = "noval.knowledge.chat.run.dlx";
+            private String deadLetterQueue = "noval.knowledge.chat.run.dlq";
+            private String deadLetterRoutingKey = "knowledge.chat.run.dlq";
+
+            public String getExchange() {
+                return exchange;
+            }
+
+            public void setExchange(String exchange) {
+                this.exchange = exchange;
+            }
+
+            public String getQueue() {
+                return queue;
+            }
+
+            public void setQueue(String queue) {
+                this.queue = queue;
+            }
+
+            public String getRoutingKey() {
+                return routingKey;
+            }
+
+            public void setRoutingKey(String routingKey) {
+                this.routingKey = routingKey;
+            }
+
+            public String getDeadLetterExchange() {
+                return deadLetterExchange;
+            }
+
+            public void setDeadLetterExchange(String deadLetterExchange) {
+                this.deadLetterExchange = deadLetterExchange;
+            }
+
+            public String getDeadLetterQueue() {
+                return deadLetterQueue;
+            }
+
+            public void setDeadLetterQueue(String deadLetterQueue) {
+                this.deadLetterQueue = deadLetterQueue;
+            }
+
+            public String getDeadLetterRoutingKey() {
+                return deadLetterRoutingKey;
+            }
+
+            public void setDeadLetterRoutingKey(String deadLetterRoutingKey) {
+                this.deadLetterRoutingKey = deadLetterRoutingKey;
+            }
+        }
+    }
+
+    public static class ProjectIngest {
+        private boolean queueEnabled = true;
+        private int workerConcurrency = 1;
+        private int leaseSeconds = 60;
+        private int heartbeatSeconds = 15;
+        private int maxAttempts = 4;
+        private int maxChapterChars = 100000;
+        private int maxFileBytes = 20 * 1024 * 1024;
+        private int maxChaptersPerProject = 5000;
+        private int maxConcurrentJobsPerUser = 1;
+        private String parserVersion = "project-ingest-v1";
+        private String retryBackoffSeconds = "30,120,600";
+        private Rabbit rabbit = new Rabbit();
+
+        public boolean isQueueEnabled() { return queueEnabled; }
+        public void setQueueEnabled(boolean queueEnabled) { this.queueEnabled = queueEnabled; }
+        public int getWorkerConcurrency() { return workerConcurrency; }
+        public void setWorkerConcurrency(int workerConcurrency) { this.workerConcurrency = workerConcurrency; }
+        public int getLeaseSeconds() { return leaseSeconds; }
+        public void setLeaseSeconds(int leaseSeconds) { this.leaseSeconds = leaseSeconds; }
+        public int getHeartbeatSeconds() { return heartbeatSeconds; }
+        public void setHeartbeatSeconds(int heartbeatSeconds) { this.heartbeatSeconds = heartbeatSeconds; }
+        public int getMaxAttempts() { return maxAttempts; }
+        public void setMaxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; }
+        public int getMaxChapterChars() { return maxChapterChars; }
+        public void setMaxChapterChars(int maxChapterChars) { this.maxChapterChars = maxChapterChars; }
+        public int getMaxFileBytes() { return maxFileBytes; }
+        public void setMaxFileBytes(int maxFileBytes) { this.maxFileBytes = maxFileBytes; }
+        public int getMaxChaptersPerProject() { return maxChaptersPerProject; }
+        public void setMaxChaptersPerProject(int maxChaptersPerProject) { this.maxChaptersPerProject = maxChaptersPerProject; }
+        public int getMaxConcurrentJobsPerUser() { return maxConcurrentJobsPerUser; }
+        public void setMaxConcurrentJobsPerUser(int maxConcurrentJobsPerUser) { this.maxConcurrentJobsPerUser = maxConcurrentJobsPerUser; }
+        public String getParserVersion() { return parserVersion; }
+        public void setParserVersion(String parserVersion) { this.parserVersion = parserVersion; }
+        public String getRetryBackoffSeconds() { return retryBackoffSeconds; }
+        public void setRetryBackoffSeconds(String retryBackoffSeconds) { this.retryBackoffSeconds = retryBackoffSeconds; }
+        public Rabbit getRabbit() { return rabbit; }
+        public void setRabbit(Rabbit rabbit) { this.rabbit = rabbit == null ? new Rabbit() : rabbit; }
+
+        public static class Rabbit {
+            private String exchange = "noval.knowledge.project-ingest";
+            private String queue = "noval.knowledge.project-ingest.job";
+            private String routingKey = "knowledge.project-ingest.job";
+            private String deadLetterExchange = "noval.knowledge.project-ingest.dlx";
+            private String deadLetterQueue = "noval.knowledge.project-ingest.job.dlq";
+            private String deadLetterRoutingKey = "knowledge.project-ingest.job.dlq";
+
+            public String getExchange() { return exchange; }
+            public void setExchange(String exchange) { this.exchange = exchange; }
+            public String getQueue() { return queue; }
+            public void setQueue(String queue) { this.queue = queue; }
+            public String getRoutingKey() { return routingKey; }
+            public void setRoutingKey(String routingKey) { this.routingKey = routingKey; }
+            public String getDeadLetterExchange() { return deadLetterExchange; }
+            public void setDeadLetterExchange(String deadLetterExchange) { this.deadLetterExchange = deadLetterExchange; }
+            public String getDeadLetterQueue() { return deadLetterQueue; }
+            public void setDeadLetterQueue(String deadLetterQueue) { this.deadLetterQueue = deadLetterQueue; }
+            public String getDeadLetterRoutingKey() { return deadLetterRoutingKey; }
+            public void setDeadLetterRoutingKey(String deadLetterRoutingKey) { this.deadLetterRoutingKey = deadLetterRoutingKey; }
+        }
+    }
+
+    public static class DocumentBatch {
+        private boolean queueEnabled = true;
+        private int workerConcurrency = 1;
+        private int leaseSeconds = 300;
+        private int maxAttempts = 4;
+        private int maxFiles = 200;
+        private long maxBatchBytes = 90L * 1024 * 1024;
+        private int maxZipEntries = 1000;
+        private long maxExpandedBytes = 200L * 1024 * 1024;
+        private int documentIndexBatchSize = 32;
+        private int chapterDispatchWindow = 8;
+        private Rabbit rabbit = new Rabbit();
+
+        public boolean isQueueEnabled() { return queueEnabled; }
+        public void setQueueEnabled(boolean queueEnabled) { this.queueEnabled = queueEnabled; }
+        public int getWorkerConcurrency() { return workerConcurrency; }
+        public void setWorkerConcurrency(int workerConcurrency) { this.workerConcurrency = workerConcurrency; }
+        public int getLeaseSeconds() { return leaseSeconds; }
+        public void setLeaseSeconds(int leaseSeconds) { this.leaseSeconds = leaseSeconds; }
+        public int getMaxAttempts() { return maxAttempts; }
+        public void setMaxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; }
+        public int getMaxFiles() { return maxFiles; }
+        public void setMaxFiles(int maxFiles) { this.maxFiles = maxFiles; }
+        public long getMaxBatchBytes() { return maxBatchBytes; }
+        public void setMaxBatchBytes(long maxBatchBytes) { this.maxBatchBytes = maxBatchBytes; }
+        public int getMaxZipEntries() { return maxZipEntries; }
+        public void setMaxZipEntries(int maxZipEntries) { this.maxZipEntries = maxZipEntries; }
+        public long getMaxExpandedBytes() { return maxExpandedBytes; }
+        public void setMaxExpandedBytes(long maxExpandedBytes) { this.maxExpandedBytes = maxExpandedBytes; }
+        public int getDocumentIndexBatchSize() { return documentIndexBatchSize; }
+        public void setDocumentIndexBatchSize(int documentIndexBatchSize) { this.documentIndexBatchSize = documentIndexBatchSize; }
+        public int getChapterDispatchWindow() { return chapterDispatchWindow; }
+        public void setChapterDispatchWindow(int chapterDispatchWindow) { this.chapterDispatchWindow = chapterDispatchWindow; }
+        public Rabbit getRabbit() { return rabbit; }
+        public void setRabbit(Rabbit rabbit) { this.rabbit = rabbit == null ? new Rabbit() : rabbit; }
+
+        public static class Rabbit {
+            private String exchange = "noval.knowledge.document-batch";
+            private String queue = "noval.knowledge.document-batch.parse";
+            private String routingKey = "knowledge.document-batch.parse";
+            private String deadLetterExchange = "noval.knowledge.document-batch.dlx";
+            private String deadLetterQueue = "noval.knowledge.document-batch.parse.dlq";
+            private String deadLetterRoutingKey = "knowledge.document-batch.parse.dlq";
+
+            public String getExchange() { return exchange; }
+            public void setExchange(String exchange) { this.exchange = exchange; }
+            public String getQueue() { return queue; }
+            public void setQueue(String queue) { this.queue = queue; }
+            public String getRoutingKey() { return routingKey; }
+            public void setRoutingKey(String routingKey) { this.routingKey = routingKey; }
+            public String getDeadLetterExchange() { return deadLetterExchange; }
+            public void setDeadLetterExchange(String deadLetterExchange) { this.deadLetterExchange = deadLetterExchange; }
+            public String getDeadLetterQueue() { return deadLetterQueue; }
+            public void setDeadLetterQueue(String deadLetterQueue) { this.deadLetterQueue = deadLetterQueue; }
+            public String getDeadLetterRoutingKey() { return deadLetterRoutingKey; }
+            public void setDeadLetterRoutingKey(String deadLetterRoutingKey) { this.deadLetterRoutingKey = deadLetterRoutingKey; }
+        }
+    }
+
 }

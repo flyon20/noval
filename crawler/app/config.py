@@ -1,14 +1,24 @@
 import os
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Settings(BaseModel):
+    model_config = ConfigDict(validate_default=True)
+
     app_name: str = "novel-crawler-service"
     host: str = "0.0.0.0"
     port: int = 5000
     timeout_seconds: int = 20
-    chapter_fetch_workers: int = max(1, int(os.getenv("CRAWLER_CHAPTER_FETCH_WORKERS", "3")))
+    chapter_fetch_workers: int = Field(
+        default=int(
+            os.getenv(
+                "NOVAL_RESOURCE_MAX_CRAWLER_CONCURRENCY",
+                os.getenv("CRAWLER_CHAPTER_FETCH_WORKERS", "2"),
+            )
+        ),
+        gt=0,
+    )
     internal_api_key: str = os.getenv("CRAWLER_INTERNAL_API_KEY", "")
     fanqie_base_url: str = "https://fanqienovel.com"
     fanqie_rank_url: str = "https://fanqienovel.com/rank?enter_from=menu"

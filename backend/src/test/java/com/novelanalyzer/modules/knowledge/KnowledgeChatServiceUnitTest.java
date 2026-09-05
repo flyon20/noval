@@ -3,6 +3,8 @@ package com.novelanalyzer.modules.knowledge;
 import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.common.context.TraceIdHolder;
+import com.novelanalyzer.common.exception.BusinessException;
+import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.analysis.client.LangGraphWorkerClient;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
@@ -20,12 +22,19 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.core.task.SyncTaskExecutor;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -34,6 +43,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -238,6 +248,7 @@ class KnowledgeChatServiceUnitTest {
         KnowledgeChatRequest request = new KnowledgeChatRequest();
         request.setQuestion("follow up");
         request.setContextSummary("current book: Book Alpha");
+        request.setPreferredSkillId("webnovel-outline-building");
         KnowledgeChatRequest.ChatMessageDTO userMessage = new KnowledgeChatRequest.ChatMessageDTO();
         userMessage.setRole("user");
         userMessage.setContent("Book Alpha setting?");
@@ -251,7 +262,80 @@ class KnowledgeChatServiceUnitTest {
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
         assertThat(payloadCaptor.getValue()).containsEntry("contextSummary", "current book: Book Alpha");
+        assertThat(payloadCaptor.getValue()).containsEntry("preferredSkillId", "webnovel-outline-building");
         assertThat((List<?>) payloadCaptor.getValue().get("history")).hasSize(2);
+    }
+
+    @Test
+    void shouldPassHistoryBeyondTwelveMessagesUntilContextBudgetIsReached() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor()
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+        List<KnowledgeChatRequest.ChatMessageDTO> history = new ArrayList<>();
+        for (int index = 0; index < 30; index++) {
+            KnowledgeChatRequest.ChatMessageDTO message = new KnowledgeChatRequest.ChatMessageDTO();
+            message.setRole(index % 2 == 0 ? "user" : "assistant");
+            message.setContent("history-message-" + (index + 1));
+            history.add(message);
+        }
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("continue");
+        request.setHistory(history);
+
+        service.chat(request);
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> payloadHistory = (List<Map<String, Object>>) payloadCaptor.getValue().get("history");
+        assertThat(payloadHistory).hasSize(30);
+        assertThat(payloadHistory.get(0)).containsEntry("content", "history-message-1");
+        assertThat(payloadHistory.get(29)).containsEntry("content", "history-message-30");
+    }
+
+    @Test
+    void shouldPreferWorkerCompactedSummaryForDurableConversationMemory() {
+        KnowledgeChatService service = new KnowledgeChatService(
+            mock(LangGraphWorkerClient.class),
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor()
+        );
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("继续完成当前大纲");
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setAnswer("已经补齐前三章钩子。");
+        String compactedSummary = "<!-- NOVAL_CONTEXT_STATE_V1 {\"covered\":[\"hash-1\"],\"generation\":1} -->\n长期目标与硬约束：保留底层职业。";
+        response.setResultJson(Map.of(
+            "contextCompaction", Map.of(
+                "status", "compacted",
+                "compactedSummary", compactedSummary
+            )
+        ));
+
+        String summary = ReflectionTestUtils.invokeMethod(
+            service,
+            "buildConversationSummary",
+            request,
+            response,
+            "runtime summary"
+        );
+
+        assertThat(summary)
+            .startsWith("<!-- NOVAL_CONTEXT_STATE_V1")
+            .contains("长期目标与硬约束：保留底层职业。")
+            .contains("最近用户目标：继续完成当前大纲")
+            .contains("上一轮结论：已经补齐前三章钩子。");
     }
 
     @Test
@@ -276,6 +360,7 @@ class KnowledgeChatServiceUnitTest {
         request.setQuestion("revise opening");
         request.setConversationId("conv-context");
         request.setProjectId(99L);
+        request.setWorkId(199L);
         request.setBookId(123L);
         request.setBookName("Book Alpha");
         request.setMode("outline");
@@ -294,6 +379,7 @@ class KnowledgeChatServiceUnitTest {
         verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
         Map<String, Object> payload = payloadCaptor.getValue();
         assertThat(payload).containsEntry("contextSummary", "legacy summary");
+        assertThat(payload).containsEntry("workId", 199L);
         assertThat((List<?>) payload.get("history")).hasSize(2);
         assertThat(payload).containsKey("contextBundle");
         @SuppressWarnings("unchecked")
@@ -319,6 +405,7 @@ class KnowledgeChatServiceUnitTest {
         assertThat(projectProfile).containsEntry("scope", "project");
         assertThat(projectContent)
             .containsEntry("projectId", 99L)
+            .containsEntry("workId", 199L)
             .containsEntry("bookId", 123L)
             .containsEntry("bookName", "Book Alpha");
         assertThat(threadSummary).containsEntry("scope", "thread");
@@ -330,6 +417,7 @@ class KnowledgeChatServiceUnitTest {
             .containsEntry("question", "revise opening")
             .containsEntry("userId", 7L)
             .containsEntry("projectId", 99L)
+            .containsEntry("workId", 199L)
             .containsEntry("conversationId", "conv-context")
             .containsEntry("mode", "outline");
     }
@@ -394,19 +482,86 @@ class KnowledgeChatServiceUnitTest {
 
         KnowledgeChatRequest request = new KnowledgeChatRequest();
         request.setProjectId(99L);
+        request.setWorkId(199L);
         request.setQuestion("帮我做前三章细纲");
 
         service.chat(request);
 
         verify(projectService).ensureOwned(99L, 7L);
+        verify(projectService).ensureWorkOwned(99L, 199L, 7L);
         InOrder inOrder = inOrder(projectService, workerClient);
         inOrder.verify(projectService).ensureOwned(99L, 7L);
+        inOrder.verify(projectService).ensureWorkOwned(99L, 199L, 7L);
         inOrder.verify(projectService).bindConversation(eq(99L), eq(7L), anyString());
         inOrder.verify(workerClient).runKnowledgeChat(any());
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
         assertThat(payloadCaptor.getValue()).containsEntry("projectId", 99L);
+        assertThat(payloadCaptor.getValue()).containsEntry("workId", 199L);
         verify(traceService).persistFromChat(eq(7L), eq(99L), anyString(), eq("帮我做前三章细纲"), eq(workerResponse));
+    }
+
+    @Test
+    void shouldRejectWorkIdWithoutProjectBeforeCallingWorker() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeProjectService projectService = mock(KnowledgeProjectService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            mock(KnowledgeAgentTraceService.class),
+            projectService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("继续当前作品");
+        request.setWorkId(199L);
+
+        assertThatThrownBy(() -> service.chat(request))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining("projectId is required");
+        verifyNoInteractions(workerClient, projectService);
+    }
+
+    @Test
+    void shouldResolveReferenceWorkIdsBeforeSendingTrustedScopesToWorker() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeProjectService projectService = mock(KnowledgeProjectService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            mock(KnowledgeAgentTraceService.class),
+            projectService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+        when(projectService.resolveReferenceWorks(7L, List.of(301L, 302L), 99L, 199L)).thenReturn(List.of(
+            new KnowledgeProjectService.ReferenceWorkScope(30L, 301L, "Reference A"),
+            new KnowledgeProjectService.ReferenceWorkScope(40L, 302L, "Reference B")
+        ));
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("compare my novels");
+        request.setProjectId(99L);
+        request.setWorkId(199L);
+        request.setReferenceWorkIds(List.of(301L, 302L));
+
+        service.chat(request);
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(workerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue().get("referenceWorks")).isEqualTo(List.of(
+            Map.of("projectId", 30L, "workId", 301L, "title", "Reference A"),
+            Map.of("projectId", 40L, "workId", 302L, "title", "Reference B")
+        ));
     }
 
     @Test
@@ -458,6 +613,257 @@ class KnowledgeChatServiceUnitTest {
         ArgumentCaptor<List<Map<String, Object>>> candidatesCaptor = ArgumentCaptor.forClass(List.class);
         verify(memoryCandidateService).persistCandidates(eq(900L), eq(7L), candidatesCaptor.capture(), eq("trace-1"));
         assertThat(candidatesCaptor.getValue()).containsExactly(candidate);
+    }
+
+    @Test
+    void shouldNotPersistMemoryCandidatesTwiceWhenWorkerAlreadyPersistedThem() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeMemoryCandidateService memoryCandidateService = mock(KnowledgeMemoryCandidateService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            mock(KnowledgeAgentTraceService.class),
+            mock(KnowledgeProjectService.class),
+            memoryCandidateService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of(
+            "memoryCandidates", List.of(Map.of("scope", "project", "type", "constraint")),
+            "memoryCandidatePayloads", List.of(Map.of("scope", "project", "type", "constraint", "content", "private")),
+            "memoryCandidatesPersisted", 1,
+            "trace", Map.of("traceId", "trace-1"),
+            "taskGraph", Map.of("tasks", List.of()),
+            "toolRuns", List.of()
+        ));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setProjectId(900L);
+        request.setQuestion("remember this constraint");
+
+        service.chat(request);
+
+        verifyNoInteractions(memoryCandidateService);
+        assertThat(workerResponse.getResultJson()).doesNotContainKey("memoryCandidatePayloads");
+    }
+
+    @Test
+    void shouldRecoverOnlyWorkerFailedMemoryCandidatesByFactKey() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeMemoryCandidateService memoryCandidateService = mock(KnowledgeMemoryCandidateService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            mock(KnowledgeAgentTraceService.class),
+            mock(KnowledgeProjectService.class),
+            memoryCandidateService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        Map<String, Object> persisted = Map.of(
+            "scope", "project", "type", "fact", "content", "already saved",
+            "factKey", "fact.shared", "candidateKey", "candidate.saved"
+        );
+        Map<String, Object> failed = Map.ofEntries(
+            Map.entry("scope", "project"),
+            Map.entry("type", "fact"),
+            Map.entry("content", "retry me"),
+            Map.entry("factKey", "fact.shared"),
+            Map.entry("candidateKey", "candidate.failed"),
+            Map.entry("provenanceJson", "{\"source\":\"worker_memory_extractor\"}"),
+            Map.entry("evidenceJson", "{\"sourceKind\":\"user_turn\"}"),
+            Map.entry("extractorVersion", "memory-extractor-v1"),
+            Map.entry("conversationId", "conv-partial"),
+            Map.entry("ttlDays", 30)
+        );
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.ofEntries(
+            Map.entry("memoryCandidatePayloads", List.of(persisted, failed)),
+            Map.entry("memoryCandidatesPersisted", 1),
+            Map.entry("memoryDiagnostics", Map.of(
+                "candidatePersistence", Map.of(
+                    "saved", 1,
+                    "failed", 1,
+                    "failures", List.of(Map.of(
+                        "factKey", "fact.shared",
+                        "candidateKey", "candidate.failed",
+                        "reason", "TimeoutError"
+                    ))
+                )
+            )),
+            Map.entry("trace", Map.of("traceId", "trace-partial")),
+            Map.entry("taskGraph", Map.of("tasks", List.of())),
+            Map.entry("toolRuns", List.of())
+        ));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+        when(memoryCandidateService.persistCandidates(any(), any(), any(), any())).thenReturn(1);
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setProjectId(900L);
+        request.setQuestion("remember both facts");
+
+        service.chat(request);
+
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<List<Map<String, Object>>> candidatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(memoryCandidateService).persistCandidates(eq(900L), eq(7L), candidatesCaptor.capture(), eq("trace-partial"));
+        assertThat(candidatesCaptor.getValue()).containsExactly(failed);
+        assertThat(workerResponse.getResultJson())
+            .containsEntry("memoryCandidatesBackendRecovered", 1)
+            .containsEntry("memoryCandidatesPersisted", 2)
+            .doesNotContainKey("memoryCandidatePayloads");
+    }
+
+    @Test
+    void shouldNotGuessLegacyPartialFailureWhenFactKeyIsAmbiguous() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeMemoryCandidateService memoryCandidateService = mock(KnowledgeMemoryCandidateService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            mock(KnowledgeAgentTraceService.class),
+            mock(KnowledgeProjectService.class),
+            memoryCandidateService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("answer");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.ofEntries(
+            Map.entry("memoryCandidatePayloads", List.of(
+                Map.of("scope", "project", "type", "fact", "content", "first", "factKey", "fact.shared"),
+                Map.of("scope", "project", "type", "fact", "content", "second", "factKey", "fact.shared")
+            )),
+            Map.entry("memoryCandidatesPersisted", 1),
+            Map.entry("memoryDiagnostics", Map.of(
+                "candidatePersistence", Map.of(
+                    "saved", 1,
+                    "failed", 1,
+                    "failures", List.of(Map.of("factKey", "fact.shared", "reason", "TimeoutError"))
+                )
+            )),
+            Map.entry("taskGraph", Map.of("tasks", List.of())),
+            Map.entry("toolRuns", List.of())
+        ));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setProjectId(900L);
+        request.setQuestion("remember both facts");
+
+        service.chat(request);
+
+        verifyNoInteractions(memoryCandidateService);
+        assertThat(workerResponse.getResultJson())
+            .containsEntry("memoryCandidatesPersisted", 1)
+            .doesNotContainKey("memoryCandidatePayloads");
+    }
+
+    @Test
+    void shouldRecoverUserMemoryCandidateWhenProjectIsNotSelected() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeMemoryCandidateService memoryCandidateService = mock(KnowledgeMemoryCandidateService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            mock(KnowledgeAgentTraceService.class),
+            mock(KnowledgeProjectService.class),
+            memoryCandidateService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setStatus("answered");
+        response.setAnswer("answer");
+        response.setResultJson(Map.ofEntries(
+            Map.entry("memoryCandidatePayloads", List.of(Map.of(
+                "scope", "user", "type", "preference", "content", "user preference",
+                "factKey", "user.preference.one", "candidateKey", "candidate-user-1"
+            ))),
+            Map.entry("memoryDiagnostics", Map.of(
+                "candidatePersistence", Map.of(
+                    "saved", 0,
+                    "failed", 1,
+                    "failures", List.of(Map.of("candidateKey", "candidate-user-1"))
+                )
+            )),
+            Map.entry("trace", Map.of("traceId", "trace-user-fallback")),
+            Map.entry("taskGraph", Map.of("tasks", List.of())),
+            Map.entry("toolRuns", List.of())
+        ));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(response);
+        when(memoryCandidateService.persistCandidates(any(), any(), any(), any())).thenReturn(1);
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("remember user preference");
+
+        service.chat(request);
+
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<List<Map<String, Object>>> candidatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(memoryCandidateService).persistCandidates(eq(null), eq(7L), candidatesCaptor.capture(), eq("trace-user-fallback"));
+        assertThat(candidatesCaptor.getValue()).hasSize(1);
+        assertThat(response.getResultJson()).doesNotContainKey("memoryCandidatePayloads");
+    }
+
+    @Test
+    void shouldPreserveAnswerAndExposeOnlySafeDiagnosticsWhenBackendMemoryFallbackFails() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeMemoryCandidateService memoryCandidateService = mock(KnowledgeMemoryCandidateService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            mock(KnowledgeAgentTraceService.class),
+            mock(KnowledgeProjectService.class),
+            memoryCandidateService
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setStatus("answered");
+        response.setAnswer("complete answer");
+        response.setResultJson(Map.ofEntries(
+            Map.entry("memoryCandidatePayloads", List.of(Map.of(
+                "scope", "project",
+                "type", "fact",
+                "content", "PRIVATE_MEMORY_BODY",
+                "factKey", "story.fact.one",
+                "candidateKey", "candidate-fallback-1"
+            ))),
+            Map.entry("taskGraph", Map.of("tasks", List.of())),
+            Map.entry("toolRuns", List.of())
+        ));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(response);
+        when(memoryCandidateService.persistCandidates(any(), any(), any(), any()))
+            .thenThrow(new IllegalStateException("PRIVATE_DATABASE_FAILURE_DETAIL"));
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setProjectId(900L);
+        request.setQuestion("remember this fact");
+
+        KnowledgeChatResponseVO actual = service.chat(request);
+
+        assertThat(actual.getStatus()).isEqualTo("answered");
+        assertThat(actual.getAnswer()).isEqualTo("complete answer");
+        assertThat(actual.getResultJson()).doesNotContainKey("memoryCandidatePayloads");
+        assertThat(String.valueOf(actual.getResultJson()))
+            .contains("backendFallback", "failed", "IllegalStateException")
+            .doesNotContain("PRIVATE_MEMORY_BODY", "PRIVATE_DATABASE_FAILURE_DETAIL");
     }
 
     @Test
@@ -727,11 +1133,289 @@ class KnowledgeChatServiceUnitTest {
         KnowledgeChatRequest request = new KnowledgeChatRequest();
         request.setQuestion("continue analysis");
 
-        service.streamChat(request);
+        List<String> deltas = new ArrayList<>();
+        service.streamChat(request, new KnowledgeChatService.StreamLifecycleListener() {
+            @Override
+            public void onDelta(String delta) {
+                deltas.add(delta);
+            }
+        });
 
         InOrder inOrder = inOrder(workerClient);
         inOrder.verify(workerClient).streamKnowledgeChat(any(), any(), any(), any());
         inOrder.verify(workerClient).runKnowledgeChat(any());
+        assertThat(deltas).containsExactly("blocking fallback answer");
+    }
+
+    @Test
+    void shouldReportFallbackFailureWithoutLeakingUpstreamBodyWhenBlockingRetryAlsoFails() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient, indexJobExecutor, crawlerService, taskExecutor()
+        );
+        AuthUser authUser = new AuthUser();
+        authUser.setUserId(7L);
+        authUser.setUsername("admin");
+        authUser.setRoles(Set.of("ADMIN"));
+        AuthUserHolder.set(authUser);
+
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any()))
+            .thenThrow(new RuntimeException("worker stream ended without result"));
+        when(workerClient.runKnowledgeChat(any())).thenThrow(new BusinessException(
+            ResultCode.INTERNAL_ERROR,
+            "上游错误请求参数无效"
+        ));
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("continue analysis");
+
+        List<String> deltas = new ArrayList<>();
+        List<Exception> failures = new ArrayList<>();
+        service.streamChat(request, new KnowledgeChatService.StreamLifecycleListener() {
+            @Override
+            public void onDelta(String delta) {
+                deltas.add(delta);
+            }
+
+            @Override
+            public void onFailed(Exception error) {
+                failures.add(error);
+            }
+        });
+
+        InOrder inOrder = inOrder(workerClient);
+        inOrder.verify(workerClient).streamKnowledgeChat(any(), any(), any(), any());
+        inOrder.verify(workerClient).runKnowledgeChat(any());
+        assertThat(deltas).isEmpty();
+        // 客户端只应看到稳定的降级失败文本，上游原始报文不外泄。
+        assertThat(failures).hasSize(1);
+        assertThat(failures.get(0))
+            .isInstanceOf(BusinessException.class)
+            .hasMessage("knowledge chat fallback failed");
+    }
+
+    @Test
+    void shouldPreserveWhitespaceOnlyDelta() throws Exception {
+        KnowledgeChatService service = new KnowledgeChatService(
+            mock(LangGraphWorkerClient.class),
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor()
+        );
+        SseEmitter emitter = mock(SseEmitter.class);
+        Method sendDelta = KnowledgeChatService.class.getDeclaredMethod(
+            "sendDelta", SseEmitter.class, String.class
+        );
+        sendDelta.setAccessible(true);
+
+        sendDelta.invoke(service, emitter, " \n");
+
+        verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
+    }
+
+    @Test
+    void shouldStopBlockingDurableCommitWhenExternalCancellationIsSet() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient, mock(KnowledgeIndexJobExecutor.class), mock(CrawlerService.class), taskExecutor()
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        AtomicBoolean cancelled = new AtomicBoolean(true);
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("cancelled");
+
+        assertThat(service.chatForDurableCommit(request, cancelled::get)).isNull();
+        verify(workerClient, never()).runKnowledgeChat(any());
+    }
+
+    @Test
+    void shouldStopDurableStreamBeforeWorkerWhenExternalCancellationIsSet() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient, mock(KnowledgeIndexJobExecutor.class), mock(CrawlerService.class), taskExecutor()
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("cancelled stream");
+
+        service.streamChatForDurableCommit(request, new KnowledgeChatService.StreamLifecycleListener() { }, () -> true);
+
+        verify(workerClient, never()).streamKnowledgeChat(any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldFailDurableStreamAfterDeltaWhenExternalCancellationWins() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient, mock(KnowledgeIndexJobExecutor.class), mock(CrawlerService.class), taskExecutor()
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("must not complete");
+        workerResponse.setActions(List.of());
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<String> onDelta = invocation.getArgument(1);
+            java.util.function.BooleanSupplier cancellation = invocation.getArgument(3);
+            onDelta.accept("partial before cancellation");
+            cancelled.set(true);
+            assertThat(cancellation.getAsBoolean()).isTrue();
+            return workerResponse;
+        });
+        List<String> deltas = new ArrayList<>();
+        AtomicBoolean completed = new AtomicBoolean(false);
+        AtomicBoolean failed = new AtomicBoolean(false);
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("cancel after delta");
+
+        service.streamChatForDurableCommit(
+            request,
+            new KnowledgeChatService.StreamLifecycleListener() {
+                @Override
+                public void onDelta(String delta) {
+                    deltas.add(delta);
+                }
+
+                @Override
+                public void onCompleted(KnowledgeChatResponseVO response) {
+                    completed.set(true);
+                }
+
+                @Override
+                public void onFailed(Exception error) {
+                    failed.set(true);
+                    assertThat(error).hasMessageContaining("cancelled");
+                }
+            },
+            cancelled::get
+        );
+
+        assertThat(deltas).containsExactly("partial before cancellation");
+        assertThat(failed).isTrue();
+        assertThat(completed).isFalse();
+        verify(workerClient, never()).runKnowledgeChat(any());
+    }
+
+    @Test
+    void shouldUseInjectedFallbackExecutor() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setStatus("answered");
+        response.setAnswer("executor fallback");
+        response.setActions(List.of());
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any()))
+            .thenThrow(new RuntimeException("stream failed"));
+        when(workerClient.runKnowledgeChat(any())).thenReturn(response);
+        Executor fallbackExecutor = Runnable::run;
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            fallbackExecutor
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("fallback");
+        service.streamChat(request);
+
+        verify(workerClient).runKnowledgeChat(any());
+    }
+
+    @Test
+    void shouldNotUseBlockingFallbackForDurableRunExecution() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        KnowledgeIndexJobExecutor indexJobExecutor = mock(KnowledgeIndexJobExecutor.class);
+        CrawlerService crawlerService = mock(CrawlerService.class);
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient, indexJobExecutor, crawlerService, taskExecutor()
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any()))
+            .thenThrow(new RuntimeException("stream failed"));
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("durable answer");
+
+        assertThatThrownBy(() -> service.chatWithProgressForDurableRun(
+            request,
+            new KnowledgeChatService.ChatProgressListener() { },
+            () -> false
+        )).isInstanceOf(RuntimeException.class);
+        verify(workerClient, never()).runKnowledgeChat(any());
+    }
+
+    @Test
+    void shouldKeepUpstreamErrorCodeWhenBlockingFallbackFails() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any()))
+            .thenThrow(new RuntimeException("stream failed"));
+        when(workerClient.runKnowledgeChat(any())).thenThrow(new BusinessException(
+            ResultCode.INTERNAL_ERROR,
+            "langgraph worker knowledge chat failed: upstream=400 code=unsupported_value "
+                + "type=invalid_request_error param=reasoning.effort"
+        ));
+
+        List<String> failures = captureStreamFailures(workerClient, "上游 400");
+
+        // 线上那三条 FAILED 的 error_message 只剩固定文案，故障原因整条丢失。
+        // 码位必须活着走到 onFailed，它就是落库前的最后一站。
+        assertThat(failures).containsExactly(
+            "knowledge chat fallback failed: upstream=400 code=unsupported_value "
+                + "type=invalid_request_error param=reasoning.effort"
+        );
+    }
+
+    @Test
+    void shouldOnlyTrustUpstreamCodesThatCameThroughTheWorkerContract() {
+        LangGraphWorkerClient workerClient = mock(LangGraphWorkerClient.class);
+        when(workerClient.streamKnowledgeChat(any(), any(), any(), any()))
+            .thenThrow(new RuntimeException("stream failed"));
+        // 非 BusinessException 的 message 不是 worker 契约生成的，哪怕长得像码位也不认；
+        // 否则任意一个第三方异常文案都能把内容塞进 ai_chat_run.error_message。
+        when(workerClient.runKnowledgeChat(any()))
+            .thenThrow(new IllegalStateException("upstream=400 code=leaked_from_untrusted_source"));
+
+        List<String> failures = captureStreamFailures(workerClient, "非契约异常");
+
+        assertThat(failures).containsExactly("knowledge chat fallback failed");
+    }
+
+    private List<String> captureStreamFailures(LangGraphWorkerClient workerClient, String question) {
+        Executor fallbackExecutor = Runnable::run;
+        KnowledgeChatService service = new KnowledgeChatService(
+            workerClient,
+            mock(KnowledgeIndexJobExecutor.class),
+            mock(CrawlerService.class),
+            taskExecutor(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            fallbackExecutor
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion(question);
+        List<String> failures = new ArrayList<>();
+        service.streamChat(request, new KnowledgeChatService.StreamLifecycleListener() {
+            @Override
+            public void onFailed(Exception error) {
+                failures.add(error.getMessage());
+            }
+        });
+        return failures;
     }
 
     private AsyncTaskExecutor taskExecutor() {

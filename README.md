@@ -4,6 +4,10 @@ Noval 是一个面向网文选题、榜单研判、单书拆解和 RAG 问答的
 
 当前发布标签：`V3`
 
+## 文档入口
+
+[Noval 文档中心](docs/README.md) 是受控文档、生命周期规则和历史权威关系的统一入口。需求设计与实施计划继续沿用现有 `docs/superpowers` 流程，不另建重复档案。
+
 ## 核心能力
 
 - 采集番茄榜单、书籍信息、简介、详情和章节内容。
@@ -189,12 +193,12 @@ KNOWLEDGE_INDEX_MAX_ACTIVE_JOBS=1
 
 ## Docker 部署
 
-生产式部署由 `docker-compose.yml` 编排。
+生产式部署由 `docker-compose.yml` 编排。以下是通用 Compose 路径，不等同于 J3160 生产更新；J3160 必须使用 catalog ID `j3160-production-runbook` 对应的私有 Runbook 的双 Compose、preflight、迁移和回滚流程。
 
 ```bash
 cd /opt/noval
 
-docker compose --env-file /etc/opt/noval/ssl/.env build backend langgraph-worker nginx
+docker compose --env-file /etc/opt/noval/ssl/.env build backend crawler fastmcp-tools langgraph-worker nginx
 docker compose --env-file /etc/opt/noval/ssl/.env up -d
 docker compose --env-file /etc/opt/noval/ssl/.env ps
 ```
@@ -222,7 +226,9 @@ docker run --rm --network noval_default curlimages/curl:8.10.1 http://qdrant:633
 backend/sql/mysql/
 ```
 
-如果是从旧版本数据库升级，恢复旧库后可以按需执行新增阶段脚本：
+如果是从旧版本数据库升级，不要把下面的历史 phase5/6/7 示例当作现网升级路径。当前 schema-migrate 已覆盖 Phase18-30；生产升级请使用 catalog ID `j3160-production-runbook` 对应的私有 Runbook 或对应受控迁移流程。
+
+历史示例（仅用于识别旧库结构）：
 
 ```bash
 docker compose --env-file /etc/opt/noval/ssl/.env exec -T mysql \

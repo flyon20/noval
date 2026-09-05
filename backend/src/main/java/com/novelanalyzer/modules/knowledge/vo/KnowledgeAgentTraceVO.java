@@ -29,6 +29,8 @@ public class KnowledgeAgentTraceVO {
     private String selectedSnapshotGroup;
     private String rejectedSnapshotGroups;
     private String specialistAgentResults;
+    private String skillMediation;
+    private String skillBom;
     private String selectedExperts;
     private String expertRouter;
     private String finalAnswerBoundary;
@@ -241,6 +243,22 @@ public class KnowledgeAgentTraceVO {
 
     public void setSpecialistAgentResults(String specialistAgentResults) {
         this.specialistAgentResults = specialistAgentResults;
+    }
+
+    public String getSkillMediation() {
+        return skillMediation;
+    }
+
+    public void setSkillMediation(String skillMediation) {
+        this.skillMediation = skillMediation;
+    }
+
+    public String getSkillBom() {
+        return skillBom;
+    }
+
+    public void setSkillBom(String skillBom) {
+        this.skillBom = skillBom;
     }
 
     public String getSelectedExperts() {

@@ -1,5 +1,7 @@
 package com.novelanalyzer.modules.knowledge.service;
 
+import com.novelanalyzer.common.exception.BusinessException;
+import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.knowledge.client.EmbeddingClient;
 import com.novelanalyzer.modules.knowledge.client.QdrantClient;
 import com.novelanalyzer.modules.knowledge.dto.KnowledgeSearchRequest;
@@ -16,6 +18,7 @@ import java.util.Objects;
 public class KnowledgeRetrievalService {
 
     private static final double DEFAULT_MIN_SCORE = 0.2d;
+    private static final String SOURCE_TYPE_ANALYSIS = "ANALYSIS";
 
     private final EmbeddingClient embeddingClient;
     private final QdrantClient qdrantClient;
@@ -30,6 +33,10 @@ public class KnowledgeRetrievalService {
     }
 
     public List<KnowledgeSearchResultVO> search(KnowledgeSearchRequest request) {
+        requireUserScope(request.getUserId());
+        if (isAnalysisSearch(request.getSourceType())) {
+            return List.of();
+        }
         Map<String, Object> diagnostics = new LinkedHashMap<>();
         diagnostics.put("requestedMinScore", effectiveMinScore(request.getMinScore()));
         try {
@@ -100,6 +107,16 @@ public class KnowledgeRetrievalService {
 
     private boolean isChapterSearch(String sourceType) {
         return sourceType != null && "CHAPTER".equalsIgnoreCase(sourceType.trim());
+    }
+
+    private boolean isAnalysisSearch(String sourceType) {
+        return sourceType != null && SOURCE_TYPE_ANALYSIS.equalsIgnoreCase(sourceType.trim());
+    }
+
+    private void requireUserScope(Long userId) {
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "user scope required");
+        }
     }
 
     private boolean meetsMinScore(QdrantClient.SearchResult result, Double minScore) {

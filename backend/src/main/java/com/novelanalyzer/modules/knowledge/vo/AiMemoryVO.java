@@ -12,7 +12,20 @@ public class AiMemoryVO {
     private String summary;
     private Double confidence;
     private String status;
+    private String lifecycleStatus;
+    private String legacyStatus;
     private String sourceTraceId;
+    private String factKey;
+    private String candidateKey;
+    private String provenanceJson;
+    private String evidenceJson;
+    private String sourceEvidenceIdsJson;
+    private String sourceChapterVersionsJson;
+    private String indexGeneration;
+    private String extractorVersion;
+    private Long supersedesId;
+    private Long conflictsWithId;
+    private Long confirmedBy;
 
     public Long getId() {
         return id;
@@ -94,11 +107,115 @@ public class AiMemoryVO {
         this.status = status;
     }
 
+    public String getLifecycleStatus() {
+        return lifecycleStatus;
+    }
+
+    public void setLifecycleStatus(String lifecycleStatus) {
+        this.lifecycleStatus = lifecycleStatus;
+    }
+
+    public String getLegacyStatus() {
+        return legacyStatus;
+    }
+
+    public void setLegacyStatus(String legacyStatus) {
+        this.legacyStatus = legacyStatus;
+    }
+
     public String getSourceTraceId() {
         return sourceTraceId;
     }
 
     public void setSourceTraceId(String sourceTraceId) {
         this.sourceTraceId = sourceTraceId;
+    }
+
+    public String getFactKey() {
+        return factKey;
+    }
+
+    public void setFactKey(String factKey) {
+        this.factKey = factKey;
+    }
+
+    public String getCandidateKey() {
+        return candidateKey;
+    }
+
+    public void setCandidateKey(String candidateKey) {
+        this.candidateKey = candidateKey;
+    }
+
+    public String getProvenanceJson() {
+        return provenanceJson;
+    }
+
+    public void setProvenanceJson(String provenanceJson) {
+        this.provenanceJson = provenanceJson;
+    }
+
+    public String getEvidenceJson() {
+        return evidenceJson;
+    }
+
+    public void setEvidenceJson(String evidenceJson) {
+        this.evidenceJson = evidenceJson;
+    }
+
+    public String getSourceEvidenceIdsJson() {
+        return sourceEvidenceIdsJson;
+    }
+
+    public void setSourceEvidenceIdsJson(String sourceEvidenceIdsJson) {
+        this.sourceEvidenceIdsJson = sourceEvidenceIdsJson;
+    }
+
+    public String getSourceChapterVersionsJson() {
+        return sourceChapterVersionsJson;
+    }
+
+    public void setSourceChapterVersionsJson(String sourceChapterVersionsJson) {
+        this.sourceChapterVersionsJson = sourceChapterVersionsJson;
+    }
+
+    public String getIndexGeneration() {
+        return indexGeneration;
+    }
+
+    public void setIndexGeneration(String indexGeneration) {
+        this.indexGeneration = indexGeneration;
+    }
+
+    public String getExtractorVersion() {
+        return extractorVersion;
+    }
+
+    public void setExtractorVersion(String extractorVersion) {
+        this.extractorVersion = extractorVersion;
+    }
+
+    public Long getSupersedesId() {
+        return supersedesId;
+    }
+
+    public void setSupersedesId(Long supersedesId) {
+        this.supersedesId = supersedesId;
+    }
+
+    public Long getConflictsWithId() {
+        return conflictsWithId;
+    }
+
+    public void setConflictsWithId(Long conflictsWithId) {
+        this.conflictsWithId = conflictsWithId;
+    }
+
+    public Long getConfirmedBy() {
+        return confirmedBy;
+    }
+
+    public void setConfirmedBy(Long confirmedBy) {
+        this.confirmedBy = confirmedBy;
     }
 }

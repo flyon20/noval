@@ -4,7 +4,9 @@ import com.novelanalyzer.config.KnowledgeProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
@@ -12,6 +14,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class KnowledgeIndexQueueService {
@@ -22,6 +26,7 @@ public class KnowledgeIndexQueueService {
     private static final String DEFAULT_ROUTING_KEY = "knowledge.index.book";
     private static final String DEFAULT_RETRY_EXCHANGE = "noval.knowledge.index.retry";
     private static final String DEFAULT_RETRY_ROUTING_KEY_PREFIX = "knowledge.index.book.retry";
+    private static final long PUBLISH_CONFIRM_TIMEOUT_MILLIS = 5000L;
 
     private final RabbitTemplate rabbitTemplate;
     private final AmqpAdmin rabbitAdmin;
@@ -36,23 +41,55 @@ public class KnowledgeIndexQueueService {
     }
 
     public boolean enqueue(IndexQueueItem item) {
-        try {
-            rabbitTemplate.convertAndSend(exchange(), routingKey(), item.withAttempt(0).withoutRawPayload());
-            return true;
-        } catch (Exception ex) {
-            LOGGER.warn("knowledge index rabbit enqueue failed: {}", ex.getMessage());
-            return false;
-        }
+        return publish(
+            exchange(),
+            routingKey(),
+            item.withAttempt(Math.max(0, item.attempt())).withoutRawPayload(),
+            "enqueue"
+        );
     }
 
     public boolean retry(IndexQueueItem item, int nextAttempt, long delaySeconds) {
+        long safeDelaySeconds = Math.max(1, delaySeconds);
+        return publish(
+            retryExchange(),
+            retryRoutingKey(safeDelaySeconds),
+            item.withAttempt(nextAttempt).withoutRawPayload(),
+            "retry"
+        );
+    }
+
+    private boolean publish(String exchange,
+                            String routingKey,
+                            IndexQueueItem item,
+                            String operation) {
         try {
-            long safeDelaySeconds = Math.max(1, delaySeconds);
-            IndexQueueItem retryItem = item.withAttempt(nextAttempt).withoutRawPayload();
-            rabbitTemplate.convertAndSend(retryExchange(), retryRoutingKey(safeDelaySeconds), retryItem);
+            CorrelationData correlationData = new CorrelationData(UUID.randomUUID().toString());
+            rabbitTemplate.convertAndSend(exchange, routingKey, item, correlationData);
+            CorrelationData.Confirm confirm = correlationData.getFuture()
+                .get(PUBLISH_CONFIRM_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            if (!confirm.isAck()) {
+                LOGGER.warn("knowledge index rabbit {} was not confirmed: jobId={}, reason={}",
+                    operation,
+                    item.jobId(),
+                    confirm.getReason());
+                return false;
+            }
+            ReturnedMessage returned = correlationData.getReturned();
+            if (returned != null) {
+                LOGGER.warn("knowledge index rabbit {} was returned: jobId={}, replyCode={}, replyText={}",
+                    operation,
+                    item.jobId(),
+                    returned.getReplyCode(),
+                    returned.getReplyText());
+                return false;
+            }
             return true;
         } catch (Exception ex) {
-            LOGGER.warn("knowledge index rabbit retry publish failed: {}", ex.getMessage());
+            LOGGER.warn("knowledge index rabbit {} failed: jobId={}, message={}",
+                operation,
+                item == null ? null : item.jobId(),
+                ex.getMessage());
             return false;
         }
     }

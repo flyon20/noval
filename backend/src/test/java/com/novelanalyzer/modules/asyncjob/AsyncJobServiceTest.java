@@ -9,8 +9,10 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -19,6 +21,25 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AsyncJobServiceTest {
+
+    @Test
+    void shouldExecuteSideEffectOnlyWhileRequestedGenerationIsRunning() {
+        AsyncJobRepository repository = mock(AsyncJobRepository.class);
+        AsyncJobService service = new AsyncJobService(repository, mock(AsyncJobLockService.class));
+        AtomicBoolean executed = new AtomicBoolean(false);
+        when(repository.lockRunningGeneration(10L, 2)).thenReturn(true);
+
+        String result = service.executeIfRunningGeneration(10L, 2, () -> {
+            executed.set(true);
+            return "committed";
+        });
+
+        assertThat(result).isEqualTo("committed");
+        assertThat(executed).isTrue();
+        when(repository.lockRunningGeneration(10L, 1)).thenReturn(false);
+        assertThatThrownBy(() -> service.executeIfRunningGeneration(10L, 1, () -> "stale"))
+            .isInstanceOf(AsyncJobService.GenerationLostException.class);
+    }
 
     @Test
     void shouldReuseRunningJobInsteadOfCreatingAnotherOne() {
@@ -79,6 +100,68 @@ class AsyncJobServiceTest {
         assertThat(response.getReused()).isFalse();
         assertThat(response.getAcquired()).isTrue();
         assertThat(response.getLockKey()).isEqualTo("lock:book_analysis:analysis-key");
+    }
+
+    @Test
+    void shouldReuseSuccessfulJobForDurableAction() {
+        AsyncJobRepository repository = mock(AsyncJobRepository.class);
+        AsyncJobLockService lockService = mock(AsyncJobLockService.class);
+        AsyncJobService service = new AsyncJobService(repository, lockService);
+
+        AsyncJobEntity successful = new AsyncJobEntity();
+        successful.setId(21L);
+        successful.setJobType("KNOWLEDGE_INDEX_BOOK");
+        successful.setJobKey("book:101:action:stable");
+        successful.setStatus(AsyncJobService.STATUS_SUCCESS);
+        when(repository.findLatestByTypeAndKey("KNOWLEDGE_INDEX_BOOK", "book:101:action:stable"))
+            .thenReturn(Optional.of(successful));
+
+        AsyncJobSubmitResponse response = service.submitOrReuseSuccessful(
+            "KNOWLEDGE_INDEX_BOOK",
+            "book:101:action:stable",
+            "book:101",
+            "{\"bookId\":101}",
+            7L,
+            300L
+        );
+
+        assertThat(response.getJobId()).isEqualTo(21L);
+        assertThat(response.getStatus()).isEqualTo(AsyncJobService.STATUS_SUCCESS);
+        assertThat(response.getReused()).isTrue();
+        verify(lockService, never()).tryAcquire(
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyString(),
+            anyLong()
+        );
+        verify(repository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void shouldFailClosedWhenSubmissionLockIsHeldBeforeJobBecomesVisible() {
+        AsyncJobRepository repository = mock(AsyncJobRepository.class);
+        AsyncJobLockService lockService = mock(AsyncJobLockService.class);
+        AsyncJobService service = new AsyncJobService(repository, lockService);
+
+        when(repository.findLatestByTypeAndKey("KNOWLEDGE_INDEX_BOOK", "book:101:action:stable"))
+            .thenReturn(Optional.empty());
+        when(lockService.tryAcquire(
+            eq("lock:KNOWLEDGE_INDEX_BOOK:book:101:action:stable"),
+            org.mockito.ArgumentMatchers.anyString(),
+            eq(300L)
+        )).thenReturn(false);
+
+        assertThatThrownBy(() -> service.submitOrReuseSuccessful(
+            "KNOWLEDGE_INDEX_BOOK",
+            "book:101:action:stable",
+            "book:101",
+            "{\"bookId\":101}",
+            7L,
+            300L
+        ))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("idempotency lock");
+
+        verify(repository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
     @Test

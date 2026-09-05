@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { Iphone, Lock, Message, RefreshRight } from '@element-plus/icons-vue';
 import { authApi } from '@/api/auth';
 import { systemApi } from '@/api/system';
 import { HOME_ROUTE } from '@/constants/auth';
-import { DEFAULT_PLATFORM } from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
 import { useAuthStore } from '@/stores/auth';
 import TurnstileWidget from '@/components/auth/TurnstileWidget.vue';
+import ElasticMeshBackground from '@/components/auth/ElasticMeshBackground.vue';
+import { useXpbdSelector } from '@/composables/useXpbdSelector';
 
 type AuthMode = 'password-login' | 'sms-login' | 'register' | 'reset-password';
 
@@ -124,14 +125,20 @@ const smsBizType = computed<'REGISTER' | 'LOGIN' | 'RESET_PASSWORD'>(() => {
   return 'LOGIN';
 });
 const showTurnstile = computed(() => showSmsCodeField.value && state.turnstileEnabled && !!state.turnstileSiteKey);
-
-function triggerLoginBootstrap() {
-  try {
-    void systemApi.loginBootstrap({ platform: DEFAULT_PLATFORM }).catch(() => undefined);
-  } catch {
-    // ignore
+const authModeIndex = computed(() => {
+  if (isPasswordLoginMode.value) {
+    return 0;
   }
-}
+  if (isRegisterMode.value) {
+    return 1;
+  }
+  return -1;
+});
+const { position: authModePosition } = useXpbdSelector(authModeIndex);
+const authModeIndicatorStyle = computed(() => ({
+  '--auth-mode-position': String(authModePosition.value),
+  '--auth-mode-opacity': authModeIndex.value >= 0 ? '1' : '0',
+}));
 
 function resetTransientState() {
   state.debugVerifyCode = '';
@@ -360,6 +367,10 @@ onMounted(() => {
   void loadAuthPublicConfig();
 });
 
+onBeforeUnmount(() => {
+  stopCountdown();
+});
+
 async function handleSubmit() {
   if (!validateForm()) {
     return;
@@ -375,7 +386,6 @@ async function handleSubmit() {
         deviceLabel: getDeviceLabel(),
       });
       authStore.applyTokenResponse(response.data.data);
-      triggerLoginBootstrap();
       await router.push(HOME_ROUTE);
       return;
     }
@@ -388,7 +398,6 @@ async function handleSubmit() {
         deviceLabel: getDeviceLabel(),
       });
       authStore.applyTokenResponse(response.data.data);
-      triggerLoginBootstrap();
       await router.push(HOME_ROUTE);
       return;
     }
@@ -401,7 +410,6 @@ async function handleSubmit() {
         password: form.password,
       });
       authStore.applyTokenResponse(response.data.data);
-      triggerLoginBootstrap();
       await router.push(HOME_ROUTE);
       return;
     }
@@ -430,6 +438,7 @@ async function handleSubmit() {
 
 <template>
   <div class="login-page">
+    <ElasticMeshBackground class="login-page__mesh" />
     <section class="login-page__panel login-page__hero">
       <div class="login-page__hero-inner">
         <p class="login-page__eyebrow">NOVAL STUDIO</p>
@@ -456,7 +465,8 @@ async function handleSubmit() {
 
     <section class="login-page__panel login-page__form-wrap">
       <div class="login-card">
-        <div class="login-card__mode">
+        <div class="login-card__mode" :style="authModeIndicatorStyle">
+          <span class="login-card__mode-indicator" aria-hidden="true"></span>
           <button
             class="login-card__mode-item"
             :class="{ 'is-active': isPasswordLoginMode }"
@@ -619,26 +629,39 @@ async function handleSubmit() {
   min-height: 100vh;
   max-width: 100%;
   overflow-x: clip;
-  background:
-    radial-gradient(circle at top left, rgba(92, 124, 250, 0.22), transparent 40%),
-    radial-gradient(circle at bottom right, rgba(255, 147, 186, 0.18), transparent 36%),
-    linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
+  position: relative;
+  isolation: isolate;
+  user-select: none;
+  background: linear-gradient(135deg, var(--color-bg), var(--color-bg-secondary) 58%, color-mix(in srgb, var(--color-primary-soft) 46%, var(--color-bg-secondary)));
 }
 
 .login-page__panel {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  z-index: 1;
 }
 
 .login-page__hero {
   padding: 3rem;
   background:
-    radial-gradient(circle at 20% 30%, rgba(92, 124, 250, 0.18), transparent 50%),
-    radial-gradient(circle at 72% 18%, rgba(255, 147, 186, 0.16), transparent 34%),
-    linear-gradient(160deg, rgba(255, 255, 255, 0.12), transparent);
+    linear-gradient(145deg, color-mix(in srgb, var(--color-primary-soft) 42%, transparent), transparent 54%),
+    linear-gradient(320deg, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 58%),
+    linear-gradient(160deg, color-mix(in srgb, var(--color-surface) 10%, transparent), transparent);
   position: relative;
   overflow: hidden;
+}
+
+.login-page__mesh {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.login-page :deep(input),
+.login-page :deep(textarea) {
+  user-select: text;
 }
 
 .login-page__hero::before {
@@ -649,7 +672,8 @@ async function handleSubmit() {
   width: 320px;
   height: 320px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(92, 124, 250, 0.18), transparent 70%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-secondary) 20%, transparent), transparent 70%);
+  display: none;
   pointer-events: none;
 }
 
@@ -661,7 +685,8 @@ async function handleSubmit() {
   width: 240px;
   height: 240px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 147, 186, 0.16), transparent 70%);
+  background: linear-gradient(315deg, color-mix(in srgb, var(--color-accent) 18%, transparent), transparent 70%);
+  display: none;
   pointer-events: none;
 }
 
@@ -684,11 +709,11 @@ async function handleSubmit() {
 
 .login-page__headline {
   margin: 0;
-  font-size: clamp(2.4rem, 4vw, 3.6rem);
+  font-size: 3.4rem;
   line-height: 1.1;
   font-family: var(--font-heading);
   color: var(--color-primary);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .login-page__description {
@@ -722,9 +747,9 @@ async function handleSubmit() {
 
 .login-page__form-wrap {
   padding: 2rem;
-  background: color-mix(in srgb, var(--color-glass) 34%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--color-glass) 16%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .login-card {
@@ -740,6 +765,19 @@ async function handleSubmit() {
   box-shadow: var(--shadow-soft);
   backdrop-filter: blur(20px) saturate(1.14);
   -webkit-backdrop-filter: blur(20px) saturate(1.14);
+  animation: login-card-settle 480ms var(--motion-spring) both;
+}
+
+@keyframes login-card-settle {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .login-card__mode {
@@ -753,6 +791,28 @@ async function handleSubmit() {
   -webkit-backdrop-filter: blur(14px) saturate(1.12);
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   box-shadow: var(--shadow-card);
+  position: relative;
+  overflow: hidden;
+}
+
+.login-card__mode-indicator {
+  position: absolute;
+  z-index: 0;
+  top: 0.35rem;
+  bottom: 0.35rem;
+  left: 0.35rem;
+  width: calc((100% - 1.2rem) / 2);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
+    color-mix(in srgb, var(--color-glass) 92%, transparent);
+  box-shadow: var(--shadow-glow);
+  opacity: var(--auth-mode-opacity);
+  pointer-events: none;
+  transform: translate3d(calc(var(--auth-mode-position) * (100% + 0.5rem)), 0, 0);
+  transition: opacity var(--motion-fast) ease;
+  will-change: transform;
 }
 
 .login-card__mode-item {
@@ -764,16 +824,23 @@ async function handleSubmit() {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  position: relative;
+  z-index: 1;
+  transition: transform var(--motion-fast) var(--motion-spring),
+    background var(--motion-fast) ease, color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+.login-card__mode-item:active,
+.login-card__link:active {
+  transform: scale(var(--motion-press-scale));
 }
 
 .login-card__mode-item.is-active {
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.1)),
-    color-mix(in srgb, var(--color-glass) 92%, transparent);
-  border-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  background: transparent;
+  border-color: transparent;
   color: var(--color-primary);
-  box-shadow: var(--shadow-glow);
+  box-shadow: none;
 }
 
 .login-card__heading {
@@ -812,6 +879,7 @@ async function handleSubmit() {
   color: var(--color-accent-strong);
   cursor: pointer;
   font: inherit;
+  transition: color var(--motion-fast) ease, transform var(--motion-fast) var(--motion-spring);
 }
 
 .login-card__link-icon {
@@ -847,12 +915,17 @@ async function handleSubmit() {
   .login-page {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
-    min-height: auto;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 100dvh;
   }
 
   .login-page__hero {
     padding: 1.5rem 1.25rem 0.75rem;
     align-items: flex-start;
+    background:
+      linear-gradient(145deg, color-mix(in srgb, var(--color-primary-soft) 24%, transparent), transparent 62%),
+      linear-gradient(320deg, color-mix(in srgb, var(--color-accent) 7%, transparent), transparent 64%),
+      transparent;
   }
 
   .login-page__hero-inner {
@@ -875,13 +948,21 @@ async function handleSubmit() {
 
   .login-page__form-wrap {
     align-items: flex-start;
-    padding: 0.75rem 1.25rem 1.5rem;
+    min-height: 0;
+    padding: 0.75rem 1rem calc(1.25rem + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--color-glass) 8%, transparent);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
   }
 
   .login-card {
     width: 100%;
     padding: 1.35rem;
     border-radius: 1.25rem;
+  }
+
+  .login-card__mode-item {
+    min-height: 44px;
   }
 
   .login-card__sms-row {
@@ -897,6 +978,68 @@ async function handleSubmit() {
   .login-page__hero {
     padding: 2rem;
     min-height: 220px;
+  }
+}
+
+@media (max-height: 520px) and (orientation: landscape) and (max-width: 900px) {
+  .login-page {
+    grid-template-columns: minmax(280px, 0.85fr) minmax(380px, 1.15fr);
+    grid-template-rows: 1fr;
+    min-height: 100dvh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .login-page__hero {
+    min-height: 0;
+    padding: 1.25rem 1.75rem;
+    align-items: center;
+  }
+
+  .login-page__hero-inner {
+    gap: 0.45rem;
+    max-width: 320px;
+  }
+
+  .login-page__headline {
+    font-size: 2.15rem;
+  }
+
+  .login-page__description {
+    font-size: 0.84rem;
+    line-height: 1.5;
+  }
+
+  .login-page__features {
+    display: none;
+  }
+
+  .login-page__form-wrap {
+    height: 100dvh;
+    padding: 0.75rem 1.25rem;
+    overflow-y: auto;
+  }
+
+  .login-card {
+    gap: 0.7rem;
+    padding: 1rem 1.15rem;
+    margin: auto 0;
+  }
+
+  .login-card__heading {
+    gap: 0.1rem;
+  }
+
+  .login-card__title {
+    font-size: 1.3rem;
+  }
+
+  .login-card__form {
+    gap: 0.25rem;
+  }
+
+  .login-card__form :deep(.el-form-item) {
+    margin-bottom: 0.35rem;
   }
 }
 </style>

@@ -66,12 +66,20 @@ describe('AdminMemoryView', () => {
 
     expect(knowledgeApi.listMemories).toHaveBeenCalledWith({ limit: 100 });
     expect(knowledgeApi.listMemoryCandidates).toHaveBeenCalledWith({ limit: 100 });
-    expect(wrapper.text()).toContain('Agent 记忆');
+    expect(wrapper.text()).toContain('Agent 记忆审核');
     expect(wrapper.text()).toContain('已确认记忆');
     expect(wrapper.text()).toContain('记忆候选');
     expect(wrapper.text()).toContain('three terminal setting');
     expect(wrapper.text()).toContain('likes fast starts');
     expect(wrapper.text()).toContain('trace-1');
+    expect(wrapper.text()).toContain('项目');
+    expect(wrapper.text()).toContain('用户');
+    expect(wrapper.text()).toContain('事实设定');
+    expect(wrapper.text()).toContain('用户偏好');
+    expect(wrapper.text()).toContain('已确认');
+    expect(wrapper.text()).toContain('待审核');
+    expect(wrapper.text()).not.toContain('confirmed');
+    expect(wrapper.text()).not.toContain('candidate');
 
     await wrapper.find('[data-test="memory-user-filter"]').setValue('7');
     await wrapper.find('[data-test="memory-project-filter"]').setValue('900');

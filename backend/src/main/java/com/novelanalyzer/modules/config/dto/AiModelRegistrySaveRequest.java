@@ -1,5 +1,6 @@
 package com.novelanalyzer.modules.config.dto;
 
+import com.novelanalyzer.modules.config.model.AiProviderRoutingPolicy;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 
@@ -10,6 +11,8 @@ public class AiModelRegistrySaveRequest {
 
     private String defaultModelKey;
     @Valid
+    private AiProviderRoutingPolicy providerRoutingPolicy;
+    @Valid
     @NotEmpty(message = "models must not be empty")
     private List<AiModelRegistryModelRequest> models = new ArrayList<>();
 
@@ -19,6 +22,14 @@ public class AiModelRegistrySaveRequest {
 
     public void setDefaultModelKey(String defaultModelKey) {
         this.defaultModelKey = defaultModelKey;
+    }
+
+    public AiProviderRoutingPolicy getProviderRoutingPolicy() {
+        return providerRoutingPolicy;
+    }
+
+    public void setProviderRoutingPolicy(AiProviderRoutingPolicy providerRoutingPolicy) {
+        this.providerRoutingPolicy = providerRoutingPolicy;
     }
 
     public List<AiModelRegistryModelRequest> getModels() {

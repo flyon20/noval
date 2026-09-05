@@ -245,6 +245,186 @@ class RetrievalFusionTest(unittest.TestCase):
         self.assertEqual({"CHAPTER": 1, "RANK": 2}, diagnostics["inputSourceTypeCounts"])
         self.assertIn("trend_quota_selection", diagnostics["reasonTags"])
 
+    def test_dedupes_project_evidence_by_generation_and_content_hash(self) -> None:
+        structured = KnowledgeSource(
+            documentId=101,
+            score=0.82,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            chapterVersion=3,
+            contentHash="content-hash-101",
+            sourceType="PROJECT_SCENE",
+            sourceRefId=101,
+            chapterNo=12,
+            retrievalBackend="structured",
+            title="Signal scene",
+            preview="structured evidence",
+        )
+        vector = KnowledgeSource(
+            chunkId=201,
+            score=0.81,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            chapterVersion=3,
+            contentHash="content-hash-101",
+            sourceType="PROJECT_SCENE",
+            sourceRefId=201,
+            chapterNo=12,
+            retrievalBackend="qdrant",
+            title="Signal scene",
+            preview="vector duplicate",
+        )
+
+        sources = fuse_and_rerank_sources(
+            request=KnowledgeChatRequest(question="Where was the signal introduced?"),
+            state={"intent": "answer_question", "task_graph": {"tasks": [{"type": "project_knowledge_qa"}]}},
+            sources=[vector, structured],
+            limit=5,
+        )
+
+        self.assertEqual(1, len(sources))
+        self.assertEqual("structured", sources[0].retrievalBackend)
+
+    def test_project_selection_preserves_distinct_vector_backend(self) -> None:
+        structured_one = KnowledgeSource(
+            documentId=101,
+            score=0.95,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            contentHash="structured-101",
+            sourceType="PROJECT_CHAPTER",
+            sourceRefId=101,
+            retrievalBackend="structured",
+            title="Structured one",
+            preview="first structured fact",
+        )
+        structured_two = KnowledgeSource(
+            documentId=102,
+            score=0.94,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            contentHash="structured-102",
+            sourceType="PROJECT_CHAPTER",
+            sourceRefId=102,
+            retrievalBackend="structured",
+            title="Structured two",
+            preview="second structured fact",
+        )
+        vector = KnowledgeSource(
+            chunkId=201,
+            score=0.80,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            contentHash="vector-201",
+            sourceType="PROJECT_CHAPTER",
+            sourceRefId=201,
+            retrievalBackend="qdrant",
+            title="Semantic match",
+            preview="a distinct semantic scene match",
+        )
+        state = {"intent": "answer_question", "task_graph": {"tasks": [{"type": "project_knowledge_qa"}]}}
+
+        sources = fuse_and_rerank_sources(
+            request=KnowledgeChatRequest(question="Where is the semantic scene foreshadowed?"),
+            state=state,
+            sources=[structured_one, structured_two, vector],
+            limit=2,
+        )
+
+        self.assertEqual({"structured", "qdrant"}, {source.retrievalBackend for source in sources})
+        diagnostics = state["retrieval_diagnostics"]
+        self.assertEqual({"qdrant": 1, "structured": 1}, diagnostics["selectedBackendCounts"])
+        self.assertTrue(diagnostics["vectorUsed"])
+        self.assertIn("project_backend_diversity", diagnostics["reasonTags"])
+
+    def test_continuity_retrieval_prioritizes_story_graph_evidence(self) -> None:
+        chapter = KnowledgeSource(
+            documentId=101,
+            score=0.80,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            contentHash="chapter-hash",
+            sourceType="PROJECT_CHAPTER",
+            sourceRefId=101,
+            chapterNo=12,
+            retrievalBackend="structured",
+            title="Chapter evidence",
+            preview="The motivation changed.",
+        )
+        graph = KnowledgeSource(
+            sourceRefId=202,
+            score=0.80,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            contentHash="graph-hash",
+            sourceType="PROJECT_GRAPH",
+            chapterNo=12,
+            retrievalBackend="graph",
+            title="MOTIVATION_CONFLICT",
+            preview="Evidence-backed conflict edge.",
+        )
+
+        state = {"intent": "answer_question", "task_graph": {"tasks": [{"type": "continuity_check"}]}}
+        sources = fuse_and_rerank_sources(
+            request=KnowledgeChatRequest(question="Check whether the motivation is consistent."),
+            state=state,
+            sources=[chapter, graph],
+            limit=5,
+        )
+
+        self.assertEqual("PROJECT_GRAPH", sources[0].sourceType)
+        self.assertIn("intent_aware_project_rerank", state["retrieval_diagnostics"]["reasonTags"])
+
+    def test_project_evidence_tie_break_is_stable(self) -> None:
+        first = KnowledgeSource(
+            documentId=202,
+            score=0.80,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            contentHash="hash-b",
+            sourceType="PROJECT_CHAPTER",
+            sourceRefId=202,
+            title="B evidence",
+            preview="B",
+        )
+        second = KnowledgeSource(
+            documentId=101,
+            score=0.80,
+            projectId=91,
+            workId=911,
+            generationId=701,
+            contentHash="hash-a",
+            sourceType="PROJECT_CHAPTER",
+            sourceRefId=101,
+            title="A evidence",
+            preview="A",
+        )
+        state = {"intent": "answer_question", "task_graph": {"tasks": [{"type": "project_knowledge_qa"}]}}
+
+        forward = fuse_and_rerank_sources(
+            request=KnowledgeChatRequest(question="recall chapter evidence"),
+            state=dict(state),
+            sources=[first, second],
+            limit=5,
+        )
+        reverse = fuse_and_rerank_sources(
+            request=KnowledgeChatRequest(question="recall chapter evidence"),
+            state=dict(state),
+            sources=[second, first],
+            limit=5,
+        )
+
+        self.assertEqual([101, 202], [source.documentId for source in forward])
+        self.assertEqual([source.documentId for source in forward], [source.documentId for source in reverse])
+
 
 if __name__ == "__main__":
     unittest.main()

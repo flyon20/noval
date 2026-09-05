@@ -67,6 +67,7 @@ class MemoryCandidate(BaseModel):
     type: Literal["fact", "preference", "constraint", "risk", "decision", "revision"]
     content: str
     confidence: float = 0.0
+    factKey: str | None = None
     sourceTraceId: str | None = None
     reason: str | None = None
 

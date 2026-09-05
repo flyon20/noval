@@ -1,0 +1,2 @@
+# Shell entrypoints must remain executable in Linux deployment archives.
+*.sh text eol=lf

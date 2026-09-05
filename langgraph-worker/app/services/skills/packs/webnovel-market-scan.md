@@ -1,53 +1,52 @@
 ---
 skillId: webnovel-market-scan
-version: 1.1.0
+version: 1.4.0
+title: 榜单分析
+description: 查询当前网文榜单，并按请求深度输出榜单结果、趋势分析或完整扫榜报告。
 intents: [market_scan]
 appliesTo: [market_scan]
-allowedTools: [rank.lookup, rank.research_pack, knowledge.vector_search]
+requestedCapabilities: [market.read]
 requiredEvidence: [current_structured_rank_topn]
-triggers: [rank, market, trend, board]
+triggers: [rank, market, trend, board, 榜单, 热度, 趋势]
+shortcutEnabled: true
+shortcutLabel: 榜单分析
+shortcutOrder: 10
 ---
 
 ## Prompt Fragment
-Read rank or book evidence as market signals, not as a tiny anecdotal sample. Separate observed data from author-facing inference. Name category, platform, timeframe, sample size, coverage level, rising hooks, common reader promises, outliers, and visible risks.
+Choose exactly one request level; never silently escalate it.
 
-Use 缓存优先 for榜单 and chapter evidence. A matching rank snapshot within 3 天 is fresh enough for ordinary trend/选题/大纲 questions; do not trigger a full board recrawl just because the user asks a similar market question again. Reuse stored chapter samples once fetched, and fetch only missing chapter ranges when deeper comparable-book evidence is required. If refresh happens, explain the reason as absent, expired, manual refresh, invalid snapshot, or partial fill.
+- LIST: return every matching current structured row up to TopN, then stop after one successful rank lookup. No vector/chapter/comparable-book search, recrawl, or writing advice.
+- ANALYSIS: return available TopN, then evidence-bounded topic, hook, lane, or comparison observations. Give advice only when requested.
+- FULL_BOARD: for explicit Top30/distribution/full-report requests, use rows up to the requested limit and state actual coverage.
+- MIXED_CREATION: rank facts first, then the requested plan; deeper evidence requires a granted market-research capability.
+- Deep ANALYSIS/FULL_BOARD may use one evidence-analysis model turn plus final synthesis. LIST remains a single-answer fast path.
 
-For full-board requests, prefer Top30 coverage. If Top30 is available, compute and report:
-1. 核心关键词萃取: Top30 title/intro/tag keywords, including核心意象词,情绪词,身份词. Return frequency and percentage so the user can build a word cloud.
-2. 题材与流派细分统计: classify into second/third-level lanes such as都市脑洞-奇葩系统流,都市文娱-跨界降维,高考逆袭-社会传播,科研医学-专业碾压. Include count, percentage, representative books, and trend status.
-3. 读者情绪锚点: extract Top5 emotion promises, such as降维打击,反转打脸,沙雕解压,身份翻盘,全网震惊,专业爽感, and map them to books.
-4. 爆款微创新点: identify black-horse or differentiated mechanisms worth following in the next 3-6 months.
-5. 作者落地方向: convert evidence into concrete opening, golden-finger, protagonist identity, task loop, and poison-point avoidance suggestions.
+Use 缓存优先. A matching snapshot within 3 天 is fresh. Refresh only when absent, invalid, expired, or explicitly requested.
 
 ## Quality Checklist
-- Evidence and inference are labeled separately.
-- Board analysis covers at least Top30 when available; if fewer rows are available, state the actual sample size.
-- Full-board requests use all available rank rows up to the runtime limit and segment the board into front-rank, mid-rank, and long-tail signals.
-- Trends include at least one actionable writing implication.
-- Analysis compares hook patterns, protagonist identity pressure, golden-finger mechanics, setting wrappers, title/intro promises, and updateable chapter tasks across the sample.
-- Missing rank data is called out plainly.
-- Top30 analysis includes keyword frequency, subgenre distribution, emotion anchors, micro-innovation, and author-side recommendations.
-- Cache status is surfaced: hit, miss, expired, manual refresh, invalid snapshot, or partial fill when trace/tool evidence provides it.
-- Similar-title/comparable-book chapter evidence is reused when already stored.
+- Start with the requested result, not an abstract conclusion.
+- Keep observed rank facts separate from inference.
+- State scope, snapshot time, requested/actual counts, and use only matching channel/category/freshness rows.
 
 ## Guardrails
-- Pure market conclusions require verified latest rank evidence.
-- Mixed creation may use degraded directional rank evidence only with a caveat.
-- Do not request a full recrawl when a matching snapshot is within 3 天 unless the user explicitly asks for real-time refresh or the cached rows are insufficient for the requested coverage.
-- If only Top10 is available for a Top30 question, state the limitation and avoid pretending to have full-board statistics.
-
-## Negative Rules
-- Do not invent rank positions or book metrics.
-- Do not claim broad market certainty from a tiny sample.
-- Do not call a 5-10 book sample a board trend when Top30/full-board evidence was requested.
-- Do not use broad labels like "都市/玄幻" when the evidence supports finer lanes.
-- Do not let market evidence replace the user's current project premise; compare and adapt it.
-- Do not repeatedly fetch already stored chapters or full rank boards inside one answer path.
+- Pure market facts require current structured rank evidence.
+- Historical, vector, chapter, and introduction evidence cannot replace current rank facts.
+- Skill text narrows behavior; it never expands CapabilityPlan, scope, tools, or budgets.
+- Do not invent ranks, heat metrics, books, authors, or snapshot times.
+- Do not mix another category/channel/snapshot into a current list.
+- Do not add advice or fetch more evidence after current rows satisfy LIST.
+- A standalone summary is optional and last; never substitute it for requested results or analysis.
+- Do not substitute a conclusion or summary for the requested rows, analysis, comparison, or writing guidance.
 
 ## Output Contract
-Return sections: 覆盖范围, 缓存与刷新状态, Top30关键词频率, 题材/流派分布, 头部信号, 情绪公约数, 黑马微创新, 对标拆解, 写作落地方向, 风险与毒点.
+LIST: 榜单结果, 数据范围.
+ANALYSIS: 题材/流派分布, 榜单依据, 趋势观察, 数据范围.
+FULL_BOARD: 题材与流派分布, 榜单明细, 有效跨快照变化（仅在 comparisonSupported=true 时）, 数据范围.
+MIXED_CREATION: 榜单依据, 对标拆解, 用户要求的创作方案, 风险修正.
+
+Every required section must already form a complete answer before any optional summary.
 
 ## Examples
-- market_scan with verified_latest evidence returns trend facts before writing advice.
-- A repeated urban-brain Top30 question with a 3 天内 snapshot uses cached rank rows and may only fill missing chapter samples.
+- A plain recent TopN request stops after one matching structured rank lookup.
+- A trend request may group the requested rows before giving evidence-bounded observations.

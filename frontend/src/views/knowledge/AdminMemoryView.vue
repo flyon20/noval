@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { knowledgeApi } from '@/api/knowledge';
 import type { AiMemory, MemoryAdminQuery } from '@/types/knowledge';
+import { knowledgeStatusLabel, memoryScopeLabel, memoryTypeLabel } from '@/utils/knowledgeDisplay';
 
 defineOptions({
   name: 'AdminMemoryView',
@@ -105,22 +106,22 @@ function statusType(status?: string) {
   <main class="admin-memory">
     <header class="memory-header">
       <div>
-        <h1>Agent 记忆</h1>
+        <h1>Agent 记忆审核</h1>
         <p>{{ totalCount }} 条记忆记录</p>
       </div>
       <div class="memory-filters">
         <el-input v-model="userFilter" data-test="memory-user-filter" clearable size="small" placeholder="用户 ID" />
         <el-input v-model="projectFilter" data-test="memory-project-filter" clearable size="small" placeholder="项目 ID" />
         <el-select v-model="statusFilter" clearable size="small" placeholder="状态">
-          <el-option label="candidate" value="candidate" />
-          <el-option label="confirmed" value="confirmed" />
-          <el-option label="rejected" value="rejected" />
-          <el-option label="deleted" value="deleted" />
+          <el-option label="待审核" value="candidate" />
+          <el-option label="已确认" value="confirmed" />
+          <el-option label="已拒绝" value="rejected" />
+          <el-option label="已删除" value="deleted" />
         </el-select>
         <el-select v-model="scopeFilter" clearable size="small" placeholder="范围">
-          <el-option label="project" value="project" />
-          <el-option label="user" value="user" />
-          <el-option label="thread" value="thread" />
+          <el-option label="项目" value="project" />
+          <el-option label="用户" value="user" />
+          <el-option label="会话" value="thread" />
         </el-select>
         <el-button size="small" type="primary" data-test="memory-search" @click="search">搜索</el-button>
       </div>
@@ -135,13 +136,17 @@ function statusType(status?: string) {
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="userId" label="用户" width="90" />
         <el-table-column prop="projectId" label="项目" width="100" />
-        <el-table-column prop="scope" label="范围" width="100" />
-        <el-table-column prop="memoryType" label="类型" width="110" />
+        <el-table-column label="范围" width="100">
+          <template #default="{ row }">{{ memoryScopeLabel(row.scope) }}</template>
+        </el-table-column>
+        <el-table-column label="类型" width="110">
+          <template #default="{ row }">{{ memoryTypeLabel(row.memoryType) }}</template>
+        </el-table-column>
         <el-table-column prop="content" label="内容" min-width="260" show-overflow-tooltip />
         <el-table-column prop="sourceTraceId" label="来源 Trace" min-width="150" show-overflow-tooltip />
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <el-tag :type="statusType(row.status)" size="small">{{ knowledgeStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="170" fixed="right">
@@ -164,13 +169,17 @@ function statusType(status?: string) {
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="userId" label="用户" width="90" />
         <el-table-column prop="projectId" label="项目" width="100" />
-        <el-table-column prop="scope" label="范围" width="100" />
-        <el-table-column prop="memoryType" label="类型" width="110" />
+        <el-table-column label="范围" width="100">
+          <template #default="{ row }">{{ memoryScopeLabel(row.scope) }}</template>
+        </el-table-column>
+        <el-table-column label="类型" width="110">
+          <template #default="{ row }">{{ memoryTypeLabel(row.memoryType) }}</template>
+        </el-table-column>
         <el-table-column prop="content" label="内容" min-width="260" show-overflow-tooltip />
         <el-table-column prop="sourceTraceId" label="来源 Trace" min-width="150" show-overflow-tooltip />
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <el-tag :type="statusType(row.status)" size="small">{{ knowledgeStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="210" fixed="right">
@@ -195,9 +204,9 @@ function statusType(status?: string) {
         <dt>项目</dt>
         <dd>{{ selected.projectId || '-' }}</dd>
         <dt>范围</dt>
-        <dd>{{ selected.scope || '-' }}</dd>
+        <dd>{{ memoryScopeLabel(selected.scope) }}</dd>
         <dt>类型</dt>
-        <dd>{{ selected.memoryType || '-' }}</dd>
+        <dd>{{ memoryTypeLabel(selected.memoryType) }}</dd>
         <dt>内容</dt>
         <dd>{{ selected.content || '-' }}</dd>
         <dt>摘要</dt>

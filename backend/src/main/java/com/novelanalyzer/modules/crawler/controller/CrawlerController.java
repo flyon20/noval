@@ -1,6 +1,11 @@
 package com.novelanalyzer.modules.crawler.controller;
 
+import com.novelanalyzer.common.context.TraceIdHolder;
+import com.novelanalyzer.common.context.AuthUser;
+import com.novelanalyzer.common.context.AuthUserHolder;
+import com.novelanalyzer.common.exception.BusinessException;
 import com.novelanalyzer.common.result.Result;
+import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.crawler.dto.CrawlerBookSearchRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerChapterRequest;
 import com.novelanalyzer.modules.crawler.dto.CrawlerRankRequest;
@@ -20,6 +25,12 @@ import com.novelanalyzer.modules.security.annotation.RequireRole;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,6 +41,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Supplier;
 
 @Validated
 @RestController
@@ -38,14 +52,24 @@ import java.util.List;
 public class CrawlerController {
 
     private final CrawlerService crawlerService;
+    private final AsyncTaskExecutor rankRefreshTaskExecutor;
 
     public CrawlerController(CrawlerService crawlerService) {
+        this(crawlerService, Runnable::run);
+    }
+
+    @Autowired
+    public CrawlerController(CrawlerService crawlerService,
+                             @Qualifier("crawlerRankRefreshTaskExecutor") AsyncTaskExecutor rankRefreshTaskExecutor) {
         this.crawlerService = crawlerService;
+        this.rankRefreshTaskExecutor = rankRefreshTaskExecutor;
     }
 
     @PostMapping("/rank")
-    public Result<List<RankBookItemVO>> rank(@Valid @RequestBody CrawlerRankRequest request) {
-        return Result.success(crawlerService.getRank(request));
+    public CompletableFuture<ResponseEntity<Result<List<RankBookItemVO>>>> rank(
+        @Valid @RequestBody CrawlerRankRequest request
+    ) {
+        return submitRankOperation(() -> crawlerService.getRank(request));
     }
 
     @GetMapping("/boards")
@@ -64,8 +88,51 @@ public class CrawlerController {
     }
 
     @PostMapping("/rank/refresh")
-    public Result<RankRefreshResultVO> refresh(@Valid @RequestBody CrawlerRankRequest request) {
-        return Result.success(crawlerService.refreshRankBoard(request));
+    public CompletableFuture<ResponseEntity<Result<RankRefreshResultVO>>> refresh(
+        @Valid @RequestBody CrawlerRankRequest request
+    ) {
+        if (request == null || request.getIdempotencyKey() == null || request.getIdempotencyKey().isBlank()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "idempotencyKey is required for rank refresh");
+        }
+        if (CrawlerRankRequest.REFRESH_MODE_FORCE.equalsIgnoreCase(request.getRefreshMode())
+            && !AuthUserHolder.getRoles().contains("ADMIN")) {
+            throw new BusinessException(ResultCode.FORBIDDEN, "FORCE rank refresh requires administrator role");
+        }
+        return submitRankOperation(() -> crawlerService.refreshRankBoard(request));
+    }
+
+    private <T> CompletableFuture<ResponseEntity<Result<T>>> submitRankOperation(Supplier<T> operation) {
+        AuthUser caller = AuthUserHolder.get();
+        String traceId = TraceIdHolder.get();
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                if (caller != null) {
+                    AuthUserHolder.set(caller);
+                }
+                TraceIdHolder.set(traceId);
+                try {
+                    return ResponseEntity.ok(Result.success(operation.get()));
+                } catch (CrawlerService.RankRefreshInProgressException ex) {
+                    return rankRefreshConflict();
+                } finally {
+                    AuthUserHolder.clear();
+                    TraceIdHolder.clear();
+                }
+            }, rankRefreshTaskExecutor);
+        } catch (RejectedExecutionException ex) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "rank refresh worker is busy");
+        }
+    }
+
+    private <T> ResponseEntity<Result<T>> rankRefreshConflict() {
+        Result<T> response = new Result<>();
+        response.setCode(HttpStatus.CONFLICT.value());
+        response.setMessage(CrawlerService.RANK_REFRESH_IN_PROGRESS);
+        response.setTimestamp(System.currentTimeMillis());
+        response.setTraceId(TraceIdHolder.get());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .header(HttpHeaders.RETRY_AFTER, "1")
+            .body(response);
     }
 
     @GetMapping("/rank/page")
@@ -98,6 +165,11 @@ public class CrawlerController {
     @PostMapping("/chapters")
     public Result<List<ChapterVO>> chapters(@Valid @RequestBody CrawlerChapterRequest request) {
         return Result.success(crawlerService.getChapters(request));
+    }
+
+    @PostMapping("/chapters/status")
+    public Result<List<ChapterVO>> chapterStatus(@Valid @RequestBody CrawlerChapterRequest request) {
+        return Result.success(crawlerService.getChapterStatus(request));
     }
 
     @PostMapping("/chapters/refresh")

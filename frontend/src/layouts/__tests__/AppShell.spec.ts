@@ -1,7 +1,7 @@
 import ElementPlus from 'element-plus';
 import fs from 'node:fs';
 import path from 'node:path';
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import AppShell from '../AppShell.vue';
 
@@ -13,6 +13,25 @@ describe('AppShell', () => {
     expect(source).toContain(':deep(.trend-chart-card)');
     expect(source).toContain(':deep(.analysis-result-card)');
     expect(source).toContain('backdrop-filter: none;');
+  });
+
+  test('defines one bounded motion contract with a global reduced-motion fallback', () => {
+    const tokenSource = fs.readFileSync(path.resolve(__dirname, '../../styles/tokens.scss'), 'utf-8');
+    const baseSource = fs.readFileSync(path.resolve(__dirname, '../../styles/base.scss'), 'utf-8');
+
+    expect(tokenSource).toContain('--motion-spring:');
+    expect(tokenSource).toContain('--motion-press-scale:');
+    expect(baseSource).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(baseSource).toContain('transition-duration: 1ms !important;');
+  });
+
+  test('adds a static workspace field and bounded lift only to actionable surfaces', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppShell.vue'), 'utf-8');
+
+    expect(source).toContain('--workspace-grid-size: 64px;');
+    expect(source).toContain('.app-shell__surface::before');
+    expect(source).toContain('@media (hover: hover) and (pointer: fine)');
+    expect(source).toContain('transform: translateY(-2px);');
   });
 
   test('keeps desktop sidebar fixed while preserving mobile hidden navigation', () => {
@@ -53,6 +72,79 @@ describe('AppShell', () => {
     expect(source).toContain('@open-knowledge-projects');
     expect(source).toContain('data-test="knowledge-mobile-project-drawer"');
     expect(source).toContain('size="50%"');
+  });
+
+  test('constrains knowledge chat rows to the available shell width', () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../../views/knowledge/KnowledgeChatView.vue'),
+      'utf-8',
+    );
+
+    expect(source).toMatch(
+      /\.knowledge-chat\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/s,
+    );
+    expect(source).toMatch(
+      /\.knowledge-chat__toolbar,[^{]+\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s,
+    );
+    expect(source).toMatch(
+      /\.knowledge-chat__skill-shortcuts\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s,
+    );
+    expect(source).toMatch(
+      /\.knowledge-chat__skill-options\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;/s,
+    );
+    expect(source).toMatch(
+      /\.knowledge-chat__skill-option\s*\{[^}]*min-height:\s*44px;/s,
+    );
+  });
+
+  test('locks document scrolling only while the mobile knowledge chat route is active', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppShell.vue'), 'utf-8');
+    const baseSource = fs.readFileSync(path.resolve(__dirname, '../../styles/base.scss'), 'utf-8');
+
+    expect(source).toContain('knowledge-chat-route');
+    expect(source).toContain("document.documentElement.classList.toggle('knowledge-chat-route', locked)");
+    expect(source).toContain("document.body.classList.toggle('knowledge-chat-route', locked)");
+    expect(source).toContain("syncKnowledgeRouteScrollLock(false)");
+    expect(baseSource).toContain('body.knowledge-chat-route');
+    expect(baseSource).toContain('padding-bottom: 0;');
+  });
+
+  test('cleans the document scroll lock when leaving the knowledge route', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/knowledge', component: { template: '<div />' } },
+        { path: '/rank', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/knowledge');
+
+    const wrapper = mount(AppShell, {
+      props: {
+        username: 'demo',
+        roles: ['USER'],
+      },
+      slots: {
+        default: '<div>page body</div>',
+      },
+      global: {
+        plugins: [router, ElementPlus],
+        stubs: {
+          KnowledgeProjectSpace: true,
+        },
+      },
+    });
+
+    await flushPromises();
+    expect(document.documentElement.classList.contains('knowledge-chat-route')).toBe(true);
+    expect(document.body.classList.contains('knowledge-chat-route')).toBe(true);
+
+    await router.push('/rank');
+    await flushPromises();
+    expect(document.documentElement.classList.contains('knowledge-chat-route')).toBe(false);
+    expect(document.body.classList.contains('knowledge-chat-route')).toBe(false);
+
+    wrapper.unmount();
   });
 
   test('does not clip desktop page-level sticky controls', () => {

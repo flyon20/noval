@@ -71,7 +71,11 @@ class ToolRegistryIntegrationTest(unittest.IsolatedAsyncioTestCase):
         tool_names = [run["name"] for run in tool_runs]
         self.assertIn("rank.lookup", tool_names)
         self.assertIn("rank.research_pack", tool_names)
-        self.assertTrue(any(run.get("input", {}).get("taskType") == "market_scan" for run in tool_runs))
+        # Trace projection must not retain raw tool input bodies.
+        self.assertTrue(all("input" not in run for run in tool_runs))
+        self.assertTrue(any(run.get("inputHash") for run in tool_runs))
+        full_runs = response.resultJson.get("toolRuns") or []
+        self.assertTrue(any((run.get("input") or {}).get("taskType") == "market_scan" for run in full_runs))
 
 
 if __name__ == "__main__":

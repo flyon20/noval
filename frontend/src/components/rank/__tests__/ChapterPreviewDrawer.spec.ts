@@ -79,6 +79,31 @@ describe('ChapterPreviewDrawer', () => {
     wrapper.unmount();
   });
 
+  test('keeps a chapter failure and trace visible inside the drawer', async () => {
+    const wrapper = mount(ChapterPreviewDrawer, {
+      attachTo: document.body,
+      props: {
+        modelValue: true,
+        platform: 'fanqie',
+        bookId: 1001,
+        chapterCount: 3,
+        chapters: [],
+        errorMessage: 'timeout of 15000ms exceeded',
+        traceId: 'trace-chapter-timeout',
+      },
+      global: {
+        plugins: [ElementPlus],
+      },
+    });
+
+    await flushPromises();
+
+    const alert = document.body.querySelector('[data-testid="chapter-error"]');
+    expect(alert?.textContent).toContain('timeout of 15000ms exceeded');
+    expect(alert?.textContent).toContain('traceId: trace-chapter-timeout');
+    wrapper.unmount();
+  });
+
   test('emits close when tapping the drawer close button', async () => {
     const wrapper = mount(ChapterPreviewDrawer, {
       attachTo: document.body,

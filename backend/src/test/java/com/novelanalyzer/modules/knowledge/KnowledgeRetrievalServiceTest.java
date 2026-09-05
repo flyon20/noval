@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
@@ -86,6 +87,7 @@ class KnowledgeRetrievalServiceTest {
         )).thenReturn(List.of(new QdrantClient.SearchResult("chunk-point-1", 0.93, Map.of("chunkId", chunkId))));
 
         KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
         request.setQuery("hero goal");
         request.setBookId(bookId);
         request.setPlatform("fanqie");
@@ -114,6 +116,7 @@ class KnowledgeRetrievalServiceTest {
         when(qdrantClient.search(any(), eq(Map.of()), eq(3))).thenReturn(List.of());
 
         KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
         request.setQuery("test query");
         request.setLimit(3);
 
@@ -137,6 +140,7 @@ class KnowledgeRetrievalServiceTest {
         )).thenReturn(List.of());
 
         KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
         request.setQuery("前三章 金手指 钩子");
         request.setBookId(bookId);
         request.setPlatform("fanqie");
@@ -156,7 +160,7 @@ class KnowledgeRetrievalServiceTest {
     }
 
     @Test
-    void shouldFallbackToLexicalKnowledgeChunksWhenVectorSearchReturnsEmpty() {
+    void shouldExcludeOwnerlessAnalysisChunksFromLexicalFallback() {
         long bookId = insertBook();
         long documentId = insertDocument(bookId, "Urban Brainhole Trend", "ANALYSIS", 2002L);
         long chunkId = insertChunk(
@@ -179,6 +183,7 @@ class KnowledgeRetrievalServiceTest {
         )).thenReturn(List.of());
 
         KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
         request.setQuery("life simulator counterattack");
         request.setBookId(bookId);
         request.setPlatform("fanqie");
@@ -188,18 +193,11 @@ class KnowledgeRetrievalServiceTest {
 
         var results = knowledgeRetrievalService.search(request);
 
-        assertThat(results).hasSize(1);
-        assertThat(results.get(0).getChunkId()).isEqualTo(chunkId);
-        assertThat(results.get(0).getBookId()).isEqualTo(bookId);
-        assertThat(results.get(0).getSourceType()).isEqualTo("ANALYSIS");
-        assertThat(results.get(0).getAnalysisType()).isEqualTo("trend");
-        assertThat(results.get(0).getScore()).isGreaterThanOrEqualTo(0.4d);
-        assertThat(results.get(0).getPreview()).contains("Life simulator");
-        assertThat(results.get(0).getRetrievalBackend()).isEqualTo("lexical");
+        assertThat(results).isEmpty();
     }
 
     @Test
-    void shouldFallbackToLexicalKnowledgeChunksWhenEmbeddingProviderFails() {
+    void shouldExcludeOwnerlessAnalysisChunksBeforeEmbeddingFallback() {
         long bookId = insertBook();
         long documentId = insertDocument(bookId, "Simulator Outline", "ANALYSIS", 2003L);
         long chunkId = insertChunk(
@@ -217,6 +215,7 @@ class KnowledgeRetrievalServiceTest {
             .thenThrow(new RuntimeException("embedding provider unavailable"));
 
         KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
         request.setQuery("simulator counterattack outline");
         request.setBookId(bookId);
         request.setPlatform("fanqie");
@@ -226,21 +225,52 @@ class KnowledgeRetrievalServiceTest {
 
         var results = knowledgeRetrievalService.search(request);
 
-        assertThat(results).hasSize(1);
-        assertThat(results.get(0).getChunkId()).isEqualTo(chunkId);
-        assertThat(results.get(0).getSourceType()).isEqualTo("ANALYSIS");
-        assertThat(results.get(0).getPreview()).contains("Simulator counterattack");
-        assertThat(results.get(0).getRetrievalBackend()).isEqualTo("lexical");
-        assertThat(results.get(0).getRetrievalDiagnostics())
-            .containsEntry("retrievalBackend", "lexical")
-            .containsEntry("fallbackBackend", "lexical")
-            .containsEntry("qdrantFailureClass", "RuntimeException")
-            .containsEntry("requestedMinScore", 0.2d)
-            .containsEntry("returnedCount", 1);
-        assertThat(results.get(0).getRetrievalDiagnostics().values())
-            .doesNotContain("embedding provider unavailable");
+        assertThat(results).isEmpty();
+        verify(embeddingClient, never()).embed(any());
         verify(qdrantClient, never()).ensureCollection();
         verify(qdrantClient, never()).search(any(), any(), any(Integer.class));
+    }
+
+    @Test
+    void shouldExcludeOwnerlessAnalysisChunksReturnedByQdrantAndLexicalSearch() {
+        long bookId = insertBook();
+        long documentId = insertDocument(bookId, "Other Tenant Analysis", "ANALYSIS", 2004L);
+        long chunkId = insertChunk(
+            documentId,
+            bookId,
+            "analysis-point-other-tenant",
+            "analysis-other-tenant",
+            "ANALYSIS",
+            2004L,
+            null,
+            "trend",
+            "private tenant analysis secret"
+        );
+        when(embeddingClient.embed("private tenant analysis secret")).thenReturn(List.of(0.1, 0.2, 0.3));
+        doNothing().when(qdrantClient).ensureCollection();
+        when(qdrantClient.search(any(), eq(Map.of("bookId", bookId)), eq(5)))
+            .thenReturn(List.of(new QdrantClient.SearchResult(
+                "analysis-point-other-tenant",
+                0.95,
+                Map.of("chunkId", chunkId, "sourceType", "CHAPTER")
+            )));
+
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
+        request.setQuery("private tenant analysis secret");
+        request.setBookId(bookId);
+        request.setLimit(5);
+
+        assertThat(knowledgeRetrievalService.search(request)).isEmpty();
+    }
+
+    @Test
+    void shouldRejectMissingTrustedUserScopeBeforeRetrieval() {
+        KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setQuery("opening hook");
+
+        assertThatThrownBy(() -> knowledgeRetrievalService.search(request))
+            .hasMessageContaining("user scope required");
     }
 
     @Test
@@ -257,6 +287,7 @@ class KnowledgeRetrievalServiceTest {
         ));
 
         KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
         request.setQuery("trend signal");
         request.setLimit(5);
         request.setMinScore(0.6);
@@ -282,6 +313,7 @@ class KnowledgeRetrievalServiceTest {
         ));
 
         KnowledgeSearchRequest request = new KnowledgeSearchRequest();
+        request.setUserId(7L);
         request.setQuery("default threshold query");
         request.setLimit(5);
 

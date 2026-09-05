@@ -1,10 +1,15 @@
 package com.novelanalyzer.modules.knowledge.vo;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class AgentRuntimeConfigVO {
 
     private String reasoningModeDefault;
     private Integer maxParallelSpecialists;
     private Integer maxTotalInputTokens;
+    private Integer contextCompactionThresholdPercent;
+    private Integer runTokenBudgetPercent;
     private Integer maxFinalOutputTokensFast;
     private Integer maxFinalOutputTokensDeep;
     private Boolean enableIntentCache;
@@ -12,9 +17,12 @@ public class AgentRuntimeConfigVO {
     private Boolean enableToolCache;
     private Boolean enableEvidenceCache;
     private Boolean enableSpecialistCache;
+    private Boolean specialistMcpEnabled;
     private Integer maxPromptCharsPerExpert;
     private Integer maxSkillPromptChars;
     private Integer maxEvidenceItems;
+    private List<AgentProviderProfileVO> providerProfiles = new ArrayList<>();
+    private AgentProviderRoutingPolicyVO providerRoutingPolicy;
 
     public String getReasoningModeDefault() {
         return reasoningModeDefault;
@@ -38,6 +46,22 @@ public class AgentRuntimeConfigVO {
 
     public void setMaxTotalInputTokens(Integer maxTotalInputTokens) {
         this.maxTotalInputTokens = maxTotalInputTokens;
+    }
+
+    public Integer getContextCompactionThresholdPercent() {
+        return contextCompactionThresholdPercent;
+    }
+
+    public void setContextCompactionThresholdPercent(Integer contextCompactionThresholdPercent) {
+        this.contextCompactionThresholdPercent = contextCompactionThresholdPercent;
+    }
+
+    public Integer getRunTokenBudgetPercent() {
+        return runTokenBudgetPercent;
+    }
+
+    public void setRunTokenBudgetPercent(Integer runTokenBudgetPercent) {
+        this.runTokenBudgetPercent = runTokenBudgetPercent;
     }
 
     public Integer getMaxFinalOutputTokensFast() {
@@ -96,6 +120,14 @@ public class AgentRuntimeConfigVO {
         this.enableSpecialistCache = enableSpecialistCache;
     }
 
+    public Boolean getSpecialistMcpEnabled() {
+        return specialistMcpEnabled;
+    }
+
+    public void setSpecialistMcpEnabled(Boolean specialistMcpEnabled) {
+        this.specialistMcpEnabled = specialistMcpEnabled;
+    }
+
     public Integer getMaxPromptCharsPerExpert() {
         return maxPromptCharsPerExpert;
     }
@@ -118,5 +150,21 @@ public class AgentRuntimeConfigVO {
 
     public void setMaxEvidenceItems(Integer maxEvidenceItems) {
         this.maxEvidenceItems = maxEvidenceItems;
+    }
+
+    public List<AgentProviderProfileVO> getProviderProfiles() {
+        return providerProfiles;
+    }
+
+    public void setProviderProfiles(List<AgentProviderProfileVO> providerProfiles) {
+        this.providerProfiles = providerProfiles == null ? new ArrayList<>() : providerProfiles;
+    }
+
+    public AgentProviderRoutingPolicyVO getProviderRoutingPolicy() {
+        return providerRoutingPolicy;
+    }
+
+    public void setProviderRoutingPolicy(AgentProviderRoutingPolicyVO providerRoutingPolicy) {
+        this.providerRoutingPolicy = providerRoutingPolicy;
     }
 }

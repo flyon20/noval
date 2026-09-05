@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ElementPlus, { ElMessage } from 'element-plus';
 import { nextTick } from 'vue';
-import { flushPromises, mount } from '@vue/test-utils';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import TrendView from '../TrendView.vue';
 import { userConfigApi } from '@/api/config';
@@ -259,6 +259,8 @@ async function mountTrendView() {
 function getTrendSelects(wrapper: ReturnType<typeof mount>) {
   return wrapper.findAllComponents({ name: 'ElSelect' }).slice(0, 2);
 }
+
+enableAutoUnmount(afterEach);
 
 describe('TrendView', () => {
   beforeEach(() => {

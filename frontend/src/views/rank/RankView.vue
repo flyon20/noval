@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import { userConfigApi } from '@/api/config';
-import { crawlerApi } from '@/api/crawler';
+import { createRankRefreshIdempotencyKey, crawlerApi } from '@/api/crawler';
 import BookDetailDrawer from '@/components/rank/BookDetailDrawer.vue';
 import ChapterPreviewDrawer from '@/components/rank/ChapterPreviewDrawer.vue';
 import {
@@ -15,10 +15,12 @@ import {
   RANK_PAGE_SIZE_OPTIONS,
 } from '@/constants/crawler';
 import { getErrorPayload } from '@/lib/http-error';
+import { useAuthStore } from '@/stores/auth';
 import type {
   BookDetail,
   ChapterItem,
   ChapterRefreshResult,
+  Platform,
   RankBoardCatalog,
   RankBoardOption,
   RankBookItem,
@@ -31,13 +33,21 @@ import type {
 const INTRO_PREVIEW_LENGTH = 100;
 const BOARD_POLL_INTERVAL_MS = 12000;
 const BOARD_RETRY_INTERVAL_MS = 3000;
+const OPERATION_RECOVERY_POLL_INTERVAL_MS = 2500;
+const OPERATION_RECOVERY_MAX_ATTEMPTS = 72;
+const RANK_REFRESH_INTENT_STORAGE_PREFIX = 'noval:rank-refresh-intent:v1:';
 const MOBILE_BREAKPOINT = 768;
 const MOBILE_SCROLL_TOP_THRESHOLD = 360;
 const MOBILE_LOAD_MORE_ROOT_MARGIN = '220px';
 
 const router = useRouter();
+const authStore = useAuthStore();
 let boardPollTimer: ReturnType<typeof setTimeout> | null = null;
 let mobileLoadObserver: IntersectionObserver | null = null;
+let rankRefreshInFlight: Promise<void> | null = null;
+let componentUnmounted = false;
+let chapterRecoveryGeneration = 0;
+const rankRefreshIntentKeys = new Map<string, string>();
 const mobileLoadSentinelRef = ref<HTMLElement | null>(null);
 
 const filters = reactive({
@@ -50,6 +60,7 @@ const filters = reactive({
 
 const state = reactive({
   listLoading: false,
+  rankRefreshLoading: false,
   detailLoading: false,
   chapterLoading: false,
   chapterRefreshLoading: false,
@@ -57,6 +68,9 @@ const state = reactive({
   traceId: '',
   detailTraceId: '',
   chapterTraceId: '',
+  chapterErrorMessage: '',
+  operationMessage: '',
+  chapterStatusMessage: '',
   boardCatalog: [] as RankBoardCatalog[],
   rankList: [] as RankBookItem[],
   selectedBook: null as BookDetail | null,
@@ -98,6 +112,7 @@ const totalPages = computed(() => {
 
 const hasMorePages = computed(() => state.page < totalPages.value);
 const useRefreshFlow = computed(() => state.isMobileViewport);
+const rankBusy = computed(() => state.listLoading || state.rankRefreshLoading);
 
 const selectedChannelName = computed(() => {
   return state.boardCatalog.find((item) => item.channelCode === filters.channelCode)?.channelName ?? '未选择频道';
@@ -108,6 +123,9 @@ const selectedBoardName = computed(() => {
 });
 
 const refreshStatusText = computed(() => {
+  if (state.rankRefreshLoading) {
+    return '正在抓取并自动同步';
+  }
   if (!state.refreshInfo) {
     return '等待加载';
   }
@@ -220,22 +238,52 @@ async function loadCurrentBoard() {
   } catch (error) {
     if (isSnapshotMissingError(error)) {
       scheduleBoardPoll(BOARD_RETRY_INTERVAL_MS);
-      await refreshCurrentBoard('AUTO');
+      if (!rankRefreshInFlight) {
+        await refreshCurrentBoard('AUTO');
+      }
       return;
     }
-    applyListError(error, '姒滃崟鍒嗛〉鍔犺浇澶辫触');
+      applyListError(error, '榜单分页加载失败');
   } finally {
     state.listLoading = false;
   }
 }
 
-async function refreshCurrentBoard(refreshMode: 'AUTO' | 'FORCE') {
+function refreshCurrentBoard(refreshMode: 'AUTO' | 'FORCE') {
   if (!filters.channelCode || !filters.boardCode) {
-    return;
+    return Promise.resolve();
   }
 
-  state.listLoading = true;
+  if (rankRefreshInFlight) {
+    return rankRefreshInFlight;
+  }
+
+  const operation = executeRankRefresh(refreshMode);
+  rankRefreshInFlight = operation;
+  void operation.finally(() => {
+    if (rankRefreshInFlight === operation) {
+      rankRefreshInFlight = null;
+    }
+  });
+  return operation;
+}
+
+function refreshVisibleBoard() {
+  return refreshCurrentBoard(authStore.hasRole('ADMIN') ? 'FORCE' : 'AUTO');
+}
+
+async function executeRankRefresh(refreshMode: 'AUTO' | 'FORCE') {
+  const requestScope = buildRankRefreshIntentScope(refreshMode);
+  const idempotencyKey = getOrCreateRankRefreshIntentKey(requestScope);
+  const baselineSnapshotId = state.snapshotId;
+  const refreshTarget = {
+    platform: filters.platform,
+    channelCode: filters.channelCode,
+    boardCode: filters.boardCode,
+  };
+  state.rankRefreshLoading = true;
   state.errorMessage = '';
+  state.operationMessage = '';
 
   try {
     const refreshResponse = await crawlerApi.refreshRankBoard({
@@ -243,18 +291,203 @@ async function refreshCurrentBoard(refreshMode: 'AUTO' | 'FORCE') {
       channelCode: filters.channelCode,
       boardCode: filters.boardCode,
       refreshMode,
+      idempotencyKey,
       rankFetchCount: filters.rankFetchCount,
     });
-    state.refreshInfo = refreshResponse.data.data;
+    const refreshResult = refreshResponse.data.data;
+    clearRankRefreshIntentKey(requestScope, idempotencyKey);
+    if (componentUnmounted) {
+      return;
+    }
+    state.refreshInfo = refreshResult;
     state.traceId = refreshResponse.data.traceId;
     state.page = 1;
     resetRefreshFlowState();
     await loadCurrentBoard();
+    if (componentUnmounted) {
+      return;
+    }
+    state.refreshInfo = refreshResult;
+    state.traceId = refreshResponse.data.traceId;
+    if (refreshResult.refreshLimited) {
+      ElMessage.warning('已达到强制刷新次数限制，仍展示最近快照');
+    } else if (refreshResult.reused) {
+      ElMessage.warning('本次未生成新快照，仍展示缓存数据');
+    } else {
+      ElMessage.success('榜单已刷新');
+    }
   } catch (error) {
-    applyListError(error, '榜单抓取失败');
+    if (isExplicitRankRefreshTerminal(error)) {
+      clearRankRefreshIntentKey(requestScope, idempotencyKey);
+    }
+    if (!componentUnmounted) {
+      if (isRankRefreshInProgress(error) || isRecoverableTransportError(error)) {
+        const recovered = await recoverRankRefresh({
+          baselineSnapshotId,
+          idempotencyKey,
+          requestScope,
+          refreshTarget,
+        });
+        if (recovered) {
+          return;
+        }
+        state.errorMessage = '榜单正在刷新，请稍后重试';
+        state.traceId = getErrorPayload(error).traceId ?? '';
+      } else {
+        applyListError(error, '榜单抓取失败');
+      }
+    }
   } finally {
-    state.listLoading = false;
+    if (!componentUnmounted) {
+      state.rankRefreshLoading = false;
+      state.operationMessage = '';
+    }
   }
+}
+
+async function recoverRankRefresh(options: {
+  baselineSnapshotId?: number;
+  idempotencyKey: string;
+  requestScope: string;
+  refreshTarget: { platform: Platform; channelCode: string; boardCode: string };
+}) {
+  state.operationMessage = '榜单抓取仍在后台进行，正在自动检查最新快照…';
+  for (let attempt = 0; attempt < OPERATION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await waitForRecoveryPoll();
+    }
+    if (componentUnmounted || !isCurrentRankTarget(options.refreshTarget)) {
+      return false;
+    }
+    try {
+      const response = await crawlerApi.getRankStatus(options.refreshTarget);
+      const latestStatus = response.data.data;
+      if (options.baselineSnapshotId && latestStatus.snapshotId === options.baselineSnapshotId) {
+        continue;
+      }
+      state.page = 1;
+      resetRefreshFlowState();
+      await loadCurrentBoard();
+      if (componentUnmounted || !isCurrentRankTarget(options.refreshTarget)) {
+        return false;
+      }
+      state.refreshInfo = {
+        channelCode: options.refreshTarget.channelCode,
+        boardCode: options.refreshTarget.boardCode,
+        snapshotId: latestStatus.snapshotId,
+        snapshotTime: latestStatus.snapshotTime,
+        total: latestStatus.total,
+        reused: false,
+        refreshLimited: false,
+        analysisTriggered: false,
+      };
+      state.traceId = response.data.traceId;
+      state.errorMessage = '';
+      state.operationMessage = '';
+      clearRankRefreshIntentKey(options.requestScope, options.idempotencyKey);
+      ElMessage.success('榜单后台抓取完成，已自动更新');
+      return true;
+    } catch {
+      state.operationMessage = '榜单抓取仍在后台进行，正在自动检查最新快照…';
+    }
+  }
+  return false;
+}
+
+function isCurrentRankTarget(target: { platform: Platform; channelCode: string; boardCode: string }) {
+  return filters.platform === target.platform
+    && filters.channelCode === target.channelCode
+    && filters.boardCode === target.boardCode;
+}
+
+function buildRankRefreshIntentScope(refreshMode: 'AUTO' | 'FORCE') {
+  const fingerprint = JSON.stringify([
+    filters.platform,
+    filters.channelCode,
+    filters.boardCode,
+    refreshMode,
+    filters.rankFetchCount,
+  ]);
+  return `${RANK_REFRESH_INTENT_STORAGE_PREFIX}${encodeURIComponent(fingerprint)}`;
+}
+
+function getOrCreateRankRefreshIntentKey(requestScope: string) {
+  const inMemoryKey = rankRefreshIntentKeys.get(requestScope);
+  if (inMemoryKey) {
+    return inMemoryKey;
+  }
+
+  const storedKey = readRankRefreshIntentKey(requestScope);
+  if (storedKey) {
+    rankRefreshIntentKeys.set(requestScope, storedKey);
+    return storedKey;
+  }
+
+  const idempotencyKey = createRankRefreshIdempotencyKey();
+  rankRefreshIntentKeys.set(requestScope, idempotencyKey);
+  writeRankRefreshIntentKey(requestScope, idempotencyKey);
+  return idempotencyKey;
+}
+
+function readRankRefreshIntentKey(requestScope: string) {
+  try {
+    return window.sessionStorage.getItem(requestScope)?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRankRefreshIntentKey(requestScope: string, idempotencyKey: string) {
+  try {
+    window.sessionStorage.setItem(requestScope, idempotencyKey);
+  } catch {
+    // In-memory reuse still protects retries while this component remains mounted.
+  }
+}
+
+function clearRankRefreshIntentKey(requestScope: string, idempotencyKey: string) {
+  if (rankRefreshIntentKeys.get(requestScope) === idempotencyKey) {
+    rankRefreshIntentKeys.delete(requestScope);
+  }
+  try {
+    if (window.sessionStorage.getItem(requestScope) === idempotencyKey) {
+      window.sessionStorage.removeItem(requestScope);
+    }
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
+
+function isExplicitRankRefreshTerminal(error: unknown) {
+  const payload = getErrorPayload(error);
+  if (isRankRefreshInProgress(error)) {
+    return false;
+  }
+  const payloadCode = payload.code;
+  const responseStatus = (error as { response?: { status?: number } })?.response?.status;
+  return [payloadCode, responseStatus].some((code) => typeof code === 'number' && code >= 400 && code < 500);
+}
+
+function isRankRefreshInProgress(error: unknown) {
+  return getErrorPayload(error).message === 'RANK_REFRESH_IN_PROGRESS';
+}
+
+function isChapterFetchInProgress(error: unknown) {
+  return getErrorPayload(error).message === 'CHAPTER_FETCH_IN_PROGRESS';
+}
+
+function isRecoverableTransportError(error: unknown) {
+  const candidate = error as { code?: string; message?: string; response?: unknown };
+  if (candidate.code === 'ECONNABORTED' || candidate.code === 'ETIMEDOUT') {
+    return true;
+  }
+  return !candidate.response && /timeout|network|response lost/i.test(candidate.message ?? '');
+}
+
+function waitForRecoveryPoll() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, OPERATION_RECOVERY_POLL_INTERVAL_MS);
+  });
 }
 
 async function fetchRankPage(page: number, keepLoading = false, append = false) {
@@ -310,12 +543,14 @@ async function handleChannelChange(channelCode: string) {
   const nextBoard = nextChannel?.boards[0];
   filters.channelCode = channelCode;
   filters.boardCode = nextBoard?.boardCode ?? '';
+  clearVisibleRankSnapshot();
   await saveUserPreference();
   await loadCurrentBoard();
 }
 
 async function handleBoardChange(boardCode: string) {
   filters.boardCode = boardCode;
+  clearVisibleRankSnapshot();
   await saveUserPreference();
   await loadCurrentBoard();
 }
@@ -361,28 +596,68 @@ async function openDetail(row: RankBookItem) {
 }
 
 async function openChapters(row: RankBookItem) {
+  const recoveryGeneration = ++chapterRecoveryGeneration;
   state.chapterOpen = true;
   state.chapterLoading = true;
+  state.chapterRefreshLoading = false;
   state.chapterTraceId = '';
+  state.chapterErrorMessage = '';
+  state.chapterStatusMessage = '';
   state.activeBookId = row.bookId;
   state.activeBookName = row.bookName;
   state.activeBookAuthor = row.author;
+  state.chapterPreview = [];
   state.chapterRefreshSummary = null;
+  let baselineCrawlTime: string | undefined;
+  let baselineFingerprint = '';
 
   try {
+    const persistedChapters = await loadPersistedChapterStatus(row.platform, row.bookId);
+    if (!isCurrentChapterRecovery(recoveryGeneration, row.bookId)) {
+      return;
+    }
+    state.chapterPreview = persistedChapters;
+    baselineCrawlTime = getLatestChapterCrawlTime(persistedChapters);
+    baselineFingerprint = getChapterSnapshotFingerprint(persistedChapters);
+    if (hasCompleteChapterPrefix(persistedChapters, filters.chapterCount)) {
+      return;
+    }
     const response = await crawlerApi.getChapters({
       platform: row.platform,
       bookId: row.bookId,
       chapterCount: filters.chapterCount,
     });
+    if (!isCurrentChapterRecovery(recoveryGeneration, row.bookId)) {
+      return;
+    }
     state.chapterPreview = response.data.data;
     state.chapterTraceId = response.data.traceId;
+    state.chapterErrorMessage = '';
   } catch (error) {
+    if (isChapterFetchInProgress(error) || isRecoverableTransportError(error)) {
+      const recovered = await recoverChapterFetch({
+        baselineCrawlTime,
+        baselineFingerprint,
+        bookId: row.bookId,
+        generation: recoveryGeneration,
+        platform: row.platform,
+        requireNewerCrawl: false,
+      });
+      if (recovered) {
+        ElMessage.success('章节后台抓取完成，已自动更新');
+        return;
+      }
+    }
     const payload = getErrorPayload(error);
-    state.chapterPreview = [];
-    state.chapterTraceId = payload.traceId ?? '';
+    if (isCurrentChapterRecovery(recoveryGeneration, row.bookId)) {
+      state.chapterTraceId = payload.traceId ?? '';
+      state.chapterErrorMessage = payload.message ?? '章节加载失败';
+    }
   } finally {
-    state.chapterLoading = false;
+    if (isCurrentChapterRecovery(recoveryGeneration, row.bookId)) {
+      state.chapterLoading = false;
+      state.chapterStatusMessage = '';
+    }
   }
 }
 
@@ -391,24 +666,177 @@ async function refreshChapters() {
     return;
   }
 
+  const recoveryGeneration = ++chapterRecoveryGeneration;
+  const activeBookId = state.activeBookId;
   state.chapterRefreshLoading = true;
+  state.chapterErrorMessage = '';
+  state.chapterStatusMessage = '';
+  const {
+    crawlTime: baselineCrawlTime,
+    fingerprint: baselineFingerprint,
+  } = await resolveChapterRefreshBaseline(filters.platform, activeBookId);
+  if (!isCurrentChapterRecovery(recoveryGeneration, activeBookId)) {
+    return;
+  }
   try {
     const response = await crawlerApi.refreshChapters({
       platform: filters.platform,
-      bookId: state.activeBookId,
+      bookId: activeBookId,
       chapterCount: filters.chapterCount,
     });
+    if (!isCurrentChapterRecovery(recoveryGeneration, activeBookId)) {
+      return;
+    }
     state.chapterPreview = response.data.data.chapters;
     state.chapterRefreshSummary = response.data.data;
     state.chapterTraceId = response.data.traceId;
+    state.chapterErrorMessage = '';
     ElMessage.success('章节已重新抓取并更新缓存');
   } catch (error) {
+    if (isChapterFetchInProgress(error) || isRecoverableTransportError(error)) {
+      const recovered = await recoverChapterFetch({
+        baselineCrawlTime,
+        baselineFingerprint,
+        bookId: activeBookId,
+        generation: recoveryGeneration,
+        platform: filters.platform,
+        requireNewerCrawl: true,
+      });
+      if (recovered) {
+        state.chapterRefreshSummary = null;
+        ElMessage.success('章节后台抓取完成，已自动更新');
+        return;
+      }
+    }
     const payload = getErrorPayload(error);
-    state.chapterTraceId = payload.traceId ?? '';
-    ElMessage.error(payload.message ?? '重新抓取章节失败');
+    if (isCurrentChapterRecovery(recoveryGeneration, activeBookId)) {
+      state.chapterTraceId = payload.traceId ?? '';
+      state.chapterErrorMessage = payload.message ?? '重新抓取章节失败';
+      ElMessage.error(state.chapterErrorMessage);
+    }
   } finally {
-    state.chapterRefreshLoading = false;
+    if (isCurrentChapterRecovery(recoveryGeneration, activeBookId)) {
+      state.chapterRefreshLoading = false;
+      state.chapterStatusMessage = '';
+    }
   }
+}
+
+async function resolveChapterRefreshBaseline(platform: Platform, bookId: number) {
+  const visibleBaseline = getLatestChapterCrawlTime(state.chapterPreview);
+  if (visibleBaseline) {
+    return {
+      crawlTime: visibleBaseline,
+      fingerprint: getChapterSnapshotFingerprint(state.chapterPreview),
+    };
+  }
+  const chapters = await loadPersistedChapterStatus(platform, bookId);
+  return {
+    crawlTime: getLatestChapterCrawlTime(chapters),
+    fingerprint: getChapterSnapshotFingerprint(chapters),
+  };
+}
+
+async function loadPersistedChapterStatus(platform: Platform, bookId: number) {
+  try {
+    const response = await crawlerApi.getChapterStatus({
+      platform,
+      bookId,
+      chapterCount: filters.chapterCount,
+    });
+    state.chapterTraceId = response.data.traceId;
+    return response.data.data;
+  } catch {
+    return [] as ChapterItem[];
+  }
+}
+
+async function recoverChapterFetch(options: {
+  baselineCrawlTime?: string;
+  baselineFingerprint: string;
+  bookId: number;
+  generation: number;
+  platform: Platform;
+  requireNewerCrawl: boolean;
+}) {
+  state.chapterStatusMessage = '章节仍在后台抓取，完成后会自动展示，无需刷新页面';
+  for (let attempt = 0; attempt < OPERATION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await waitForRecoveryPoll();
+    }
+    if (!isCurrentChapterRecovery(options.generation, options.bookId)) {
+      return false;
+    }
+    const chapters = await loadPersistedChapterStatus(options.platform, options.bookId);
+    if (!isCurrentChapterRecovery(options.generation, options.bookId)) {
+      return false;
+    }
+    const latestCrawlTime = getLatestChapterCrawlTime(chapters);
+    const hasRequestedChapters = hasCompleteChapterPrefix(chapters, filters.chapterCount);
+    const crawlAdvanced = isNewerChapterCrawl(latestCrawlTime, options.baselineCrawlTime);
+    const snapshotChanged = getChapterSnapshotFingerprint(chapters) !== options.baselineFingerprint;
+    if ((options.requireNewerCrawl && !crawlAdvanced && !snapshotChanged)
+      || (!options.requireNewerCrawl && !hasRequestedChapters && !crawlAdvanced && !snapshotChanged)) {
+      continue;
+    }
+    state.chapterPreview = chapters;
+    state.chapterErrorMessage = '';
+    state.chapterStatusMessage = '';
+    return true;
+  }
+  return false;
+}
+
+function getLatestChapterCrawlTime(chapters: ChapterItem[]) {
+  return chapters.reduce<string | undefined>((latest, chapter) => {
+    if (!chapter.crawlTime || (latest && chapter.crawlTime <= latest)) {
+      return latest;
+    }
+    return chapter.crawlTime;
+  }, undefined);
+}
+
+function getChapterSnapshotFingerprint(chapters: ChapterItem[]) {
+  return [...chapters]
+    .sort((left, right) => left.chapterNo - right.chapterNo)
+    .map((chapter) => [
+      chapter.chapterNo,
+      chapter.chapterTitle,
+      chapter.wordCount,
+      chapter.sourceWordCount,
+      chapter.content.length,
+      chapter.content.slice(0, 64),
+      chapter.content.slice(-64),
+    ].join(':'))
+    .join('|');
+}
+
+function hasCompleteChapterPrefix(chapters: ChapterItem[], chapterCount: number) {
+  const orderedChapters = [...chapters].sort((left, right) => left.chapterNo - right.chapterNo);
+  if (orderedChapters.length < chapterCount) {
+    return false;
+  }
+  return orderedChapters.slice(0, chapterCount).every((chapter, index) => {
+    const sourceWordCount = chapter.sourceWordCount ?? 0;
+    const normalizedLength = chapter.content.replace(/\s+/g, '').length;
+    return chapter.chapterNo === index + 1
+      && sourceWordCount > 0
+      && normalizedLength >= Math.floor(sourceWordCount * 0.9);
+  });
+}
+
+function isNewerChapterCrawl(latest?: string, baseline?: string) {
+  if (!latest) {
+    return false;
+  }
+  return !baseline || latest > baseline;
+}
+
+function isCurrentChapterRecovery(generation: number, bookId: number) {
+  return !componentUnmounted
+    && state.chapterOpen
+    && chapterRecoveryGeneration === generation
+    && state.activeBookId === bookId;
 }
 
 async function goAnalysis() {
@@ -465,11 +893,26 @@ function clearPendingBoardUpdate() {
   state.pendingTotal = 0;
 }
 
-function applyListError(error: unknown, fallbackMessage: string) {
+function applyListError(
+  error: unknown,
+  fallbackMessage: string,
+  options: { clearItems?: boolean } = {},
+) {
   const payload = getErrorPayload(error);
   state.errorMessage = payload.message ?? fallbackMessage;
   state.traceId = payload.traceId ?? '';
+  if (options.clearItems) {
+    clearVisibleRankSnapshot();
+  }
+}
+
+function clearVisibleRankSnapshot() {
   state.rankList = [];
+  state.total = 0;
+  state.snapshotId = undefined;
+  state.snapshotTime = '';
+  state.refreshInfo = null;
+  state.loadedPages = [];
 }
 
 function isSnapshotMissingError(error: unknown) {
@@ -529,7 +972,7 @@ async function saveChapterCountPreference(chapterCount: UiChapterCount) {
 }
 
 async function loadNextPage() {
-  if (!useRefreshFlow.value || state.listLoading || state.loadingMore || !hasMorePages.value) {
+  if (!useRefreshFlow.value || rankBusy.value || state.loadingMore || !hasMorePages.value) {
     return;
   }
   await fetchRankPage(state.page + 1, true, true);
@@ -607,7 +1050,7 @@ async function pollCurrentBoardPage() {
     return;
   }
 
-  if (state.listLoading || state.detailLoading || state.chapterLoading || state.chapterRefreshLoading) {
+  if (rankBusy.value || state.detailLoading || state.chapterLoading || state.chapterRefreshLoading) {
     scheduleBoardPoll();
     return;
   }
@@ -647,7 +1090,7 @@ async function pollCurrentBoardStatus() {
     return;
   }
 
-  if (state.listLoading || state.detailLoading || state.chapterLoading || state.chapterRefreshLoading) {
+  if (rankBusy.value || state.detailLoading || state.chapterLoading || state.chapterRefreshLoading) {
     scheduleBoardPoll();
     return;
   }
@@ -696,7 +1139,22 @@ watch(
   },
 );
 
+watch(
+  () => state.chapterOpen,
+  (chapterOpen) => {
+    if (chapterOpen) {
+      return;
+    }
+    chapterRecoveryGeneration += 1;
+    state.chapterLoading = false;
+    state.chapterRefreshLoading = false;
+    state.chapterStatusMessage = '';
+  },
+);
+
 onBeforeUnmount(() => {
+  componentUnmounted = true;
+  chapterRecoveryGeneration += 1;
   clearBoardPollTimer();
   destroyMobileLoadObserver();
   window.removeEventListener('resize', syncViewportMode);
@@ -803,9 +1261,9 @@ watch(
         <div class="rank-page__toolbar-actions">
           <el-button
             data-testid="rank-force-refresh"
-            :loading="state.listLoading"
+            :loading="rankBusy"
             type="primary"
-            @click="refreshCurrentBoard('FORCE')"
+            @click="refreshVisibleBoard"
           >
             重新抓取
           </el-button>
@@ -842,12 +1300,12 @@ watch(
         data-testid="rank-mobile-update-banner"
       >
         <span class="rank-page__mobile-update-copy">
-          ?????
+          检测到新的榜单快照
           <template v-if="state.pendingSnapshotTime">
-            ? {{ state.pendingSnapshotTime }}
+            · {{ state.pendingSnapshotTime }}
           </template>
           <template v-if="state.pendingTotal > 0">
-            ? {{ state.pendingTotal }} ?
+            · {{ state.pendingTotal }} 本
           </template>
         </span>
         <button
@@ -856,9 +1314,18 @@ watch(
           type="button"
           @click="applyPendingBoardUpdate"
         >
-          ????
+          立即更新
         </button>
       </div>
+
+      <el-alert
+        v-if="state.operationMessage"
+        :closable="false"
+        :title="state.operationMessage"
+        class="rank-page__alert"
+        data-testid="rank-operation-status"
+        type="info"
+      />
 
       <el-alert
         v-if="state.errorMessage"
@@ -869,7 +1336,7 @@ watch(
         type="error"
       />
 
-      <div v-if="state.listLoading" class="rank-page__skeletons">
+      <div v-if="state.listLoading || (state.rankRefreshLoading && state.rankList.length === 0)" class="rank-page__skeletons">
         <el-skeleton v-for="item in state.pageSize" :key="item" animated :rows="3" />
       </div>
 
@@ -990,6 +1457,8 @@ watch(
       :book-id="state.activeBookId"
       :chapter-count="filters.chapterCount"
       :chapters="state.chapterPreview"
+      :error-message="state.chapterErrorMessage"
+      :status-message="state.chapterStatusMessage"
       :loading="state.chapterLoading"
       :refresh-loading="state.chapterRefreshLoading"
       :refresh-summary="state.chapterRefreshSummary"
@@ -1025,8 +1494,8 @@ watch(
   gap: 1rem;
   padding: 1.65rem 1.8rem;
   background:
-    radial-gradient(circle at top right, rgba(92, 124, 250, 0.18), transparent 24%),
-    radial-gradient(circle at top left, rgba(255, 147, 186, 0.14), transparent 22%),
+    linear-gradient(125deg, color-mix(in srgb, var(--color-primary-soft) 68%, transparent), transparent 44%),
+    linear-gradient(315deg, color-mix(in srgb, var(--color-accent) 12%, transparent), transparent 52%),
     linear-gradient(135deg, color-mix(in srgb, var(--color-surface) 96%, transparent), color-mix(in srgb, var(--color-bg-secondary) 92%, transparent));
 }
 
@@ -1151,7 +1620,7 @@ watch(
 }
 
 .rank-page__page-size-button.is-active {
-  background: rgba(35, 65, 58, 0.92);
+  background: var(--gradient-primary);
   color: #fff;
 }
 
@@ -1194,7 +1663,7 @@ watch(
   border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
   border-radius: 1rem;
   background:
-    linear-gradient(135deg, rgba(92, 124, 250, 0.12), rgba(255, 147, 186, 0.1)),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary-soft) 78%, transparent), color-mix(in srgb, var(--color-accent) 12%, transparent)),
     color-mix(in srgb, var(--color-surface) 92%, transparent);
   box-shadow: var(--shadow-card);
 }
@@ -1274,15 +1743,15 @@ watch(
   justify-content: center;
   min-height: 56px;
   border-radius: 1rem;
-  background: rgba(35, 65, 58, 0.08);
+  background: color-mix(in srgb, var(--color-primary-soft) 72%, var(--color-surface));
   color: var(--color-accent-strong);
   font-weight: 700;
   transition: background 200ms ease;
 }
 
 .rank-page__item-rank.is-top3 {
-  background: linear-gradient(135deg, rgba(199, 146, 92, 0.22), rgba(199, 146, 92, 0.08));
-  border: 1px solid rgba(199, 146, 92, 0.3);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 24%, transparent), color-mix(in srgb, var(--color-primary) 8%, transparent));
+  border: 1px solid color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
 }
 
 .rank-page__item-rank.is-top3 .rank-page__item-rank-number {
@@ -1366,9 +1835,9 @@ watch(
 
 .rank-page__mobile-flow-button {
   padding: 0.75rem 1rem;
-  border: 1px solid rgba(35, 65, 58, 0.12);
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, transparent);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.84);
+  background: color-mix(in srgb, var(--color-surface-strong) 88%, transparent);
   color: var(--color-text);
   cursor: pointer;
 }
@@ -1381,7 +1850,7 @@ watch(
   padding: 0.8rem 1rem;
   border: none;
   border-radius: 999px;
-  background: rgba(35, 65, 58, 0.96);
+  background: var(--gradient-primary);
   color: #fff;
   box-shadow: var(--shadow-soft);
   cursor: pointer;
@@ -1420,34 +1889,91 @@ watch(
 }
 
 @media (max-width: 768px) {
+  .rank-page__panel {
+    margin-inline: -0.875rem;
+    padding: 0.75rem;
+    border-inline: 0;
+    border-radius: 0;
+    background: var(--color-surface-strong);
+    box-shadow: none;
+  }
+
   .rank-page__pagination {
     display: none;
   }
 
   .rank-page__item {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: 44px minmax(0, 1fr);
     grid-template-rows: auto auto;
+    gap: 0.65rem 0.75rem;
+    padding: 0.85rem;
+    border-radius: 8px;
   }
 
   .rank-page__item-rank {
     grid-row: 1;
     grid-column: 1;
+    width: 44px;
+    min-height: 44px;
+    border-radius: 8px;
+  }
+
+  .rank-page__item-rank.is-top3 .rank-page__item-rank-number,
+  .rank-page__item-rank-number {
+    font-size: 0.9rem;
   }
 
   .rank-page__item-main {
     grid-row: 1;
     grid-column: 2;
+    gap: 0.2rem;
+  }
+
+  .rank-page__item-title h3 {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 1rem;
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .rank-page__item-title p {
+    overflow: hidden;
+    margin-top: 0.1rem;
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rank-page__item-intro {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 0.84rem;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 
   .rank-page__item-actions {
     grid-row: 2;
-    grid-column: 1 / -1;
+    grid-column: 2;
     display: flex;
-    gap: 0.5rem;
+    justify-content: flex-end;
+    gap: 0.4rem;
   }
 
   .rank-page__item-actions .el-button {
-    flex: 1;
+    min-width: 68px;
+    min-height: 44px;
+    flex: 0 0 auto;
+    padding: 0 0.7rem;
+    margin-left: 0;
+  }
+
+  .rank-page__list,
+  .rank-page__skeletons {
+    gap: 0.75rem;
   }
 
   .rank-page__pagination {

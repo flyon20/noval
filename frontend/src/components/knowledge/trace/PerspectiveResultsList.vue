@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { knowledgeDomainLabel } from '@/utils/knowledgeDisplay';
 
 interface Props {
   perspectiveResultsJson?: string;
@@ -21,26 +22,26 @@ const perspectives = computed(() => {
 <template>
   <div class="perspective-results-list">
     <template v-if="!perspectives.length">
-      <p class="perspective-results-list__empty">No PerspectiveResults data</p>
+      <p class="perspective-results-list__empty">暂无多视角分析结果</p>
     </template>
     <template v-else>
       <el-timeline>
         <el-timeline-item
           v-for="(result, idx) in perspectives"
           :key="idx"
-          :timestamp="result.taskType"
+          :timestamp="knowledgeDomainLabel(result.taskType)"
           placement="top"
         >
           <el-card shadow="hover">
             <template #header>
               <div class="perspective-header">
-                <el-tag type="primary" size="small">{{ result.perspective }}</el-tag>
-                <el-tag type="info" size="small">{{ result.taskType }}</el-tag>
+                <el-tag type="primary" size="small">{{ knowledgeDomainLabel(result.perspective) }}</el-tag>
+                <el-tag type="info" size="small">{{ knowledgeDomainLabel(result.taskType) }}</el-tag>
               </div>
             </template>
             <p class="perspective-summary">{{ result.summary }}</p>
             <el-descriptions v-if="result.evidenceRefs?.length" :column="1" size="small">
-              <el-descriptions-item label="Evidence">
+              <el-descriptions-item label="证据引用">
                 <el-tag
                   v-for="ref in result.evidenceRefs"
                   :key="ref"

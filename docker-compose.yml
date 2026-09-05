@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Copy .env.example to .env and replace every CHANGE_ME value before first start.
 
 x-default-logging: &default-logging
@@ -8,17 +6,67 @@ x-default-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-agent-resource-policy: &agent-resource-policy
+  NOVAL_RESOURCE_MAX_ACTIVE_DEEP_RUNS: ${NOVAL_RESOURCE_MAX_ACTIVE_DEEP_RUNS:-1}
+  NOVAL_RESOURCE_MAX_ACTIVE_FAST_RUNS: ${NOVAL_RESOURCE_MAX_ACTIVE_FAST_RUNS:-2}
+  NOVAL_RESOURCE_MAX_ACTIVE_LLM_CALLS: ${NOVAL_RESOURCE_MAX_ACTIVE_LLM_CALLS:-${AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS:-2}}
+  NOVAL_RESOURCE_MAX_DELEGATED_AGENT_CONCURRENCY: ${NOVAL_RESOURCE_MAX_DELEGATED_AGENT_CONCURRENCY:-1}
+  NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY: ${NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY:-${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:-1}}
+  NOVAL_RESOURCE_MAX_CRAWLER_CONCURRENCY: ${NOVAL_RESOURCE_MAX_CRAWLER_CONCURRENCY:-${CRAWLER_CHAPTER_FETCH_WORKERS:-2}}
+  NOVAL_RESOURCE_MEMORY_PAUSE_PERCENT: ${NOVAL_RESOURCE_MEMORY_PAUSE_PERCENT:-85}
+  NOVAL_RESOURCE_MEMORY_REJECT_DEEP_PERCENT: ${NOVAL_RESOURCE_MEMORY_REJECT_DEEP_PERCENT:-92}
+  NOVAL_RESOURCE_DISK_WARN_PERCENT: ${NOVAL_RESOURCE_DISK_WARN_PERCENT:-80}
+  NOVAL_RESOURCE_DISK_STOP_IMPORT_PERCENT: ${NOVAL_RESOURCE_DISK_STOP_IMPORT_PERCENT:-90}
+  NOVAL_RESOURCE_QUEUE_BACKLOG_WARN_COUNT: ${NOVAL_RESOURCE_QUEUE_BACKLOG_WARN_COUNT:-20}
+  NOVAL_RESOURCE_QUEUE_OLDEST_WARN_MINUTES: ${NOVAL_RESOURCE_QUEUE_OLDEST_WARN_MINUTES:-5}
+
 services:
+  config-preflight:
+    image: nginx:1.27-alpine
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      CONFIG_SECRET_MASTER_KEY: ${CONFIG_SECRET_MASTER_KEY:-}
+      CRAWLER_INTERNAL_API_KEY: ${CRAWLER_INTERNAL_API_KEY:-}
+      AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-}
+      FASTMCP_INTERNAL_API_KEY: ${FASTMCP_INTERNAL_API_KEY:-${MCP_INTERNAL_API_KEY:-}}
+      MCP_CALL_SIGNING_KEY: ${MCP_CALL_SIGNING_KEY:-}
+      MCP_BACKEND_ATTESTATION_KEY: ${MCP_BACKEND_ATTESTATION_KEY:-}
+      APP_DOMAIN: ${APP_DOMAIN:-www.panch.fun}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-panch.fun}
+      BACKEND_UPSTREAM_HOST: 127.0.0.1
+      BACKEND_UPSTREAM_PORT: 8080
+      NGINX_SSL_DIR: /etc/nginx/ssl
+      NGINX_SSL_VERIFY_CLIENT: ${NGINX_SSL_VERIFY_CLIENT:-on}
+      NOVAL_CLOUDFLARE_TUNNEL_ONLY: ${NOVAL_CLOUDFLARE_TUNNEL_ONLY:-false}
+    volumes:
+      - ./docker/validate-production-secrets.sh:/usr/local/bin/validate-production-secrets.sh:ro
+      - ./docker/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${NGINX_SSL_DIR:-/etc/nginx/ssl}:/etc/nginx/ssl:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/validate-production-secrets.sh"]
+    cpus: 0.10
+    mem_limit: 64m
+    memswap_limit: 64m
+    pids_limit: 32
+    restart: "no"
+
   nginx:
     build:
       context: .
       dockerfile: ./docker/nginx/Dockerfile
     depends_on:
-      - backend
+      config-preflight:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
     environment:
       TZ: Asia/Shanghai
       APP_DOMAIN: ${APP_DOMAIN:-www.panch.fun}
       ROOT_DOMAIN: ${ROOT_DOMAIN:-panch.fun}
+      NGINX_SSL_VERIFY_CLIENT: ${NGINX_SSL_VERIFY_CLIENT:-on}
       BACKEND_UPSTREAM_HOST: backend
       BACKEND_UPSTREAM_PORT: 8080
     ports:
@@ -26,6 +74,7 @@ services:
       - "443:443"
     volumes:
       - ${NGINX_SSL_DIR:-/etc/nginx/ssl}:/etc/nginx/ssl:ro
+      - ./docker/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     cpus: 0.20
     mem_limit: 128m
     memswap_limit: 128m
@@ -39,13 +88,22 @@ services:
     expose:
       - "8080"
     depends_on:
-      - mysql
-      - redis
-      - rabbitmq
-      - crawler
-      - langgraph-worker
-      - qdrant
+      config-preflight:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      schema-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      crawler:
+        condition: service_started
+      qdrant:
+        condition: service_started
     environment:
+      <<: *agent-resource-policy
       TZ: Asia/Shanghai
       SERVER_PORT: 8080
       MYSQL_HOST: mysql
@@ -57,6 +115,7 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_WITH_A_STRONG_REDIS_PASSWORD}
       SPRING_DATA_REDIS_TIMEOUT: ${SPRING_DATA_REDIS_TIMEOUT:-15s}
+      AI_CACHE_CONTINUITY_ENABLED: ${AI_CACHE_CONTINUITY_ENABLED:-true}
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:-noval}
@@ -82,11 +141,12 @@ services:
       DIFY_API_KEY: ${DIFY_API_KEY:-}
       AI_OPENAI_COMPATIBLE_BASE_URL: ${AI_OPENAI_COMPATIBLE_BASE_URL:-https://api.deepseek.com/v1}
       AI_OPENAI_COMPATIBLE_API_KEY_REF: ${AI_OPENAI_COMPATIBLE_API_KEY_REF:-DEEPSEEK_API_KEY}
-      AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-chat}
+      AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-v4-flash}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       AI_LANGGRAPH_WORKER_BASE_URL: http://langgraph-worker:8001
       AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
       AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
+      MCP_BACKEND_ATTESTATION_KEY: ${MCP_BACKEND_ATTESTATION_KEY:-}
       KNOWLEDGE_QDRANT_BASE_URL: ${KNOWLEDGE_QDRANT_BASE_URL:-http://qdrant:6333}
       KNOWLEDGE_QDRANT_COLLECTION: ${KNOWLEDGE_QDRANT_COLLECTION:-novel_knowledge_chunks}
       KNOWLEDGE_QDRANT_MEMORY_COLLECTION: ${KNOWLEDGE_QDRANT_MEMORY_COLLECTION:-noval_ai_memory}
@@ -101,7 +161,14 @@ services:
       KNOWLEDGE_INDEX_CHUNK_TARGET_CHARS: ${KNOWLEDGE_INDEX_CHUNK_TARGET_CHARS:-1000}
       KNOWLEDGE_INDEX_CHUNK_OVERLAP_CHARS: ${KNOWLEDGE_INDEX_CHUNK_OVERLAP_CHARS:-160}
       KNOWLEDGE_INDEX_QUEUE_ENABLED: ${KNOWLEDGE_INDEX_QUEUE_ENABLED:-true}
-      KNOWLEDGE_INDEX_WORKER_CONCURRENCY: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:-2}
+      KNOWLEDGE_CHAT_RUN_QUEUE_ENABLED: ${KNOWLEDGE_CHAT_RUN_QUEUE_ENABLED:-true}
+      KNOWLEDGE_CHAT_RUN_OUTBOX_DISPATCH_INTERVAL_MILLIS: ${KNOWLEDGE_CHAT_RUN_OUTBOX_DISPATCH_INTERVAL_MILLIS:-1000}
+      KNOWLEDGE_CHAT_RUN_OUTBOX_RECOVERY_INTERVAL_MILLIS: ${KNOWLEDGE_CHAT_RUN_OUTBOX_RECOVERY_INTERVAL_MILLIS:-30000}
+      KNOWLEDGE_CHAT_RUN_OUTBOX_RECOVERY_INITIAL_DELAY_MILLIS: ${KNOWLEDGE_CHAT_RUN_OUTBOX_RECOVERY_INITIAL_DELAY_MILLIS:-30000}
+      KNOWLEDGE_CHAT_RUN_WORKER_CONCURRENCY: ${KNOWLEDGE_CHAT_RUN_WORKER_CONCURRENCY:-1}
+      KNOWLEDGE_CHAT_RUN_LEASE_SECONDS: ${KNOWLEDGE_CHAT_RUN_LEASE_SECONDS:-45}
+      KNOWLEDGE_CHAT_RUN_HEARTBEAT_SECONDS: ${KNOWLEDGE_CHAT_RUN_HEARTBEAT_SECONDS:-10}
+      KNOWLEDGE_INDEX_WORKER_CONCURRENCY: ${NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY:-${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:-1}}
       KNOWLEDGE_INDEX_MAX_RETRIES: ${KNOWLEDGE_INDEX_MAX_RETRIES:-3}
       KNOWLEDGE_INDEX_VISIBILITY_TIMEOUT_SECONDS: ${KNOWLEDGE_INDEX_VISIBILITY_TIMEOUT_SECONDS:-600}
       KNOWLEDGE_INDEX_RETRY_BACKOFF_SECONDS: ${KNOWLEDGE_INDEX_RETRY_BACKOFF_SECONDS:-30,120,600}
@@ -123,10 +190,10 @@ services:
       SECURITY_PASSWORD_LOGIN_PHONE_IP_MAX_FAILURES: ${SECURITY_PASSWORD_LOGIN_PHONE_IP_MAX_FAILURES:-4}
       SECURITY_PASSWORD_LOGIN_COOLDOWN_SECONDS: ${SECURITY_PASSWORD_LOGIN_COOLDOWN_SECONDS:-900}
       SECURITY_TRUSTED_PROXY_IPS: ${SECURITY_TRUSTED_PROXY_IPS:-172.16.0.0/12,127.0.0.1,::1}
-      JAVA_TOOL_OPTIONS: -Xms256m -Xmx640m -XX:+UseG1GC
-    cpus: 0.80
-    mem_limit: 768m
-    memswap_limit: 768m
+      JAVA_TOOL_OPTIONS: "${BACKEND_JAVA_TOOL_OPTIONS:--Xms256m -Xmx1024m -XX:+UseG1GC}"
+    cpus: 0.90
+    mem_limit: ${BACKEND_MEMORY_LIMIT:-1536m}
+    memswap_limit: ${BACKEND_MEMORY_SWAP_LIMIT:-1536m}
     pids_limit: 256
     logging: *default-logging
     restart: unless-stopped
@@ -135,11 +202,15 @@ services:
     build:
       context: ./crawler
     environment:
+      <<: *agent-resource-policy
       TZ: Asia/Shanghai
       CRAWLER_INTERNAL_API_KEY: ${CRAWLER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_INTERNAL_API_KEY}
-    cpus: 0.50
-    mem_limit: 768m
-    memswap_limit: 768m
+    depends_on:
+      config-preflight:
+        condition: service_completed_successfully
+    cpus: 0.35
+    mem_limit: ${CRAWLER_MEMORY_LIMIT:-384m}
+    memswap_limit: ${CRAWLER_MEMORY_SWAP_LIMIT:-384m}
     pids_limit: 128
     logging: *default-logging
     restart: unless-stopped
@@ -148,21 +219,44 @@ services:
     build:
       context: ./langgraph-worker
     depends_on:
-      - fastmcp-tools
+      config-preflight:
+        condition: service_completed_successfully
+      fastmcp-tools:
+        condition: service_healthy
     environment:
+      <<: *agent-resource-policy
       TZ: Asia/Shanghai
       AI_LANGGRAPH_WORKER_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
       AI_OPENAI_COMPATIBLE_BASE_URL: ${AI_OPENAI_COMPATIBLE_BASE_URL:-https://api.deepseek.com/v1}
-      AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-chat}
+      AI_OPENAI_COMPATIBLE_WIRE_API: ${AI_OPENAI_COMPATIBLE_WIRE_API:-responses}
+      AI_OPENAI_COMPATIBLE_RESPONSES_BASE_URL: ${AI_OPENAI_COMPATIBLE_RESPONSES_BASE_URL:-https://api.deepseek.com}
+      AI_OPENAI_COMPATIBLE_RESPONSES_MODELS: ${AI_OPENAI_COMPATIBLE_RESPONSES_MODELS:-deepseek-v4-flash,deepseek-v4-pro}
+      AI_OPENAI_COMPATIBLE_PROMPT_CACHE_KEY_MODELS: ${AI_OPENAI_COMPATIBLE_PROMPT_CACHE_KEY_MODELS:-gpt-*}
+      AI_OPENAI_COMPATIBLE_PROVIDER_USER_MODELS: ${AI_OPENAI_COMPATIBLE_PROVIDER_USER_MODELS:-deepseek-*}
+      AI_MODEL_CONTEXT_CAPABILITIES_JSON: ${AI_MODEL_CONTEXT_CAPABILITIES_JSON:-}
+      AI_CONTEXT_COMPACTION_ENABLED: ${AI_CONTEXT_COMPACTION_ENABLED:-true}
+      AI_OPENAI_COMPATIBLE_RESPONSES_CHAT_FALLBACK_ENABLED: ${AI_OPENAI_COMPATIBLE_RESPONSES_CHAT_FALLBACK_ENABLED:-true}
+      AI_OPENAI_COMPATIBLE_DEFAULT_MODEL: ${AI_OPENAI_COMPATIBLE_DEFAULT_MODEL:-deepseek-v4-flash}
+      AI_OPENAI_COMPATIBLE_DEEP_MODEL: ${AI_OPENAI_COMPATIBLE_DEEP_MODEL:-deepseek-v4-pro}
+      AI_OPENAI_COMPATIBLE_INTENT_MODEL: ${AI_OPENAI_COMPATIBLE_INTENT_MODEL:-deepseek-v4-flash}
+      AI_OPENAI_COMPATIBLE_REVIEW_MODEL: ${AI_OPENAI_COMPATIBLE_REVIEW_MODEL:-deepseek-v4-flash}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS: ${AI_LANGGRAPH_WORKER_TIMEOUT_MILLIS:-30000}
-      AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS: ${AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS:-4}
+      AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS: ${AI_LANGGRAPH_MAX_ACTIVE_LLM_CALLS:-2}
       AI_BACKEND_BASE_URL: http://backend:8080
       AI_BACKEND_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
       AI_BACKEND_TOOL_TIMEOUT_MILLIS: ${AI_BACKEND_TOOL_TIMEOUT_MILLIS:-90000}
       AI_MCP_BASE_URL: ${AI_MCP_BASE_URL:-http://fastmcp-tools:7001}
       AI_MCP_TIMEOUT_MILLIS: ${AI_MCP_TIMEOUT_MILLIS:-30000}
-      MCP_INTERNAL_API_KEY: ${MCP_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_MCP_INTERNAL_KEY}
+      AI_AGENT_LATEST_RANK_MAX_AGE_DAYS: ${AI_AGENT_LATEST_RANK_MAX_AGE_DAYS:-3}
+      AI_AGENT_MARKET_TOPN_DEFAULT: ${AI_AGENT_MARKET_TOPN_DEFAULT:-30}
+      AI_AGENT_MAX_SKILL_CHARS: ${AI_AGENT_MAX_SKILL_CHARS:-0}
+      AGENT_MODEL_FIRST_INTENT_ENABLED: ${AGENT_MODEL_FIRST_INTENT_ENABLED:-true}
+      AGENT_DOMAIN_MODEL_SPECIALISTS_ENABLED: ${AGENT_DOMAIN_MODEL_SPECIALISTS_ENABLED:-true}
+      AGENT_ANSWER_REVIEW_ENABLED: ${AGENT_ANSWER_REVIEW_ENABLED:-true}
+      AGENT_ANSWER_REVISION_ENABLED: ${AGENT_ANSWER_REVISION_ENABLED:-true}
+      FASTMCP_INTERNAL_API_KEY: ${FASTMCP_INTERNAL_API_KEY:-${MCP_INTERNAL_API_KEY:-}}
+      MCP_CALL_SIGNING_KEY: ${MCP_CALL_SIGNING_KEY:-}
       AI_LANGGRAPH_CHECKPOINT_BACKEND: mysql
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -170,9 +264,15 @@ services:
       MYSQL_USER: ${MYSQL_USER:-novel}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-CHANGE_ME_WITH_A_STRONG_APP_PASSWORD}
       PYTHONUNBUFFERED: "1"
-    cpus: 0.40
-    mem_limit: 384m
-    memswap_limit: 384m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    cpus: 0.50
+    mem_limit: ${LANGGRAPH_MEMORY_LIMIT:-768m}
+    memswap_limit: ${LANGGRAPH_MEMORY_SWAP_LIMIT:-768m}
     pids_limit: 128
     logging: *default-logging
     restart: unless-stopped
@@ -180,17 +280,37 @@ services:
   fastmcp-tools:
     build:
       context: ./mcp-tools
+    depends_on:
+      config-preflight:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
     expose:
       - "7001"
     environment:
       TZ: Asia/Shanghai
-      MCP_INTERNAL_API_KEY: ${MCP_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_MCP_INTERNAL_KEY}
+      FASTMCP_INTERNAL_API_KEY: ${FASTMCP_INTERNAL_API_KEY:-${MCP_INTERNAL_API_KEY:-}}
+      MCP_CALL_SIGNING_KEY: ${MCP_CALL_SIGNING_KEY:-}
+      MCP_BACKEND_ATTESTATION_KEY: ${MCP_BACKEND_ATTESTATION_KEY:-}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_WITH_A_STRONG_REDIS_PASSWORD}
+      MCP_NONCE_REDIS_DB: ${MCP_NONCE_REDIS_DB:-3}
+      MCP_NONCE_MAX_ENTRIES: ${MCP_NONCE_MAX_ENTRIES:-10000}
       AI_BACKEND_BASE_URL: http://backend:8080
       AI_BACKEND_INTERNAL_API_KEY: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:-CHANGE_ME_WITH_A_RANDOM_LANGGRAPH_INTERNAL_KEY}
       AI_BACKEND_TOOL_TIMEOUT_MILLIS: ${AI_BACKEND_TOOL_TIMEOUT_MILLIS:-90000}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7001/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     cpus: 0.20
-    mem_limit: 256m
-    memswap_limit: 256m
+    mem_limit: ${FASTMCP_MEMORY_LIMIT:-256m}
+    memswap_limit: ${FASTMCP_MEMORY_SWAP_LIMIT:-256m}
     pids_limit: 128
     logging: *default-logging
     restart: unless-stopped
@@ -201,25 +321,109 @@ services:
       - --default-authentication-plugin=mysql_native_password
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
-      - --innodb-buffer-pool-size=256M
+      - --innodb-buffer-pool-size=512M
+      - --performance-schema-digests-size=${MYSQL_PERFORMANCE_SCHEMA_DIGESTS_SIZE:-2000}
+      - --performance-schema-events-statements-history-long-size=${MYSQL_PERFORMANCE_SCHEMA_HISTORY_LONG_SIZE:-1000}
       - --max-connections=80
+      - --binlog-expire-logs-seconds=259200
+      - --max-binlog-size=268435456
     environment:
       TZ: Asia/Shanghai
+      MALLOC_ARENA_MAX: "${MYSQL_MALLOC_ARENA_MAX:-4}"
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_WITH_A_STRONG_ROOT_PASSWORD}
       MYSQL_DATABASE: novel_analyzer
       MYSQL_USER: ${MYSQL_USER:-novel}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-CHANGE_ME_WITH_A_STRONG_APP_PASSWORD}
+    depends_on:
+      config-preflight:
+        condition: service_completed_successfully
     expose:
       - "3306"
+    ports:
+      - "${NOVAL_DATA_BIND_ADDRESS:-127.0.0.1}:${MYSQL_LAN_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./backend/sql/mysql:/docker-entrypoint-initdb.d
-    cpus: 0.45
-    mem_limit: 640m
-    memswap_limit: 640m
+      - ./backend/sql/mysql:/opt/noval/sql/mysql:ro
+      - ./docker/mysql/00-initialize-noval.sh:/docker-entrypoint-initdb.d/00-initialize-noval.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$${MYSQL_PASSWORD}" mysql --protocol=TCP --host=127.0.0.1
+          --port=3306 --user="$${MYSQL_USER}" --database="$${MYSQL_DATABASE}"
+          --execute="SELECT 1" >/dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    cpus: "${MYSQL_CPU_LIMIT:-0.50}"
+    mem_limit: ${MYSQL_MEMORY_LIMIT:-1280m}
+    memswap_limit: ${MYSQL_MEMORY_SWAP_LIMIT:-1280m}
     pids_limit: 256
     logging: *default-logging
     restart: unless-stopped
+
+  schema-migrate:
+    image: mysql:8.0
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_PWD: ${MYSQL_PASSWORD:-CHANGE_ME_WITH_A_STRONG_APP_PASSWORD}
+      NOVAL_SCHEMA_USER: ${MYSQL_USER:-novel}
+    depends_on:
+      config-preflight:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./backend/sql/mysql:/opt/noval/sql/mysql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase18-agent-harness-conversation-rag.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase19-durable-chat-run-execution.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase20-agent-tool-governance.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase21-agent-task7-production-hardening.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase22-agent-task7-review-hardening.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase23-skill-memory-lifecycle.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase24-project-ingest-generation.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase25-project-hybrid-retrieval-story-graph.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase26-project-retrieval-eval-observability.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase27-agent-skill-contract.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase28-mysql-resource-optimization.sql
+        && mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase29-project-document-batch.sql
+        && exec mysql --protocol=TCP --host=mysql --port=3306
+        --user="$${NOVAL_SCHEMA_USER}" --database=novel_analyzer
+        < /opt/noval/sql/mysql/phase30-long-form-memory-foundation.sql
+    cpus: 0.10
+    mem_limit: 64m
+    memswap_limit: 64m
+    pids_limit: 32
+    logging: *default-logging
+    restart: "no"
 
   redis:
     image: redis:7-alpine
@@ -227,14 +431,25 @@ services:
     environment:
       TZ: Asia/Shanghai
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_WITH_A_STRONG_REDIS_PASSWORD}
+    depends_on:
+      config-preflight:
+        condition: service_completed_successfully
     expose:
       - "6379"
+    ports:
+      - "${NOVAL_DATA_BIND_ADDRESS:-127.0.0.1}:${REDIS_LAN_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     cpus: 0.10
-    mem_limit: 96m
-    memswap_limit: 96m
+    mem_limit: 256m
+    memswap_limit: 256m
     pids_limit: 64
     logging: *default-logging
     restart: unless-stopped
@@ -246,10 +461,14 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-noval}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-CHANGE_ME_WITH_A_STRONG_RABBITMQ_PASSWORD}
       RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VIRTUAL_HOST:-/}
+    depends_on:
+      config-preflight:
+        condition: service_completed_successfully
     expose:
       - "5672"
     ports:
-      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+      - "${NOVAL_DATA_BIND_ADDRESS:-${RABBITMQ_MANAGEMENT_BIND_ADDRESS:-127.0.0.1}}:${RABBITMQ_AMQP_LAN_PORT:-5672}:5672"
+      - "${NOVAL_DATA_BIND_ADDRESS:-${RABBITMQ_MANAGEMENT_BIND_ADDRESS:-127.0.0.1}}:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     cpus: 0.20
@@ -263,13 +482,18 @@ services:
     image: qdrant/qdrant:v1.9.7
     environment:
       TZ: Asia/Shanghai
+    depends_on:
+      config-preflight:
+        condition: service_completed_successfully
     expose:
       - "6333"
+    ports:
+      - "${NOVAL_DATA_BIND_ADDRESS:-127.0.0.1}:${QDRANT_HTTP_LAN_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
-    cpus: 0.30
-    mem_limit: 768m
-    memswap_limit: 768m
+    cpus: 0.40
+    mem_limit: ${QDRANT_MEMORY_LIMIT:-640m}
+    memswap_limit: ${QDRANT_MEMORY_SWAP_LIMIT:-640m}
     pids_limit: 128
     logging: *default-logging
     restart: unless-stopped

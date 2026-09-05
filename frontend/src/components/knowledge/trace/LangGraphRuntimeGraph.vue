@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { ref } from 'vue';
 import type { AgentRuntimeTrace, AgentRuntimeTraceNode } from '@/types/knowledge';
+import { runtimeNodeLabel } from '@/utils/knowledgeDisplay';
 
 interface Props {
   resultJson?: string;
@@ -154,11 +155,11 @@ function executedLabel(node: AgentRuntimeTraceNode) {
         <el-tag v-if="statusCounts.failed" size="small" type="danger">{{ statusCounts.failed }} 个失败</el-tag>
         <el-tag v-if="statusCounts.skipped" size="small" type="info">{{ statusCounts.skipped }} 个跳过</el-tag>
         <el-tag v-if="slowestNode" size="small" type="warning">
-          最慢 {{ slowestNode.name }} {{ durationLabel(slowestNode) }}
+          最慢 {{ runtimeNodeLabel(slowestNode.name) }} {{ durationLabel(slowestNode) }}
         </el-tag>
       </header>
 
-      <section v-if="edges.length" class="runtime-path" aria-label="LangGraph runtime path">
+      <section v-if="edges.length" class="runtime-path" aria-label="LangGraph 运行路径">
         <h4>运行路径</h4>
         <div class="runtime-path__edges">
           <span
@@ -167,14 +168,14 @@ function executedLabel(node: AgentRuntimeTraceNode) {
             class="runtime-path__edge"
             data-test="runtime-edge"
           >
-            <span>{{ edge.from.name }}</span>
+            <span :title="edge.from.name">{{ runtimeNodeLabel(edge.from.name) }}</span>
             <span class="runtime-path__connector">到</span>
-            <span>{{ edge.to.name }}</span>
+            <span :title="edge.to.name">{{ runtimeNodeLabel(edge.to.name) }}</span>
           </span>
         </div>
       </section>
 
-      <div class="runtime-filters" aria-label="Runtime node status filters">
+      <div class="runtime-filters" aria-label="运行节点状态筛选">
         <button
           type="button"
           class="runtime-filter"
@@ -213,7 +214,7 @@ function executedLabel(node: AgentRuntimeTraceNode) {
         </button>
       </div>
 
-      <ol class="langgraph-runtime-graph__nodes" aria-label="LangGraph runtime nodes">
+      <ol class="langgraph-runtime-graph__nodes" aria-label="LangGraph 运行节点">
         <li
           v-for="(node, index) in filteredNodes"
           :key="`${node.sequenceNo ?? index}-${node.name}`"
@@ -229,7 +230,7 @@ function executedLabel(node: AgentRuntimeTraceNode) {
             <span class="runtime-node__index">{{ node.sequenceNo ?? index + 1 }}</span>
             <span class="runtime-node__body">
             <div class="runtime-node__topline">
-              <strong>{{ node.name }}</strong>
+              <strong :title="node.name">{{ runtimeNodeLabel(node.name) }}</strong>
               <el-tag size="small" :type="statusType(node.status)">
                 {{ statusLabel(node.status) }}
               </el-tag>
@@ -253,7 +254,7 @@ function executedLabel(node: AgentRuntimeTraceNode) {
         <header class="runtime-node-detail__header">
           <div>
             <h4>节点详情</h4>
-            <strong>{{ selectedNode.name }}</strong>
+            <strong :title="selectedNode.name">{{ runtimeNodeLabel(selectedNode.name) }}</strong>
           </div>
           <el-tag size="small" :type="statusType(selectedNode.status)">
             {{ statusLabel(selectedNode.status) }}

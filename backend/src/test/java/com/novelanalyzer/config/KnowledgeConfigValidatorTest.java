@@ -80,6 +80,69 @@ class KnowledgeConfigValidatorTest {
     }
 
     @Test
+    void shouldRejectNonPositiveResourceConcurrency() {
+        KnowledgeProperties properties = validProperties();
+        properties.getResourcePolicy().setMaxActiveLlmCalls(0);
+
+        assertThatThrownBy(() -> new KnowledgeConfigValidator(properties).validate())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("resource concurrency");
+    }
+
+    @Test
+    void shouldRejectInvalidMemoryThresholdOrder() {
+        KnowledgeProperties properties = validProperties();
+        properties.getResourcePolicy().setMemoryPausePercent(92);
+        properties.getResourcePolicy().setMemoryRejectDeepPercent(92);
+
+        assertThatThrownBy(() -> new KnowledgeConfigValidator(properties).validate())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("memory thresholds");
+    }
+
+    @Test
+    void shouldRejectInvalidDiskThresholdOrder() {
+        KnowledgeProperties properties = validProperties();
+        properties.getResourcePolicy().setDiskWarnPercent(91);
+        properties.getResourcePolicy().setDiskStopImportPercent(90);
+
+        assertThatThrownBy(() -> new KnowledgeConfigValidator(properties).validate())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("disk thresholds");
+    }
+
+    @Test
+    void shouldRejectNonPositiveQueueThresholds() {
+        KnowledgeProperties properties = validProperties();
+        properties.getResourcePolicy().setQueueBacklogWarnCount(0);
+
+        assertThatThrownBy(() -> new KnowledgeConfigValidator(properties).validate())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("queue thresholds");
+    }
+
+    @Test
+    void shouldRejectNonPositiveChatRunWorkerConcurrency() {
+        KnowledgeProperties properties = validProperties();
+        properties.getChatRun().setWorkerConcurrency(0);
+
+        assertThatThrownBy(() -> new KnowledgeConfigValidator(properties).validate())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("chat run worker concurrency");
+    }
+
+    @Test
+    void shouldRejectChatRunLeaseNotGreaterThanHeartbeat() {
+        KnowledgeProperties properties = validProperties();
+        properties.getChatRun().setHeartbeatSeconds(10);
+        properties.getChatRun().setLeaseSeconds(10);
+
+        assertThatThrownBy(() -> new KnowledgeConfigValidator(properties).validate())
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("lease");
+    }
+
+    @Test
     void shouldAcceptProductionShapedKnowledgeConfig() {
         KnowledgeProperties properties = validProperties();
 

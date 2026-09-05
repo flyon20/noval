@@ -8,6 +8,12 @@ app:
     index:
       queue-enabled: false
       rank-incremental-enabled: false
+    eval:
+      queue-enabled: false
+    chat-run:
+      queue-enabled: false
+    document-batch:
+      queue-enabled: false
   cloudflare:
     turnstile:
       enabled: false

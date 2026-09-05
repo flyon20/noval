@@ -75,7 +75,7 @@ function resolveToneClass(mode: AnalysisType) {
   padding: 0.7rem 1rem;
   border-radius: 1rem;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.85);
+  background: color-mix(in srgb, var(--color-surface-strong) 88%, transparent);
   font-weight: 500;
   color: var(--color-text);
   text-align: left;
@@ -83,13 +83,13 @@ function resolveToneClass(mode: AnalysisType) {
 }
 
 .analysis-tab.is-active {
-  background: rgba(210, 136, 61, 0.12);
-  border-color: rgba(210, 136, 61, 0.4);
+  background: var(--gradient-soft);
+  border-color: color-mix(in srgb, var(--color-accent-strong) 42%, var(--color-border));
   color: var(--color-primary);
 }
 
 .analysis-tab:hover {
-  border-color: rgba(35, 65, 58, 0.2);
+  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
 }
 
 .analysis-tab__label {
@@ -108,7 +108,7 @@ function resolveToneClass(mode: AnalysisType) {
 }
 
 .analysis-tab__meta.is-done {
-  color: #2f7d4d;
+  color: var(--color-success);
 }
 
 .analysis-tab__meta.is-error {

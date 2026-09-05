@@ -2,6 +2,7 @@
 skillId: webnovel-worldbuilding
 version: 1.0.0
 intents: [worldbuilding]
+requestedCapabilities: []
 triggers: [world, setting, faction, system]
 ---
 

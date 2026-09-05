@@ -71,6 +71,9 @@ public class KnowledgeChatResponseVO {
         private String intro;
         private String bookUrl;
         private Boolean local;
+        private String contentType;
+        private Boolean readableNovel;
+        private String unavailableReason;
 
         public Long getBookId() {
             return bookId;
@@ -134,6 +137,30 @@ public class KnowledgeChatResponseVO {
 
         public void setLocal(Boolean local) {
             this.local = local;
+        }
+
+        public String getContentType() {
+            return contentType;
+        }
+
+        public void setContentType(String contentType) {
+            this.contentType = contentType;
+        }
+
+        public Boolean getReadableNovel() {
+            return readableNovel;
+        }
+
+        public void setReadableNovel(Boolean readableNovel) {
+            this.readableNovel = readableNovel;
+        }
+
+        public String getUnavailableReason() {
+            return unavailableReason;
+        }
+
+        public void setUnavailableReason(String unavailableReason) {
+            this.unavailableReason = unavailableReason;
         }
     }
 

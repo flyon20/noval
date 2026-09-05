@@ -76,6 +76,10 @@ export default defineConfig(async () => {
       globals: true,
       setupFiles: './src/test/setup.ts',
       css: true,
+      // Mounting a full view in jsdom costs ~2s on its own; under whole-suite
+      // parallelism the slowest of those overshoot the 5s default and fail on the
+      // clock alone. Give them headroom instead of trading away the coverage.
+      testTimeout: 15000,
     },
   };
 });

@@ -4,17 +4,23 @@ server:
 spring:
   application:
     name: novel-analyzer-backend
+  servlet:
+    multipart:
+      max-file-size: ${PROJECT_DOCUMENT_MAX_FILE_SIZE:20MB}
+      max-request-size: ${PROJECT_DOCUMENT_MAX_REQUEST_SIZE:100MB}
   rabbitmq:
     host: ${RABBITMQ_HOST:127.0.0.1}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME:noval}
     password: ${RABBITMQ_PASSWORD:CHANGE_ME_WITH_A_STRONG_RABBITMQ_PASSWORD}
     virtual-host: ${RABBITMQ_VIRTUAL_HOST:/}
+    publisher-confirm-type: correlated
+    publisher-returns: true
     listener:
       simple:
-        concurrency: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
-        max-concurrency: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
-        prefetch: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
+        concurrency: ${NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY:${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:1}}
+        max-concurrency: ${NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY:${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:1}}
+        prefetch: ${NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY:${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:1}}
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:novel_analyzer}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=${MYSQL_CONNECT_TIMEOUT_MS:10000}&socketTimeout=${MYSQL_SOCKET_TIMEOUT_MS:300000}&tcpKeepAlive=true
     username: ${MYSQL_USER:root}
@@ -120,12 +126,12 @@ app:
     base-url: ${CRAWLER_BASE_URL:http://127.0.0.1:5000}
     internal-api-key: ${CRAWLER_INTERNAL_API_KEY:}
     connect-timeout-millis: ${CRAWLER_CONNECT_TIMEOUT_MILLIS:5000}
-    read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:60000}
+    read-timeout-millis: ${CRAWLER_READ_TIMEOUT_MILLIS:180000}
     rank-backfill:
       enabled: ${CRAWLER_RANK_BACKFILL_ENABLED:true}
       cron: "${CRAWLER_RANK_BACKFILL_CRON:0 15 2 * * ?}"
       platform: ${CRAWLER_RANK_BACKFILL_PLATFORM:fanqie}
-      refresh-days: ${CRAWLER_RANK_BACKFILL_REFRESH_DAYS:7}
+      refresh-days: ${CRAWLER_RANK_BACKFILL_REFRESH_DAYS:3}
       batch-size: ${CRAWLER_RANK_BACKFILL_BATCH_SIZE:20}
       rank-fetch-count: ${CRAWLER_RANK_BACKFILL_FETCH_COUNT:50}
     rank-catalog-sync:
@@ -133,6 +139,19 @@ app:
       cron: "${CRAWLER_RANK_CATALOG_SYNC_CRON:0 35 2 1 * ?}"
       platform: ${CRAWLER_RANK_CATALOG_SYNC_PLATFORM:fanqie}
   knowledge:
+    resource-policy:
+      max-active-deep-runs: ${NOVAL_RESOURCE_MAX_ACTIVE_DEEP_RUNS:1}
+      max-active-fast-runs: ${NOVAL_RESOURCE_MAX_ACTIVE_FAST_RUNS:2}
+      max-active-llm-calls: ${NOVAL_RESOURCE_MAX_ACTIVE_LLM_CALLS:2}
+      max-delegated-agent-concurrency: ${NOVAL_RESOURCE_MAX_DELEGATED_AGENT_CONCURRENCY:1}
+      max-index-concurrency: ${NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY:1}
+      max-crawler-concurrency: ${NOVAL_RESOURCE_MAX_CRAWLER_CONCURRENCY:2}
+      memory-pause-percent: ${NOVAL_RESOURCE_MEMORY_PAUSE_PERCENT:85}
+      memory-reject-deep-percent: ${NOVAL_RESOURCE_MEMORY_REJECT_DEEP_PERCENT:92}
+      disk-warn-percent: ${NOVAL_RESOURCE_DISK_WARN_PERCENT:80}
+      disk-stop-import-percent: ${NOVAL_RESOURCE_DISK_STOP_IMPORT_PERCENT:90}
+      queue-backlog-warn-count: ${NOVAL_RESOURCE_QUEUE_BACKLOG_WARN_COUNT:20}
+      queue-oldest-warn-minutes: ${NOVAL_RESOURCE_QUEUE_OLDEST_WARN_MINUTES:5}
     qdrant:
       base-url: ${KNOWLEDGE_QDRANT_BASE_URL:http://127.0.0.1:6333}
       collection: ${KNOWLEDGE_QDRANT_COLLECTION:novel_knowledge_chunks}
@@ -150,7 +169,7 @@ app:
       chunk-target-chars: ${KNOWLEDGE_INDEX_CHUNK_TARGET_CHARS:1000}
       chunk-overlap-chars: ${KNOWLEDGE_INDEX_CHUNK_OVERLAP_CHARS:160}
       queue-enabled: ${KNOWLEDGE_INDEX_QUEUE_ENABLED:true}
-      worker-concurrency: ${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:2}
+      worker-concurrency: ${NOVAL_RESOURCE_MAX_INDEX_CONCURRENCY:${KNOWLEDGE_INDEX_WORKER_CONCURRENCY:1}}
       max-retries: ${KNOWLEDGE_INDEX_MAX_RETRIES:3}
       visibility-timeout-seconds: ${KNOWLEDGE_INDEX_VISIBILITY_TIMEOUT_SECONDS:600}
       retry-backoff-seconds: "${KNOWLEDGE_INDEX_RETRY_BACKOFF_SECONDS:30,120,600}"
@@ -169,12 +188,68 @@ app:
       chapter-missing-enabled: ${KNOWLEDGE_CHAPTER_MISSING_ENABLED:false}
       chapter-missing-cron: "${KNOWLEDGE_CHAPTER_MISSING_CRON:0 50 3 * * ?}"
       chapter-missing-limit: ${KNOWLEDGE_CHAPTER_MISSING_LIMIT:100}
+    chat-run:
+      queue-enabled: ${KNOWLEDGE_CHAT_RUN_QUEUE_ENABLED:false}
+      worker-concurrency: ${KNOWLEDGE_CHAT_RUN_WORKER_CONCURRENCY:1}
+      lease-seconds: ${KNOWLEDGE_CHAT_RUN_LEASE_SECONDS:45}
+      heartbeat-seconds: ${KNOWLEDGE_CHAT_RUN_HEARTBEAT_SECONDS:10}
+      outbox-dispatch-interval-millis: ${KNOWLEDGE_CHAT_RUN_OUTBOX_DISPATCH_INTERVAL_MILLIS:1000}
+      outbox-recovery-interval-millis: ${KNOWLEDGE_CHAT_RUN_OUTBOX_RECOVERY_INTERVAL_MILLIS:30000}
+      outbox-recovery-initial-delay-millis: ${KNOWLEDGE_CHAT_RUN_OUTBOX_RECOVERY_INITIAL_DELAY_MILLIS:30000}
+      rabbit:
+        exchange: ${KNOWLEDGE_CHAT_RUN_RABBIT_EXCHANGE:noval.knowledge.chat.run}
+        queue: ${KNOWLEDGE_CHAT_RUN_RABBIT_QUEUE:noval.knowledge.chat.run}
+        routing-key: ${KNOWLEDGE_CHAT_RUN_RABBIT_ROUTING_KEY:knowledge.chat.run}
+        dead-letter-exchange: ${KNOWLEDGE_CHAT_RUN_RABBIT_DEAD_LETTER_EXCHANGE:noval.knowledge.chat.run.dlx}
+        dead-letter-queue: ${KNOWLEDGE_CHAT_RUN_RABBIT_DEAD_LETTER_QUEUE:noval.knowledge.chat.run.dlq}
+        dead-letter-routing-key: ${KNOWLEDGE_CHAT_RUN_RABBIT_DEAD_LETTER_ROUTING_KEY:knowledge.chat.run.dlq}
+
+    project-ingest:
+      queue-enabled: ${KNOWLEDGE_PROJECT_INGEST_QUEUE_ENABLED:true}
+      worker-concurrency: ${KNOWLEDGE_PROJECT_INGEST_WORKER_CONCURRENCY:1}
+      lease-seconds: ${KNOWLEDGE_PROJECT_INGEST_LEASE_SECONDS:60}
+      heartbeat-seconds: ${KNOWLEDGE_PROJECT_INGEST_HEARTBEAT_SECONDS:15}
+      max-attempts: ${KNOWLEDGE_PROJECT_INGEST_MAX_ATTEMPTS:4}
+      max-chapter-chars: ${KNOWLEDGE_PROJECT_INGEST_MAX_CHAPTER_CHARS:100000}
+      max-file-bytes: ${KNOWLEDGE_PROJECT_INGEST_MAX_FILE_BYTES:20971520}
+      max-chapters-per-project: ${KNOWLEDGE_PROJECT_INGEST_MAX_CHAPTERS_PER_PROJECT:5000}
+      max-concurrent-jobs-per-user: ${KNOWLEDGE_PROJECT_INGEST_MAX_CONCURRENT_JOBS_PER_USER:1}
+      parser-version: ${KNOWLEDGE_PROJECT_INGEST_PARSER_VERSION:project-ingest-v1}
+      retry-backoff-seconds: ${KNOWLEDGE_PROJECT_INGEST_RETRY_BACKOFF_SECONDS:30,120,600}
+      rabbit:
+        exchange: ${KNOWLEDGE_PROJECT_INGEST_RABBIT_EXCHANGE:noval.knowledge.project-ingest}
+        queue: ${KNOWLEDGE_PROJECT_INGEST_RABBIT_QUEUE:noval.knowledge.project-ingest.job}
+        routing-key: ${KNOWLEDGE_PROJECT_INGEST_RABBIT_ROUTING_KEY:knowledge.project-ingest.job}
+        dead-letter-exchange: ${KNOWLEDGE_PROJECT_INGEST_RABBIT_DEAD_LETTER_EXCHANGE:noval.knowledge.project-ingest.dlx}
+        dead-letter-queue: ${KNOWLEDGE_PROJECT_INGEST_RABBIT_DEAD_LETTER_QUEUE:noval.knowledge.project-ingest.job.dlq}
+        dead-letter-routing-key: ${KNOWLEDGE_PROJECT_INGEST_RABBIT_DEAD_LETTER_ROUTING_KEY:knowledge.project-ingest.job.dlq}
+    document-batch:
+      queue-enabled: ${KNOWLEDGE_DOCUMENT_BATCH_QUEUE_ENABLED:true}
+      worker-concurrency: ${KNOWLEDGE_DOCUMENT_BATCH_WORKER_CONCURRENCY:1}
+      lease-seconds: ${KNOWLEDGE_DOCUMENT_BATCH_LEASE_SECONDS:300}
+      max-attempts: ${KNOWLEDGE_DOCUMENT_BATCH_MAX_ATTEMPTS:4}
+      max-files: ${KNOWLEDGE_DOCUMENT_BATCH_MAX_FILES:200}
+      max-batch-bytes: ${KNOWLEDGE_DOCUMENT_BATCH_MAX_BYTES:94371840}
+      max-zip-entries: ${KNOWLEDGE_DOCUMENT_BATCH_MAX_ZIP_ENTRIES:1000}
+      max-expanded-bytes: ${KNOWLEDGE_DOCUMENT_BATCH_MAX_EXPANDED_BYTES:209715200}
+      document-index-batch-size: ${KNOWLEDGE_DOCUMENT_INDEX_BATCH_SIZE:32}
+      chapter-dispatch-window: ${KNOWLEDGE_DOCUMENT_CHAPTER_DISPATCH_WINDOW:8}
+      rabbit:
+        exchange: ${KNOWLEDGE_DOCUMENT_BATCH_RABBIT_EXCHANGE:noval.knowledge.document-batch}
+        queue: ${KNOWLEDGE_DOCUMENT_BATCH_RABBIT_QUEUE:noval.knowledge.document-batch.parse}
+        routing-key: ${KNOWLEDGE_DOCUMENT_BATCH_RABBIT_ROUTING_KEY:knowledge.document-batch.parse}
+        dead-letter-exchange: ${KNOWLEDGE_DOCUMENT_BATCH_RABBIT_DEAD_LETTER_EXCHANGE:noval.knowledge.document-batch.dlx}
+        dead-letter-queue: ${KNOWLEDGE_DOCUMENT_BATCH_RABBIT_DEAD_LETTER_QUEUE:noval.knowledge.document-batch.parse.dlq}
+        dead-letter-routing-key: ${KNOWLEDGE_DOCUMENT_BATCH_RABBIT_DEAD_LETTER_ROUTING_KEY:knowledge.document-batch.parse.dlq}
   ai:
+    cache-continuity-enabled: ${AI_CACHE_CONTINUITY_ENABLED:true}
     provider-type: ${AI_PROVIDER_TYPE:openai-compatible}
     dify-base-url: ${DIFY_BASE_URL:https://api.dify.ai/v1}
     dify-api-key-ref: ${DIFY_API_KEY_REF:}
     fallback-model: ${AI_FALLBACK_MODEL:local-fallback}
     timeout-millis: ${AI_TIMEOUT_MILLIS:15000}
+    mcp-backend-attestation-key: ${MCP_BACKEND_ATTESTATION_KEY:}
+    mcp-backend-attestation-max-age-seconds: ${MCP_BACKEND_ATTESTATION_MAX_AGE_SECONDS:60}
     langgraph-worker:
       base-url: ${AI_LANGGRAPH_WORKER_BASE_URL:http://127.0.0.1:8001}
       internal-api-key: ${AI_LANGGRAPH_WORKER_INTERNAL_API_KEY:}

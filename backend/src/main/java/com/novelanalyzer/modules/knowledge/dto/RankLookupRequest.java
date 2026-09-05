@@ -4,6 +4,8 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 
+import java.time.LocalDate;
+
 public class RankLookupRequest {
 
     @NotBlank(message = "platform is required")
@@ -21,6 +23,8 @@ public class RankLookupRequest {
     @Min(value = 1, message = "timeWindowDays must be at least 1")
     @Max(value = 365, message = "timeWindowDays must be at most 365")
     private Integer timeWindowDays;
+    private LocalDate snapshotStartDate;
+    private LocalDate snapshotEndDate;
     private Boolean requireSnapshotTime = true;
 
     public String getPlatform() {
@@ -101,6 +105,22 @@ public class RankLookupRequest {
 
     public void setTimeWindowDays(Integer timeWindowDays) {
         this.timeWindowDays = timeWindowDays;
+    }
+
+    public LocalDate getSnapshotStartDate() {
+        return snapshotStartDate;
+    }
+
+    public void setSnapshotStartDate(LocalDate snapshotStartDate) {
+        this.snapshotStartDate = snapshotStartDate;
+    }
+
+    public LocalDate getSnapshotEndDate() {
+        return snapshotEndDate;
+    }
+
+    public void setSnapshotEndDate(LocalDate snapshotEndDate) {
+        this.snapshotEndDate = snapshotEndDate;
     }
 
     public Boolean getRequireSnapshotTime() {

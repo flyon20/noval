@@ -13,6 +13,7 @@ vi.mock('@/api/knowledge', () => ({
     cancelAgentEvalRun: vi.fn(),
     retryAgentEvalRun: vi.fn(),
     listAgentTraces: vi.fn(),
+    getAgentTrace: vi.fn(),
     updateAgentRuntimeConfig: vi.fn(),
     listAgentExperts: vi.fn(),
     updateAgentExpert: vi.fn(),
@@ -27,7 +28,7 @@ describe('AdminAgentGovernanceView', () => {
         message: 'success',
         data: {
           reasoningModeDefault: 'fast',
-          maxParallelSpecialists: 3,
+          maxParallelSpecialists: 1,
           maxTotalInputTokens: 48000,
           maxFinalOutputTokensFast: 4000,
           maxFinalOutputTokensDeep: 8000,
@@ -36,8 +37,9 @@ describe('AdminAgentGovernanceView', () => {
           enableToolCache: true,
           enableEvidenceCache: true,
           enableSpecialistCache: false,
+          specialistMcpEnabled: false,
           maxPromptCharsPerExpert: 24000,
-          maxSkillPromptChars: 12000,
+          maxSkillPromptChars: 0,
           maxEvidenceItems: 30,
         },
       },
@@ -54,12 +56,20 @@ describe('AdminAgentGovernanceView', () => {
             priority: 10,
             maxTokens: 1200,
             maxToolCalls: 4,
-            allowedTools: ['rank.lookup'],
+            requestedToolCapabilities: ['market.read'],
             triggerIntents: ['market_scan'],
             triggerTasks: ['market_scan'],
             promptVersion: 'default',
             evalSuiteId: 'market',
             guardrail: false,
+            category: 'Skill',
+          executionKind: 'INLINE',
+          expectedQualityGain: 0,
+          qualityGainVerified: false,
+          qualityGainSource: 'not_required',
+            latencyCost: 0,
+            tokenCost: 0,
+            resourceCost: 0,
           },
           {
             expertName: 'reader_risk',
@@ -68,7 +78,7 @@ describe('AdminAgentGovernanceView', () => {
             priority: 900,
             maxTokens: 800,
             maxToolCalls: 2,
-            allowedTools: ['skill.lookup'],
+            requestedToolCapabilities: ['skill.activate'],
             triggerIntents: [],
             triggerTasks: ['reader_risk'],
             promptVersion: 'default',
@@ -174,17 +184,28 @@ describe('AdminAgentGovernanceView', () => {
               id: 99,
               traceId: 'trace-governance-live',
               status: 'answered',
-              resultJson: JSON.stringify({
-                trace: {
-                  nodes: [
-                    { name: 'assemble_context', status: 'completed', sequenceNo: 1, durationMs: 12 },
-                    { name: 'compose_answer', status: 'completed', sequenceNo: 2, durationMs: 240 },
-                  ],
-                  executedRuntimeNodes: ['assemble_context', 'compose_answer'],
-                },
-              }),
             },
           ],
+        },
+      },
+    } as never);
+    vi.mocked(knowledgeApi.getAgentTrace).mockResolvedValue({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          id: 99,
+          traceId: 'trace-governance-live',
+          status: 'answered',
+          resultJson: JSON.stringify({
+            trace: {
+              nodes: [
+                { name: 'assemble_context', status: 'completed', sequenceNo: 1, durationMs: 12 },
+                { name: 'compose_answer', status: 'completed', sequenceNo: 2, durationMs: 240 },
+              ],
+              executedRuntimeNodes: ['assemble_context', 'compose_answer'],
+            },
+          }),
         },
       },
     } as never);
@@ -199,6 +220,7 @@ describe('AdminAgentGovernanceView', () => {
     expect(knowledgeApi.getAgentCacheTokenStats).toHaveBeenCalled();
     expect(knowledgeApi.listAgentEvalRuns).toHaveBeenCalled();
     expect(knowledgeApi.listAgentTraces).toHaveBeenCalledWith({ page: 1, pageSize: 1 });
+    expect(knowledgeApi.getAgentTrace).toHaveBeenCalledWith(99);
     expect(wrapper.text()).toContain('Agent 治理');
     expect(wrapper.text()).toContain('运行策略');
     expect(wrapper.text()).toContain('缓存与 Token');
@@ -213,21 +235,34 @@ describe('AdminAgentGovernanceView', () => {
     expect(wrapper.text()).toContain('记忆与 Trace');
     expect(wrapper.text()).toContain('agent-runtime:001');
     expect(wrapper.text()).toContain('1 / 2');
-    expect(wrapper.text()).toContain('case 1/2 completed');
+    expect(wrapper.text()).toContain('已完成用例 1 / 2');
     expect(wrapper.text()).toContain('重试 1');
     expect(wrapper.text()).toContain('faithfulness failed');
     expect(wrapper.text()).toContain('200');
     expect(wrapper.text()).toContain('提示前缀稳定率');
     expect(wrapper.text()).toContain('66.67%');
     expect(wrapper.text()).toContain('最大并行专家数');
-    expect(wrapper.text()).toContain('Market Agent');
+    expect(wrapper.text()).toContain('0 表示按模型窗口和任务类型自动计算；正数只作为快速模式最终回答 Token 上限。');
+    expect(wrapper.text()).toContain('0 表示按模型窗口和任务类型自动计算；正数只作为深度模式最终回答 Token 上限。');
+    expect(wrapper.text()).toContain('0 表示按模型窗口和实际专家数自动分配；正数只作为每个专家完整提示上下文的治理上限。');
+    expect(wrapper.text()).toContain('0 表示不设置独立 Skill 字符上限');
+    expect(wrapper.text()).toContain('专家工具调用');
+    expect((wrapper.get('input[aria-label="专家工具调用"]').element as HTMLInputElement).checked).toBe(false);
+    expect(wrapper.text()).toContain('市场扫描专家');
     expect(wrapper.text()).toContain('reader_risk');
     expect(wrapper.find('[data-test="governance-runtime-graph"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('trace-governance-live');
-    expect(wrapper.text()).toContain('compose_answer');
+    expect(wrapper.text()).toContain('生成回答');
     expect(wrapper.text()).toContain('worker');
     expect(wrapper.text()).toContain('Agent Trace');
-  });
+    expect(wrapper.text()).not.toContain('控制平面模式');
+    expect(wrapper.text()).toContain('失败');
+    expect(wrapper.text()).toContain('运行中');
+    expect(wrapper.text()).toContain('快速模式');
+    expect(wrapper.text()).toContain('技能能力');
+    expect(wrapper.text()).not.toContain('RUNNING');
+    expect(wrapper.text()).not.toContain('FAILED');
+  }, 15_000);
 
   test('saves runtime and expert profile changes', async () => {
     vi.mocked(knowledgeApi.updateAgentRuntimeConfig).mockResolvedValue({
@@ -236,7 +271,8 @@ describe('AdminAgentGovernanceView', () => {
         message: 'success',
         data: {
           reasoningModeDefault: 'fast',
-          maxParallelSpecialists: 5,
+          maxParallelSpecialists: 1,
+          specialistMcpEnabled: true,
         },
       },
     } as never);
@@ -251,12 +287,21 @@ describe('AdminAgentGovernanceView', () => {
           priority: 10,
           maxTokens: 1200,
           maxToolCalls: 4,
-          allowedTools: ['rank.lookup'],
+          requestedToolCapabilities: ['market.read'],
           triggerIntents: ['market_scan'],
           triggerTasks: ['market_scan'],
           promptVersion: 'default',
           evalSuiteId: 'market',
           guardrail: false,
+          category: 'Delegated',
+          executionKind: 'DELEGATED',
+          expectedQualityGain: 0.5,
+          qualityGainVerified: true,
+          qualityGainSource: 'approved_eval',
+          qualityGainEvalRunId: 42,
+          latencyCost: 0.1,
+          tokenCost: 0.05,
+          resourceCost: 0.05,
         },
       },
     } as never);
@@ -265,14 +310,27 @@ describe('AdminAgentGovernanceView', () => {
     await flushPromises();
 
     await wrapper.find('[data-test="save-runtime-maxParallelSpecialists"]').trigger('click');
+    await wrapper.get('input[aria-label="专家工具调用"]').setValue(true);
+    await wrapper.find('[data-test="save-runtime-specialistMcpEnabled"]').trigger('click');
     await wrapper.find('[data-test="expert-enabled-market_scan"]').setValue(false);
+    await wrapper.find('[data-test="expert-category-market_scan"]').setValue('Delegated');
     await wrapper.find('[data-test="save-expert-market_scan"]').trigger('click');
     await flushPromises();
 
-    expect(knowledgeApi.updateAgentRuntimeConfig).toHaveBeenCalledWith('maxParallelSpecialists', { value: '3' });
-    expect(knowledgeApi.updateAgentExpert).toHaveBeenCalledWith('market_scan', expect.objectContaining({ enabled: false }));
+    expect(knowledgeApi.updateAgentRuntimeConfig).toHaveBeenCalledWith('maxParallelSpecialists', { value: '1' });
+    expect(knowledgeApi.updateAgentRuntimeConfig).toHaveBeenCalledWith('specialistMcpEnabled', { value: 'true' });
+    expect((wrapper.get('input[aria-label="专家工具调用"]').element as HTMLInputElement).checked).toBe(true);
+    expect(knowledgeApi.updateAgentExpert).toHaveBeenCalledWith('market_scan', expect.objectContaining({
+      enabled: false,
+      category: 'Delegated',
+      executionKind: 'DELEGATED',
+      expectedQualityGain: 0,
+    }));
+    const expertPayload = vi.mocked(knowledgeApi.updateAgentExpert).mock.calls[0]?.[1];
+    expect(expertPayload).not.toHaveProperty('allowedTools');
+    expect(expertPayload).toHaveProperty('requestedToolCapabilities', ['market.read']);
     expect(wrapper.text()).toContain('已保存');
-  });
+  }, 15_000);
 
   test('starts an eval suite run from the admin eval center', async () => {
     vi.mocked(knowledgeApi.runAgentEval).mockResolvedValue({

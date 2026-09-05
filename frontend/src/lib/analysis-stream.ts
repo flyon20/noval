@@ -24,7 +24,7 @@ export interface AnalysisStreamTask<TDone = AnalysisResult> {
 }
 
 interface ParsedEvent {
-  event: 'start' | 'progress' | 'delta' | 'done' | 'error';
+  event: 'start' | 'progress' | 'context_compacting' | 'context_compacted' | 'delta' | 'done' | 'error';
   payload: unknown;
 }
 
@@ -114,6 +114,10 @@ function isAnalysisProgressDelta(payload: unknown) {
   return typeof delta === 'string' && delta.startsWith('[analysis-progress]');
 }
 
+function isStreamProgressEvent(event: ParsedEvent['event']): event is StreamProgressEvent['event'] {
+  return event === 'progress' || event === 'context_compacting' || event === 'context_compacted';
+}
+
 export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = AnalysisResult>(
   deps: AnalysisStreamRunnerDeps<TRequest, TDone>,
 ) {
@@ -174,7 +178,7 @@ export function createAnalysisStreamRunner<TRequest = AnalysisRequest, TDone = A
                 continue;
               }
 
-              if (item.event === 'progress') {
+              if (isStreamProgressEvent(item.event)) {
                 callbacks.onProgress?.(item.payload as StreamProgressEvent);
                 continue;
               }

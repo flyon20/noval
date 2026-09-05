@@ -3,7 +3,7 @@ skillId: project-memory-extract
 version: 1.0.0
 intents: [followup_context]
 appliesTo: [project_memory_extract, memory_extract]
-allowedTools: [memory.project_context]
+requestedCapabilities: [memory.project.read]
 requiredEvidence: []
 triggers: [memory, project, preference, constraint]
 ---

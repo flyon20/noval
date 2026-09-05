@@ -1,11 +1,16 @@
 ---
 skillId: webnovel-book-breakdown
 version: 1.1.0
+title: 章节分析
+description: 拆解小说或章节的结构、节奏、钩子、冲突循环与商业留存机制。
 intents: [book_breakdown]
 appliesTo: [book_breakdown, structure_breakdown, rhythm_analysis, plot_breakdown, retention_diagnosis, hot_element_analysis]
-allowedTools: [knowledge.vector_search, skill.lookup, memory.project_context]
+requestedCapabilities: [book.read, skill.activate, memory.project.read]
 requiredEvidence: []
 triggers: [breakdown, craft, analyze, retention, opening, structure, plot, hook]
+shortcutEnabled: true
+shortcutLabel: 章节分析
+shortcutOrder: 30
 ---
 
 ## Prompt Fragment

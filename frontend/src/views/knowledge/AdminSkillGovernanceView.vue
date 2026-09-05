@@ -8,6 +8,7 @@ import type {
   SkillCandidatePage,
   SkillEvalResult,
 } from '@/types/knowledge';
+import { knowledgeDomainLabel, knowledgeStatusLabel } from '@/utils/knowledgeDisplay';
 
 defineOptions({
   name: 'AdminSkillGovernanceView',
@@ -101,11 +102,17 @@ async function handleSkillFileChange(event: Event) {
   try {
     const content = await readTextFile(file);
     uploadForm.content = content;
-    if (!uploadForm.title.trim()) {
-      uploadForm.title = inferTitleFromMarkdown(content, file.name);
-    }
-    if (!uploadForm.skillId.trim()) {
-      uploadForm.skillId = inferSkillIdFromFilename(file.name);
+    const descriptor = parseSkillDescriptorPreview(content);
+    if (descriptor?.name) {
+      uploadForm.skillId = descriptor.name;
+      uploadForm.title = descriptor.name;
+    } else {
+      if (!uploadForm.title.trim()) {
+        uploadForm.title = inferTitleFromMarkdown(content, file.name);
+      }
+      if (!uploadForm.skillId.trim()) {
+        uploadForm.skillId = inferSkillIdFromFilename(file.name);
+      }
     }
     errorMessage.value = '';
   } catch (error) {
@@ -113,6 +120,29 @@ async function handleSkillFileChange(event: Event) {
   } finally {
     input.value = '';
   }
+}
+
+function parseSkillDescriptorPreview(content: string): { name: string; description?: string } | null {
+  const normalized = content.replace(/^\uFEFF/, '');
+  const match = normalized.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match) {
+    return null;
+  }
+  const values = new Map<string, string>();
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([a-z][a-z-]*):\s*(.*?)\s*$/i);
+    if (!field || !field[2]) continue;
+    values.set(field[1].toLowerCase(), unquoteYamlScalar(field[2]));
+  }
+  const name = values.get('name')?.trim() || '';
+  return name ? { name, description: values.get('description')?.trim() || undefined } : null;
+}
+
+function unquoteYamlScalar(value: string) {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 function readTextFile(file: File): Promise<string> {
@@ -292,11 +322,27 @@ function evalMetrics(candidate: SkillCandidate): SkillEvalResult | null {
             <strong>{{ skill.skillId }}</strong>
             <el-tag v-if="skill.version" size="small" type="info">{{ skill.version }}</el-tag>
           </div>
+          <p v-if="skill.description" class="runtime-skill__description">{{ skill.description }}</p>
           <div v-if="skill.intents?.length" class="tag-row">
-            <el-tag v-for="intent in skill.intents" :key="intent" size="small">{{ intent }}</el-tag>
+            <el-tag v-for="intent in skill.intents" :key="intent" size="small" :title="intent">
+              {{ knowledgeDomainLabel(intent) }}
+            </el-tag>
           </div>
           <div v-if="skill.triggers?.length" class="tag-row">
             <el-tag v-for="trigger in skill.triggers" :key="trigger" size="small" type="success">{{ trigger }}</el-tag>
+          </div>
+          <div v-if="skill.requestedCapabilities?.length" class="runtime-skill__capabilities">
+            <small>请求能力（非授权）</small>
+            <div class="tag-row">
+              <el-tag
+                v-for="capability in skill.requestedCapabilities"
+                :key="capability"
+                size="small"
+                type="warning"
+              >
+                {{ capability }}
+              </el-tag>
+            </div>
           </div>
         </article>
       </div>
@@ -390,9 +436,9 @@ function evalMetrics(candidate: SkillCandidate): SkillEvalResult | null {
         </div>
         <div class="candidate-tools">
           <el-select v-model="statusFilter" clearable size="small" placeholder="状态" class="candidate-status">
-            <el-option label="PENDING" value="PENDING" />
-            <el-option label="APPROVED" value="APPROVED" />
-            <el-option label="REJECTED" value="REJECTED" />
+            <el-option label="待审核" value="PENDING" />
+            <el-option label="已通过" value="APPROVED" />
+            <el-option label="已拒绝" value="REJECTED" />
           </el-select>
           <el-button size="small" type="primary" data-test="skill-search" @click="search">搜索</el-button>
         </div>
@@ -400,16 +446,28 @@ function evalMetrics(candidate: SkillCandidate): SkillEvalResult | null {
 
       <el-table v-loading="loading" :data="candidates" size="small" class="candidate-table">
         <el-table-column prop="skillId" label="技能" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="title" label="标题" min-width="180" show-overflow-tooltip />
+        <el-table-column label="描述" min-width="240" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="candidate-description">
+              <strong>{{ row.title }}</strong>
+              <small v-if="row.description">{{ row.description }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="请求能力" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.requestedCapabilitiesJson || '-' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <el-tag :type="statusType(row.status)" size="small">{{ knowledgeStatusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="Eval 指标" min-width="190">
           <template #default="{ row }">
             <div class="eval-cell">
-              <span>{{ row.evalStatus }}</span>
+              <span>{{ knowledgeStatusLabel(row.evalStatus) }}</span>
               <template v-if="evalMetrics(row)">
                 <small>工具 {{ percent(evalMetrics(row)?.requiredToolPassRate) }}</small>
                 <small>证据 {{ percent(evalMetrics(row)?.evidencePassRate) }}</small>
@@ -633,6 +691,25 @@ function evalMetrics(candidate: SkillCandidate): SkillEvalResult | null {
 .runtime-skill__title strong {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.runtime-skill__description {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.runtime-skill__capabilities,
+.candidate-description {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.runtime-skill__capabilities > small,
+.candidate-description small {
+  color: var(--el-text-color-secondary);
+  font-size: 0.75rem;
 }
 
 .tag-row,

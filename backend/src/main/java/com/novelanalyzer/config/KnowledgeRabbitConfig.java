@@ -11,6 +11,7 @@ import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFacto
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.boot.autoconfigure.amqp.RabbitTemplateCustomizer;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -57,6 +58,22 @@ public class KnowledgeRabbitConfig {
                                                                                             KnowledgeProperties properties) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         int concurrency = Math.max(1, properties.getEval().getWorkerConcurrency());
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(messageConverter);
+        factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
+        factory.setConcurrentConsumers(concurrency);
+        factory.setMaxConcurrentConsumers(concurrency);
+        factory.setPrefetchCount(concurrency);
+        return factory;
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "app.knowledge.chat-run", name = "queue-enabled", havingValue = "true")
+    public SimpleRabbitListenerContainerFactory knowledgeChatRunRabbitListenerContainerFactory(ConnectionFactory connectionFactory,
+                                                                                                Jackson2JsonMessageConverter messageConverter,
+                                                                                                KnowledgeProperties properties) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        int concurrency = Math.max(1, properties.getChatRun().getWorkerConcurrency());
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(messageConverter);
         factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
@@ -130,6 +147,108 @@ public class KnowledgeRabbitConfig {
         return new Declarables(declarables);
     }
 
+    @Bean
+    @ConditionalOnProperty(prefix = "app.knowledge.chat-run", name = "queue-enabled", havingValue = "true")
+    public Declarables knowledgeChatRunRabbitDeclarables(KnowledgeProperties properties) {
+        KnowledgeProperties.ChatRun.Rabbit rabbit = chatRunRabbit(properties);
+        DirectExchange mainExchange = new DirectExchange(rabbit.getExchange(), true, false);
+        DirectExchange deadLetterExchange = new DirectExchange(rabbit.getDeadLetterExchange(), true, false);
+        Queue mainQueue = QueueBuilder.durable(rabbit.getQueue())
+            .deadLetterExchange(deadLetterExchange.getName())
+            .deadLetterRoutingKey(rabbit.getDeadLetterRoutingKey())
+            .build();
+        Queue deadLetterQueue = QueueBuilder.durable(rabbit.getDeadLetterQueue()).build();
+
+        return new Declarables(
+            mainExchange,
+            deadLetterExchange,
+            mainQueue,
+            deadLetterQueue,
+            BindingBuilder.bind(mainQueue).to(mainExchange).with(rabbit.getRoutingKey()),
+            BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange).with(rabbit.getDeadLetterRoutingKey())
+        );
+    }
+
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory knowledgeProjectIngestRabbitListenerContainerFactory(ConnectionFactory connectionFactory,
+                                                                                                     Jackson2JsonMessageConverter messageConverter,
+                                                                                                     KnowledgeProperties properties) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        int concurrency = Math.max(1, properties.getProjectIngest().getWorkerConcurrency());
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(messageConverter);
+        factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
+        factory.setConcurrentConsumers(concurrency);
+        factory.setMaxConcurrentConsumers(concurrency);
+        factory.setPrefetchCount(1);
+        return factory;
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "app.knowledge.project-ingest", name = "queue-enabled", havingValue = "true")
+    public Declarables knowledgeProjectIngestRabbitDeclarables(KnowledgeProperties properties) {
+        KnowledgeProperties.ProjectIngest.Rabbit rabbit = projectIngestRabbit(properties);
+        DirectExchange mainExchange = new DirectExchange(rabbit.getExchange(), true, false);
+        DirectExchange deadLetterExchange = new DirectExchange(rabbit.getDeadLetterExchange(), true, false);
+        Queue mainQueue = QueueBuilder.durable(rabbit.getQueue())
+            .deadLetterExchange(deadLetterExchange.getName())
+            .deadLetterRoutingKey(rabbit.getDeadLetterRoutingKey())
+            .build();
+        Queue deadLetterQueue = QueueBuilder.durable(rabbit.getDeadLetterQueue()).build();
+        return new Declarables(
+            mainExchange,
+            deadLetterExchange,
+            mainQueue,
+            deadLetterQueue,
+            BindingBuilder.bind(mainQueue).to(mainExchange).with(rabbit.getRoutingKey()),
+            BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange).with(rabbit.getDeadLetterRoutingKey())
+        );
+    }
+
+    @Bean
+    public SimpleRabbitListenerContainerFactory knowledgeProjectDocumentBatchRabbitListenerContainerFactory(
+        ConnectionFactory connectionFactory,
+        Jackson2JsonMessageConverter messageConverter,
+        KnowledgeProperties properties
+    ) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        int concurrency = Math.max(1, properties.getDocumentBatch().getWorkerConcurrency());
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(messageConverter);
+        factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
+        factory.setConcurrentConsumers(concurrency);
+        factory.setMaxConcurrentConsumers(concurrency);
+        factory.setPrefetchCount(1);
+        return factory;
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "app.knowledge.document-batch", name = "queue-enabled", havingValue = "true")
+    public Declarables knowledgeProjectDocumentBatchRabbitDeclarables(KnowledgeProperties properties) {
+        KnowledgeProperties.DocumentBatch.Rabbit rabbit = properties.getDocumentBatch().getRabbit();
+        DirectExchange mainExchange = new DirectExchange(rabbit.getExchange(), true, false);
+        DirectExchange deadLetterExchange = new DirectExchange(rabbit.getDeadLetterExchange(), true, false);
+        Queue mainQueue = QueueBuilder.durable(rabbit.getQueue())
+            .deadLetterExchange(deadLetterExchange.getName())
+            .deadLetterRoutingKey(rabbit.getDeadLetterRoutingKey())
+            .build();
+        Queue deadLetterQueue = QueueBuilder.durable(rabbit.getDeadLetterQueue()).build();
+        return new Declarables(
+            mainExchange,
+            deadLetterExchange,
+            mainQueue,
+            deadLetterQueue,
+            BindingBuilder.bind(mainQueue).to(mainExchange).with(rabbit.getRoutingKey()),
+            BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange).with(rabbit.getDeadLetterRoutingKey())
+        );
+    }
+
+    private KnowledgeProperties.ProjectIngest.Rabbit projectIngestRabbit(KnowledgeProperties properties) {
+        KnowledgeProperties.ProjectIngest projectIngest = properties.getProjectIngest();
+        return projectIngest == null ? new KnowledgeProperties.ProjectIngest.Rabbit() : projectIngest.getRabbit();
+    }
+
     private KnowledgeProperties.Index.Rabbit rabbit(KnowledgeProperties properties) {
         KnowledgeProperties.Index index = properties.getIndex();
         return index == null ? new KnowledgeProperties.Index.Rabbit() : index.getRabbit();
@@ -138,6 +257,11 @@ public class KnowledgeRabbitConfig {
     private KnowledgeProperties.Eval.Rabbit evalRabbit(KnowledgeProperties properties) {
         KnowledgeProperties.Eval eval = properties.getEval();
         return eval == null ? new KnowledgeProperties.Eval.Rabbit() : eval.getRabbit();
+    }
+
+    private KnowledgeProperties.ChatRun.Rabbit chatRunRabbit(KnowledgeProperties properties) {
+        KnowledgeProperties.ChatRun chatRun = properties.getChatRun();
+        return chatRun == null ? new KnowledgeProperties.ChatRun.Rabbit() : chatRun.getRabbit();
     }
 
     private List<Long> retryDelays(KnowledgeProperties properties) {

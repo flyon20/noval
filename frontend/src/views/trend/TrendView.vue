@@ -1006,9 +1006,9 @@ onBeforeUnmount(() => {
 }
 
 .trend-page__support-table-wrap :deep(.el-table) {
-  --el-table-border-color: rgba(35, 65, 58, 0.08);
-  --el-table-header-bg-color: rgba(35, 65, 58, 0.04);
-  --el-table-row-hover-bg-color: rgba(35, 65, 58, 0.04);
+  --el-table-border-color: var(--color-border);
+  --el-table-header-bg-color: color-mix(in srgb, var(--color-primary-soft) 58%, transparent);
+  --el-table-row-hover-bg-color: color-mix(in srgb, var(--color-primary-soft) 72%, transparent);
   min-width: 560px;
 }
 

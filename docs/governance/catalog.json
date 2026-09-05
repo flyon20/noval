@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "generated_policy": "manual-reviewed",
+  "documents": [
+    {
+      "id": "docs-catalog",
+      "path": "docs/governance/catalog.json",
+      "title": "Noval machine-readable document catalog",
+      "kind": "catalog",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-09-05",
+      "review_interval_days": 90,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "docs-index",
+      "path": "docs/README.md",
+      "title": "Noval 文档中心",
+      "kind": "index",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 90,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "documentation-governance-design",
+      "path": "docs/governance/noval-documentation-governance-design.md",
+      "title": "Noval 文档治理与优化设计",
+      "kind": "design",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 90,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "document-lifecycle-template",
+      "path": "docs/governance/document-lifecycle-template.md",
+      "title": "Noval 文档生命周期模板",
+      "kind": "template",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 180,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "legacy-ai-runtime-flow",
+      "path": "docs/ai-qa-rag-langgraph-runtime-flow.md",
+      "title": "AI Q&A RAG + LangGraph Runtime Flow",
+      "kind": "design",
+      "status": "historical",
+      "publication": "private",
+      "owner": "agent-runtime",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 365,
+      "supersedes": [],
+      "superseded_by": [
+        "noval-ai-current-architecture"
+      ]
+    },
+    {
+      "id": "legacy-project-design-v2",
+      "path": "docs/项目总设计-v2.md",
+      "title": "网文项目总设计-v2",
+      "kind": "design",
+      "status": "historical",
+      "publication": "private",
+      "owner": "project",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 365,
+      "supersedes": [],
+      "superseded_by": [
+        "root-readme"
+      ]
+    },
+    {
+      "id": "noval-ai-current-architecture",
+      "path": "docs/superpowers/findings/2026-08-16-deepseek-harness-review/01-noval-ai-qa-current-architecture.md",
+      "title": "Noval AI 问答当前架构",
+      "kind": "design",
+      "status": "current",
+      "publication": "repository",
+      "owner": "agent-runtime",
+      "last_reviewed": "2026-09-05",
+      "review_interval_days": 30,
+      "supersedes": [
+        "legacy-ai-runtime-flow",
+        "phase51-harness-design"
+      ],
+      "superseded_by": [],
+      "evidence": {
+        "implementation": [
+          "frontend/src/views/knowledge/KnowledgeChatView.vue",
+          "frontend/src/views/config/system/SystemConfigView.vue",
+          "frontend/src/api/config.ts",
+          "frontend/src/types/config.ts",
+          "backend/src/main/java/com/novelanalyzer/modules/config/controller/SystemConfigController.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/dto/AiModelProviderProbeRequest.java",
+          "backend/src/main/java/com/novelanalyzer/modules/analysis/client/LangGraphWorkerClient.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAgentProviderProbeService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/vo/AgentProviderProbeVO.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeChatRunService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeChatRunEventService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeChatService.java",
+          "langgraph-worker/app/services/novel_research_agent.py",
+          "langgraph-worker/app/services/harness/webnovel_harness.py",
+          "langgraph-worker/app/services/harness/agent_kernel.py",
+          "langgraph-worker/app/services/knowledge_client.py",
+          "langgraph-worker/app/services/provider_client.py",
+          "langgraph-worker/app/services/harness/context_compaction.py",
+          "backend/src/main/java/com/novelanalyzer/modules/config/service/SystemConfigService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/model/AiProviderCapabilities.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/model/AiPromptCacheCapabilities.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/model/AiProviderRoutingPolicy.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/dto/AiModelRegistryModelRequest.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/vo/AiModelRegistryModelVO.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAgentGovernanceService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAgentProviderCircuitShadowService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/controller/KnowledgeInternalController.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/dto/AgentProviderRoutingOutcomeRequest.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/vo/AgentProviderProfileVO.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/vo/AgentProviderCircuitStateVO.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/vo/AgentProviderRoutingPolicyVO.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/dto/AgentProviderRuntimeResolveRequest.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/vo/AgentProviderRuntimeVO.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/vo/AgentRuntimeConfigVO.java",
+          "langgraph-worker/app/api/knowledge.py",
+          "langgraph-worker/app/services/harness/provider_dispatch_scope.py",
+          "langgraph-worker/app/services/harness/tool_ledger.py",
+          "langgraph-worker/app/services/retrieval_fusion.py",
+          "langgraph-worker/app/services/retrieval_eval.py"
+        ],
+        "acceptance": [
+          "frontend/src/views/config/system/__tests__/SystemConfigView.spec.ts",
+          "backend/src/test/java/com/novelanalyzer/modules/config/SystemConfigControllerTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/analysis/client/LangGraphWorkerClientTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAgentProviderProbeServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeChatRunPersistenceServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeChatRunServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeChatServiceUnitTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeChatServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeChatRunEventServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeControllerTest.java",
+          "langgraph-worker/tests/test_agent_checkpoint_resume.py",
+          "langgraph-worker/tests/test_agent_kernel.py",
+          "langgraph-worker/tests/test_provider_dispatch_scope.py",
+          "langgraph-worker/tests/test_novel_research_agent.py",
+          "langgraph-worker/tests/test_knowledge_api.py",
+          "langgraph-worker/tests/test_context_compaction.py",
+          "langgraph-worker/tests/test_harness_tool_ledger.py",
+          "langgraph-worker/tests/test_knowledge_client.py",
+          "langgraph-worker/tests/test_provider_client.py",
+          "langgraph-worker/tests/test_deepseek_cache_e2e.py",
+          "backend/src/test/java/com/novelanalyzer/modules/config/SystemConfigServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeAgentGovernanceServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAgentProviderCircuitShadowServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeInternalControllerTest.java",
+          "langgraph-worker/tests/test_webnovel_harness.py"
+        ],
+        "verified_at": null,
+        "verified_commit": null
+      }
+    },
+    {
+      "id": "phase-closeout-template",
+      "path": "docs/governance/phase-closeout-template.md",
+      "title": "Noval Phase Closeout 模板",
+      "kind": "template",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 180,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "root-readme",
+      "path": "README.md",
+      "title": "Noval project overview",
+      "kind": "guide",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 90,
+      "supersedes": [
+        "legacy-project-design-v2"
+      ],
+      "superseded_by": []
+    },
+    {
+      "id": "glossary",
+      "path": "docs/glossary.md",
+      "title": "Noval 术语表",
+      "kind": "guide",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 90,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "troubleshooting",
+      "path": "docs/troubleshooting.md",
+      "title": "Noval 文档故障排查",
+      "kind": "guide",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 90,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "changelog",
+      "path": "docs/changelog.md",
+      "title": "Noval 文档治理变更记录",
+      "kind": "guide",
+      "status": "current",
+      "publication": "repository",
+      "owner": "project-governance",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 90,
+      "supersedes": [],
+      "superseded_by": []
+    },
+    {
+      "id": "redis-cache-continuity-shadow",
+      "path": "docs/superpowers/findings/2026-08-16-deepseek-harness-review/06-redis-cache-continuity-shadow-implementation.md",
+      "title": "Redis Provider Cache 连续性 Shadow 实现",
+      "kind": "report",
+      "status": "current",
+      "publication": "repository",
+      "owner": "agent-runtime",
+      "last_reviewed": "2026-09-05",
+      "review_interval_days": 30,
+      "supersedes": [],
+      "superseded_by": [],
+      "evidence": {
+        "implementation": [
+          ".env.example",
+          "langgraph-worker/app/config.py",
+          "langgraph-worker/app/services/provider_client.py",
+          "langgraph-worker/app/services/harness/agent_kernel.py",
+          "langgraph-worker/app/services/harness/provider_dispatch_scope.py",
+          "langgraph-worker/app/services/harness/webnovel_harness.py",
+          "langgraph-worker/app/services/novel_research_agent.py",
+          "frontend/src/views/config/system/SystemConfigView.vue",
+          "frontend/src/types/config.ts",
+          "backend/src/main/java/com/novelanalyzer/modules/config/model/AiProviderCapabilities.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/model/AiPromptCacheCapabilities.java",
+          "backend/src/main/java/com/novelanalyzer/modules/config/service/SystemConfigService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeChatService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAiCacheContinuityService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAgentTraceService.java",
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeChatRunEventService.java",
+          "docker-compose.yml"
+        ],
+        "acceptance": [
+          "langgraph-worker/tests/test_provider_client.py",
+          "langgraph-worker/tests/test_agent_kernel.py",
+          "langgraph-worker/tests/test_provider_dispatch_scope.py",
+          "langgraph-worker/tests/test_webnovel_harness.py",
+          "langgraph-worker/tests/test_novel_research_agent.py",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeChatServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeAgentTraceServiceTest.java",
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/service/KnowledgeAiCacheContinuityServiceTest.java"
+        ],
+        "verified_at": "2026-09-05",
+        "verified_commit": null
+      }
+    },
+    {
+      "id": "phase51-harness-design",
+      "path": "docs/superpowers/specs/2026-07-12-webnovel-agent-harness-moe-project-rag-design.md",
+      "title": "Phase 51 Webnovel Agent Harness/MoE/Project RAG 设计",
+      "kind": "design",
+      "status": "historical",
+      "publication": "private",
+      "owner": "agent-runtime",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 180,
+      "supersedes": [],
+      "superseded_by": [
+        "noval-ai-current-architecture"
+      ],
+      "evidence": {
+        "implementation": [
+          "langgraph-worker/app/services/harness/webnovel_harness.py"
+        ],
+        "acceptance": [
+          "docs/superpowers/reports/2026-07-23-phase51-tasks9-14-acceptance.md"
+        ],
+        "verified_at": null,
+        "verified_commit": null
+      }
+    },
+    {
+      "id": "phase51-tasks9-14-plan",
+      "path": "docs/superpowers/plans/2026-07-23-webnovel-agent-harness-tasks9-14-implementation.md",
+      "title": "Phase 51 Tasks 9-14 实施计划",
+      "kind": "plan",
+      "status": "historical",
+      "publication": "private",
+      "owner": "agent-runtime",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 90,
+      "supersedes": [],
+      "superseded_by": [
+        "phase51-tasks9-14-acceptance"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeProjectIngestService.java"
+        ],
+        "acceptance": [
+          "docs/superpowers/reports/2026-07-23-phase51-tasks9-14-acceptance.md"
+        ],
+        "verified_at": null,
+        "verified_commit": null
+      }
+    },
+    {
+      "id": "phase51-tasks9-14-acceptance",
+      "path": "docs/superpowers/reports/2026-07-23-phase51-tasks9-14-acceptance.md",
+      "title": "Phase 51 Tasks 9-14 验收报告",
+      "kind": "report",
+      "status": "current",
+      "publication": "private",
+      "owner": "agent-runtime",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 30,
+      "supersedes": [
+        "phase51-tasks9-14-plan"
+      ],
+      "superseded_by": [],
+      "evidence": {
+        "implementation": [
+          "backend/src/main/java/com/novelanalyzer/modules/knowledge/service/KnowledgeProjectRetrievalService.java",
+          "frontend/src/views/knowledge/ProjectExtractionReview.vue",
+          "frontend/src/views/knowledge/StoryRelationshipGraph.vue"
+        ],
+        "acceptance": [
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/Phase51AcceptanceMatrixTest.java",
+          "langgraph-worker/tests/test_project_retrieval_golden_corpus.py"
+        ],
+        "verified_at": null,
+        "verified_commit": null
+      }
+    },
+    {
+      "id": "j3160-production-runbook",
+      "path": "docs/j3160-production-update-runbook.md",
+      "title": "J3160 生产更新 Runbook",
+      "kind": "runbook",
+      "status": "draft",
+      "publication": "private",
+      "owner": "release-engineering",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 30,
+      "supersedes": [],
+      "superseded_by": [],
+      "evidence": {
+        "implementation": [
+          "docker-compose.yml",
+          "docker/mysql/00-initialize-noval.sh",
+          "backend/sql/mysql/phase29-project-document-batch.sql",
+          "backend/sql/mysql/phase30-long-form-memory-foundation.sql"
+        ],
+        "acceptance": [
+          "backend/src/test/java/com/novelanalyzer/sql/MySqlInitOrderTest.java",
+          "backend/sql/mysql/phase29-project-document-batch-verify.sql",
+          "backend/sql/mysql/phase30-long-form-memory-foundation-verify.sql"
+        ],
+        "verified_at": null,
+        "verified_commit": null
+      }
+    },
+    {
+      "id": "phase121-hybrid-ingest-plan",
+      "path": "docs/superpowers/plans/2026-08-10-project-document-hybrid-knowledge-ingest.md",
+      "title": "Phase 121 项目文档混合知识摄取计划",
+      "kind": "plan",
+      "status": "draft",
+      "publication": "private",
+      "owner": "knowledge-platform",
+      "last_reviewed": "2026-08-17",
+      "review_interval_days": 30,
+      "supersedes": [],
+      "superseded_by": [],
+      "evidence": {
+        "implementation": [
+          "backend/sql/mysql/phase29-project-document-batch.sql",
+          "backend/sql/mysql/phase30-long-form-memory-foundation.sql"
+        ],
+        "acceptance": [
+          "backend/src/test/java/com/novelanalyzer/modules/knowledge/KnowledgeLongFormMemoryServiceTest.java"
+        ],
+        "verified_at": null,
+        "verified_commit": null
+      }
+    }
+  ]
+}

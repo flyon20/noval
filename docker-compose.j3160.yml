@@ -1,0 +1,50 @@
+# J3160 host-specific production overrides.
+# Always use this file together with the repository docker-compose.yml.
+services:
+  config-preflight:
+    environment:
+      NGINX_SSL_VERIFY_CLIENT: "off"
+      NOVAL_CLOUDFLARE_TUNNEL_ONLY: "true"
+
+  nginx:
+    environment:
+      NGINX_SSL_VERIFY_CLIENT: "off"
+    ports: !override
+      - "127.0.0.1:8443:443"
+
+  backend:
+    mem_limit: 1536m
+    memswap_limit: 1536m
+
+  crawler:
+    mem_limit: 768m
+    memswap_limit: 768m
+
+  langgraph-worker:
+    mem_limit: 2g
+    memswap_limit: 2g
+
+  fastmcp-tools:
+    mem_limit: 384m
+    memswap_limit: 384m
+
+  mysql:
+    ports: !override
+      - "127.0.0.1:3306:3306"
+    mem_limit: 2g
+    memswap_limit: 2g
+
+  redis:
+    ports: !override
+      - "127.0.0.1:6379:6379"
+
+  rabbitmq:
+    ports: !override
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+  qdrant:
+    ports: !override
+      - "127.0.0.1:6333:6333"
+    mem_limit: 768m
+    memswap_limit: 768m

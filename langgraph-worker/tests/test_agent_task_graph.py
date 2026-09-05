@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import unittest
 
+from app.models.knowledge import KnowledgeChatRequest
 from app.models.agent_task import TaskType
+from app.services.harness.capability_compiler import CapabilityCompiler
+from app.services.harness.contracts import CapabilityScope
 from app.services.intents.domain_intents import Intent, IntentDecision
+from app.services.runtime.intent_agent import IntentAgent
 from app.services.task_graph.decomposer import TaskGraphDecomposer
+from app.services.task_graph.planner import DomainToolPlanner
 
 
 class TaskGraphDecomposerTest(unittest.TestCase):
@@ -42,6 +47,54 @@ class TaskGraphDecomposerTest(unittest.TestCase):
         self.assertNotIn(TaskType.market_scan, task_types)
         self.assertNotIn("rank.lookup", tools)
 
+    def test_foreshadowing_audit_creates_project_scoped_retrieval_task(self) -> None:
+        graph = TaskGraphDecomposer().decompose("我这本书还有哪些伏笔和暗线没有回收？")
+
+        self.assertEqual([TaskType.foreshadowing_audit], [task.type for task in graph.tasks])
+        self.assertEqual("project_knowledge", graph.answerBoundary)
+        self.assertEqual(
+            [
+                "project.resolve",
+                "project.retrieve",
+            ],
+            graph.tasks[0].tools,
+        )
+        self.assertEqual("project_bound_chapter_or_memory_evidence", graph.tasks[0].evidencePolicy)
+
+    def test_foreshadowing_count_wording_routes_to_exact_aggregate(self) -> None:
+        for question in ("我前面一共有多少伏笔？", "我埋了几条暗线？"):
+            with self.subTest(question=question):
+                graph = TaskGraphDecomposer().decompose(question)
+
+                self.assertEqual([TaskType.foreshadowing_audit], [task.type for task in graph.tasks])
+                self.assertEqual(
+                    ["project.resolve", "project.foreshadowing.aggregate", "project.retrieve"],
+                    graph.tasks[0].tools,
+                )
+
+    def test_continuity_question_creates_project_evidence_task_without_market_tools(self) -> None:
+        graph = TaskGraphDecomposer().decompose("第12章和第37章的人物动机是否冲突，时间线有没有矛盾？")
+
+        task_types = {task.type for task in graph.tasks}
+        tools = {tool for task in graph.tasks for tool in task.tools}
+        self.assertIn(TaskType.continuity_check, task_types)
+        self.assertIn("project.retrieve", tools)
+        self.assertNotIn("project.chunk_search", tools)
+        self.assertNotIn("project.chapter_search", tools)
+        self.assertNotIn("rank.lookup", tools)
+
+    def test_authored_chapter_review_and_project_recall_require_project_retrieval(self) -> None:
+        for question in (
+            "你觉得我写的这十章，设计的如何",
+            "当前项目不是有吗，章节",
+        ):
+            with self.subTest(question=question):
+                graph = TaskGraphDecomposer().decompose(question)
+
+                self.assertEqual([TaskType.project_knowledge_qa], [task.type for task in graph.tasks])
+                self.assertEqual(["project.resolve", "project.retrieve"], graph.tasks[0].tools)
+                self.assertEqual("project_knowledge", graph.answerBoundary)
+
     def test_market_task_carries_latest_freshness_policy(self) -> None:
         decision = IntentDecision(
             primaryIntent=Intent.market_scan,
@@ -62,10 +115,13 @@ class TaskGraphDecomposerTest(unittest.TestCase):
     def test_history_market_task_carries_time_window_policy(self) -> None:
         decision = IntentDecision(
             primaryIntent=Intent.market_scan,
+            entities={"marketRequestLevel": "ANALYSIS"},
             sourcePolicy={
                 "freshness": "time_window",
                 "allowHistorical": True,
                 "timeWindowDays": 30,
+                "currentRankLimit": 30,
+                "snapshotCount": 2,
             },
         )
 
@@ -75,6 +131,96 @@ class TaskGraphDecomposerTest(unittest.TestCase):
         self.assertEqual("time_window", market_task.freshnessPolicy.get("freshness"))
         self.assertTrue(market_task.freshnessPolicy.get("allowHistorical"))
         self.assertEqual(30, market_task.freshnessPolicy.get("timeWindowDays"))
+        self.assertEqual(30, market_task.freshnessPolicy.get("currentRankLimit"))
+        self.assertEqual(2, market_task.freshnessPolicy.get("snapshotCount"))
+
+    def test_compiled_market_plan_prunes_category_words_that_look_like_creation_tasks(self) -> None:
+        request = KnowledgeChatRequest(question="男频都市脑洞新书榜最近热度")
+        decision = IntentDecision(primaryIntent=Intent.market_scan, confidence=0.96)
+        envelope = IntentAgent().to_envelope(decision, request=request)
+        capability_plan = CapabilityCompiler().compile(
+            envelope,
+            request_scope=CapabilityScope(),
+        )
+
+        graph = TaskGraphDecomposer().decompose(
+            request.question,
+            intent_decision=decision,
+            capability_plan=capability_plan,
+        )
+
+        self.assertEqual([TaskType.market_scan], [task.type for task in graph.tasks])
+        self.assertEqual(["rank.lookup"], graph.tasks[0].tools)
+        self.assertEqual("market_evidence", graph.answerBoundary)
+
+    def test_market_taxonomy_questions_do_not_add_topic_strategy_task(self) -> None:
+        cases = [
+            ("榜单里为什么没有福娃题材，是不是不火？", "taxonomy_absence"),
+            ("福娃这种题材一般叫什么，还有什么别名？", "taxonomy_classification"),
+            ("福娃有哪些同类题材和融合方向？", "derivative_genre"),
+        ]
+
+        for question, market_question_type in cases:
+            with self.subTest(question=question):
+                decision = IntentDecision(
+                    primaryIntent=Intent.market_scan,
+                    confidence=0.96,
+                    entities={
+                        "marketRequestLevel": "ANALYSIS",
+                        "marketQuestionType": market_question_type,
+                    },
+                )
+
+                graph = TaskGraphDecomposer().decompose(
+                    question,
+                    intent_decision=decision,
+                )
+
+                self.assertEqual([TaskType.market_scan], [task.type for task in graph.tasks])
+
+    def test_compiled_ranked_book_imitation_uses_rank_research_pack(self) -> None:
+        request = KnowledgeChatRequest(
+            question="根据当前男频都市脑洞新书榜第一的书，模仿题材并给前三章细纲。"
+        )
+        intent_agent = IntentAgent()
+        decision = intent_agent.router.classify(request.question)
+        capability_plan = CapabilityCompiler().compile(
+            intent_agent.to_envelope(decision, request=request),
+            request_scope=CapabilityScope(),
+        )
+
+        graph = TaskGraphDecomposer().decompose(
+            request.question,
+            intent_decision=decision,
+            capability_plan=capability_plan,
+        )
+        book_task = next(task for task in graph.tasks if task.type is TaskType.book_breakdown)
+        topic_task = next(task for task in graph.tasks if task.type is TaskType.topic_strategy)
+        book_plan = next(
+            plan
+            for plan in DomainToolPlanner().plan(graph)
+            if plan.taskType is TaskType.book_breakdown
+        )
+
+        self.assertEqual(["rank.research_pack"], book_task.tools)
+        self.assertEqual(["skill.lookup"], topic_task.tools)
+        self.assertEqual(["rank.research_pack"], book_plan.tools)
+        self.assertIn("book.source_material", capability_plan.evidenceRequirements)
+
+    def test_market_context_does_not_rebind_the_users_named_book_to_rank_research(self) -> None:
+        graph = TaskGraphDecomposer().decompose(
+            "结合男频都市脑洞新书榜趋势，拆解《星河旧梦》的卖点。"
+        )
+        book_task = next(task for task in graph.tasks if task.type is TaskType.book_breakdown)
+        book_plan = next(
+            plan
+            for plan in DomainToolPlanner().plan(graph)
+            if plan.taskType is TaskType.book_breakdown
+        )
+
+        self.assertIn(TaskType.market_scan, {task.type for task in graph.tasks})
+        self.assertEqual(["book.research_pack", "knowledge.vector_search"], book_task.tools)
+        self.assertEqual(book_task.tools, book_plan.tools)
 
     def test_moe_governance_named_task_graph_cases(self) -> None:
         cases = [
@@ -135,7 +281,7 @@ class TaskGraphDecomposerTest(unittest.TestCase):
                 "expected_types": {TaskType.market_scan},
                 "forbidden_types": {TaskType.topic_strategy, TaskType.chapter_outline},
                 "answer_boundary": "market_evidence",
-                "expected_tools": {"rank.lookup", "rank.research_pack"},
+                "expected_tools": {"rank.lookup"},
             },
             {
                 "name": "pure_market_ranking_fact",

@@ -35,6 +35,11 @@ class MySqlGoldenEvalRepository:
         cases: list[GoldenEvalCase] = []
         for row in rows:
             request_payload = self._load_json(self._row_value(row, 5, "request_json"), default={})
+            if not isinstance(request_payload, dict):
+                request_payload = {}
+            project_eval = request_payload.pop("_projectRetrievalEval", {})
+            if not isinstance(project_eval, dict):
+                project_eval = {}
             thresholds = self._load_thresholds(self._row_value(row, 13, "retrieval_thresholds"))
             cases.append(
                 GoldenEvalCase(
@@ -47,6 +52,15 @@ class MySqlGoldenEvalRepository:
                     relevant_source_ids=set(self._load_json(self._row_value(row, 9, "relevant_source_ids"), default=[])),
                     forbidden_claims=list(self._load_json(self._row_value(row, 11, "forbidden_claims"), default=[])),
                     retrieval_thresholds=thresholds,
+                    relevance_grades=self._float_mapping(project_eval.get("relevanceGrades")),
+                    expected_chapter_ids=self._string_set(project_eval.get("expectedChapterIds")),
+                    expected_foreshadowing_ids=self._string_set(project_eval.get("expectedForeshadowingIds")),
+                    expected_structured_values=self._mapping(project_eval.get("expectedStructuredValues")),
+                    expected_path_edges=self._edge_mapping(project_eval.get("expectedPathEdges")),
+                    require_stale_rejection=self._bool_value(project_eval.get("requireStaleRejection")),
+                    require_cross_user_isolation=self._bool_value(project_eval.get("requireCrossUserIsolation")),
+                    evaluation_cohort={key: str(value) for key, value in self._mapping(project_eval.get("cohort")).items()},
+                    apply_project_release_gate=self._bool_value(project_eval.get("applyProjectReleaseGate")),
                 )
             )
         return cases
@@ -319,7 +333,47 @@ class MySqlGoldenEvalRepository:
             min_context_recall_at_k=float(
                 data.get("min_context_recall_at_k") or data.get("minContextRecallAtK") or 0.0
             ),
+            min_recall_at_5=float(data.get("min_recall_at_5") or data.get("minRecallAt5") or 0.0),
+            min_recall_at_10=float(data.get("min_recall_at_10") or data.get("minRecallAt10") or 0.0),
+            min_precision_at_5=float(data.get("min_precision_at_5") or data.get("minPrecisionAt5") or 0.0),
+            min_ndcg_at_10=float(data.get("min_ndcg_at_10") or data.get("minNdcgAt10") or 0.0),
+            min_structured_accuracy=float(data.get("min_structured_accuracy") or data.get("minStructuredAccuracy") or 0.0),
+            min_chapter_location_accuracy=float(
+                data.get("min_chapter_location_accuracy") or data.get("minChapterLocationAccuracy") or 0.0
+            ),
+            min_foreshadowing_coverage=float(
+                data.get("min_foreshadowing_coverage") or data.get("minForeshadowingCoverage") or 0.0
+            ),
+            min_multi_hop_path_evidence=float(
+                data.get("min_multi_hop_path_evidence") or data.get("minMultiHopPathEvidence") or 0.0
+            ),
+            min_stale_rejection_rate=float(
+                data.get("min_stale_rejection_rate") or data.get("minStaleRejectionRate") or 0.0
+            ),
+            min_cross_user_isolation_rate=float(
+                data.get("min_cross_user_isolation_rate") or data.get("minCrossUserIsolationRate") or 0.0
+            ),
         )
+
+    def _string_set(self, value: Any) -> set[str]:
+        if not isinstance(value, list):
+            return set()
+        return {str(item) for item in value if str(item).strip()}
+
+    def _mapping(self, value: Any) -> dict[str, Any]:
+        return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
+
+    def _float_mapping(self, value: Any) -> dict[str, float]:
+        result: dict[str, float] = {}
+        for key, item in self._mapping(value).items():
+            try:
+                result[key] = float(item)
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def _edge_mapping(self, value: Any) -> dict[str, set[str]]:
+        return {key: self._string_set(item) for key, item in self._mapping(value).items()}
 
     def _nullable_str(self, value: Any) -> str | None:
         if value in {None, ""}:

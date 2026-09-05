@@ -1,14 +1,24 @@
 package com.novelanalyzer.modules.knowledge.vo;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class RuntimeSkillVO {
     private Long candidateId;
     private String skillId;
     private String version;
     private String title;
+    private String description;
     private String content;
+    private String status;
+    private String contentHash;
+    private String sourceTraceId;
+    private Map<String, Object> inputSchema = new LinkedHashMap<>();
+    private Map<String, Object> outputSchema = new LinkedHashMap<>();
+    private Map<String, Object> rolloutPolicy = new LinkedHashMap<>();
+    private Map<String, Object> skillMetadata = new LinkedHashMap<>();
     private String promptFragment;
     private String guardrails;
     private String negativeRules;
@@ -16,8 +26,11 @@ public class RuntimeSkillVO {
     private String source;
     private List<String> intents = new ArrayList<>();
     private List<String> triggers = new ArrayList<>();
-    private List<String> allowedTools = new ArrayList<>();
+    private List<String> appliesTo = new ArrayList<>();
+    private List<String> requestedCapabilities = new ArrayList<>();
     private List<String> requiredEvidence = new ArrayList<>();
+    private List<String> qualityChecklist = new ArrayList<>();
+    private List<String> examples = new ArrayList<>();
 
     public Long getCandidateId() {
         return candidateId;
@@ -51,12 +64,76 @@ public class RuntimeSkillVO {
         this.title = title;
     }
 
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
     public String getContent() {
         return content;
     }
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public String getContentHash() {
+        return contentHash;
+    }
+
+    public void setContentHash(String contentHash) {
+        this.contentHash = contentHash;
+    }
+
+    public String getSourceTraceId() {
+        return sourceTraceId;
+    }
+
+    public void setSourceTraceId(String sourceTraceId) {
+        this.sourceTraceId = sourceTraceId;
+    }
+
+    public Map<String, Object> getInputSchema() {
+        return inputSchema;
+    }
+
+    public void setInputSchema(Map<String, Object> inputSchema) {
+        this.inputSchema = inputSchema == null ? new LinkedHashMap<>() : new LinkedHashMap<>(inputSchema);
+    }
+
+    public Map<String, Object> getOutputSchema() {
+        return outputSchema;
+    }
+
+    public void setOutputSchema(Map<String, Object> outputSchema) {
+        this.outputSchema = outputSchema == null ? new LinkedHashMap<>() : new LinkedHashMap<>(outputSchema);
+    }
+
+    public Map<String, Object> getRolloutPolicy() {
+        return rolloutPolicy;
+    }
+
+    public void setRolloutPolicy(Map<String, Object> rolloutPolicy) {
+        this.rolloutPolicy = rolloutPolicy == null ? new LinkedHashMap<>() : new LinkedHashMap<>(rolloutPolicy);
+    }
+
+    public Map<String, Object> getSkillMetadata() {
+        return skillMetadata;
+    }
+
+    public void setSkillMetadata(Map<String, Object> skillMetadata) {
+        this.skillMetadata = skillMetadata == null ? new LinkedHashMap<>() : new LinkedHashMap<>(skillMetadata);
     }
 
     public String getPromptFragment() {
@@ -115,12 +192,22 @@ public class RuntimeSkillVO {
         this.triggers = triggers == null ? new ArrayList<>() : new ArrayList<>(triggers);
     }
 
-    public List<String> getAllowedTools() {
-        return allowedTools;
+    public List<String> getAppliesTo() {
+        return appliesTo;
     }
 
-    public void setAllowedTools(List<String> allowedTools) {
-        this.allowedTools = allowedTools == null ? new ArrayList<>() : new ArrayList<>(allowedTools);
+    public void setAppliesTo(List<String> appliesTo) {
+        this.appliesTo = appliesTo == null ? new ArrayList<>() : new ArrayList<>(appliesTo);
+    }
+
+    public List<String> getRequestedCapabilities() {
+        return requestedCapabilities;
+    }
+
+    public void setRequestedCapabilities(List<String> requestedCapabilities) {
+        this.requestedCapabilities = requestedCapabilities == null
+            ? new ArrayList<>()
+            : new ArrayList<>(requestedCapabilities);
     }
 
     public List<String> getRequiredEvidence() {
@@ -129,5 +216,21 @@ public class RuntimeSkillVO {
 
     public void setRequiredEvidence(List<String> requiredEvidence) {
         this.requiredEvidence = requiredEvidence == null ? new ArrayList<>() : new ArrayList<>(requiredEvidence);
+    }
+
+    public List<String> getQualityChecklist() {
+        return qualityChecklist;
+    }
+
+    public void setQualityChecklist(List<String> qualityChecklist) {
+        this.qualityChecklist = qualityChecklist == null ? new ArrayList<>() : new ArrayList<>(qualityChecklist);
+    }
+
+    public List<String> getExamples() {
+        return examples;
+    }
+
+    public void setExamples(List<String> examples) {
+        this.examples = examples == null ? new ArrayList<>() : new ArrayList<>(examples);
     }
 }

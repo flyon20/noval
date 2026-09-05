@@ -49,4 +49,19 @@ public class KnowledgeIndexScheduler {
             LOGGER.warn("knowledge chapter missing schedule failed: {}", ex.getMessage());
         }
     }
+
+    @Scheduled(
+        fixedDelayString = "${app.knowledge.index.recovery-interval-millis:30000}",
+        initialDelayString = "${app.knowledge.index.recovery-initial-delay-millis:30000}"
+    )
+    public void recoverUnpublishedIndexJobs() {
+        try {
+            int recovered = knowledgeIndexJobExecutor.recoverQueuedJobs(20);
+            if (recovered > 0) {
+                LOGGER.info("knowledge index queue recovery republished jobs={}", recovered);
+            }
+        } catch (RuntimeException ex) {
+            LOGGER.warn("knowledge index queue recovery failed: {}", ex.getMessage());
+        }
+    }
 }

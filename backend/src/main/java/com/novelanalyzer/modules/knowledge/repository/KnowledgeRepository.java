@@ -17,6 +17,8 @@ import com.novelanalyzer.modules.knowledge.vo.RankLookupResultVO;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -149,9 +151,10 @@ public class KnowledgeRepository {
         ));
     }
 
-    public List<AnalysisResultEntity> findLatestAnalysisResultsForBook(Long bookId, int limit) {
+    public List<AnalysisResultEntity> findLatestAnalysisResultsForBook(Long userId, Long bookId, int limit) {
         return analysisResultMapper.selectList(
             new LambdaQueryWrapper<AnalysisResultEntity>()
+                .eq(AnalysisResultEntity::getUserId, userId)
                 .eq(AnalysisResultEntity::getBookId, bookId)
                 .eq(AnalysisResultEntity::getDeleted, 0)
                 .orderByDesc(AnalysisResultEntity::getCreateTime)
@@ -160,7 +163,9 @@ public class KnowledgeRepository {
         );
     }
 
-    public List<AnalysisResultEntity> findLatestAnalysisResultsForBooks(List<Long> bookIds, int limitPerBook) {
+    public List<AnalysisResultEntity> findLatestAnalysisResultsForBooks(Long userId,
+                                                                        List<Long> bookIds,
+                                                                        int limitPerBook) {
         if (bookIds == null || bookIds.isEmpty()) {
             return List.of();
         }
@@ -189,12 +194,15 @@ public class KnowledgeRepository {
                        ROW_NUMBER() OVER (PARTITION BY ar.book_id ORDER BY ar.create_time DESC, ar.id DESC) AS rn
                 FROM analysis_result ar
                 WHERE ar.deleted = 0
+                  AND ar.user_id = ?
                   AND ar.book_id IN (%s)
             ) ranked_analysis
             WHERE rn <= ?
             ORDER BY create_time DESC, id DESC
             """.formatted(inPlaceholders(bookIds.size()));
-        List<Object> args = new ArrayList<>(bookIds);
+        List<Object> args = new ArrayList<>();
+        args.add(userId);
+        args.addAll(bookIds);
         args.add(safeLimit);
         return jdbcTemplate.query(sql, (rs, rowNum) -> {
             AnalysisResultEntity entity = new AnalysisResultEntity();
@@ -222,40 +230,52 @@ public class KnowledgeRepository {
 
     public List<RankEvidence> findLatestRankEvidenceForBook(Long bookId) {
         String sql = """
-            SELECT cr.id,
-                   cr.platform,
-                   cr.category,
-                   cr.channel_code,
-                   cr.board_code,
-                   cr.snapshot_id,
-                   cr.rank_no,
-                   cr.book_id,
-                   cr.book_name,
-                   cr.author,
-                   cr.intro,
-                   cr.crawl_time,
-                   rb.board_name,
-                   rb.description AS channel_name,
-                   rs.snapshot_time
-            FROM crawl_rank cr
-            LEFT JOIN rank_snapshot rs ON rs.id = cr.snapshot_id AND rs.deleted = 0
-            LEFT JOIN rank_board rb ON rb.id = rs.rank_board_id AND rb.deleted = 0
-            WHERE cr.book_id = ?
-              AND cr.deleted = 0
-              AND cr.id = (
-                  SELECT cr2.id
-                  FROM crawl_rank cr2
-                  LEFT JOIN rank_snapshot rs2 ON rs2.id = cr2.snapshot_id AND rs2.deleted = 0
-                  LEFT JOIN rank_board rb2 ON rb2.id = rs2.rank_board_id AND rb2.deleted = 0
-                  WHERE cr2.book_id = cr.book_id
-                    AND cr2.deleted = 0
-                    AND cr2.platform = cr.platform
-                    AND COALESCE(cr2.channel_code, rb2.channel_code, '') = COALESCE(cr.channel_code, rb.channel_code, '')
-                    AND COALESCE(cr2.board_code, rb2.board_code, '') = COALESCE(cr.board_code, rb.board_code, '')
-                  ORDER BY COALESCE(rs2.snapshot_time, cr2.crawl_time) DESC, cr2.id DESC
-                  LIMIT 1
-              )
-            ORDER BY COALESCE(rs.snapshot_time, cr.crawl_time) DESC, cr.rank_no ASC
+            WITH ranked AS (
+                SELECT cr.id,
+                       cr.platform,
+                       cr.category,
+                       cr.channel_code,
+                       cr.board_code,
+                       cr.snapshot_id,
+                       cr.rank_no,
+                       cr.book_id,
+                       cr.book_name,
+                       cr.author,
+                       cr.intro,
+                       cr.crawl_time,
+                       rb.board_name,
+                       rb.description AS channel_name,
+                       rs.snapshot_time,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY cr.platform,
+                                        COALESCE(cr.channel_code, rb.channel_code, ''),
+                                        COALESCE(cr.board_code, rb.board_code, '')
+                           ORDER BY COALESCE(rs.snapshot_time, cr.crawl_time) DESC, cr.id DESC
+                       ) AS latest_row
+                FROM crawl_rank cr
+                LEFT JOIN rank_snapshot rs ON rs.id = cr.snapshot_id AND rs.deleted = 0
+                LEFT JOIN rank_board rb ON rb.id = rs.rank_board_id AND rb.deleted = 0
+                WHERE cr.book_id = ?
+                  AND cr.deleted = 0
+            )
+            SELECT id,
+                   platform,
+                   category,
+                   channel_code,
+                   board_code,
+                   snapshot_id,
+                   rank_no,
+                   book_id,
+                   book_name,
+                   author,
+                   intro,
+                   crawl_time,
+                   board_name,
+                   channel_name,
+                   snapshot_time
+            FROM ranked
+            WHERE latest_row = 1
+            ORDER BY COALESCE(snapshot_time, crawl_time) DESC, rank_no ASC
             LIMIT 20
             """;
         return jdbcTemplate.query(sql, (rs, rowNum) -> new RankEvidence(
@@ -364,14 +384,19 @@ public class KnowledgeRepository {
                 JOIN knowledge_document kd ON kd.id = kc.document_id AND kd.deleted = 0
                 LEFT JOIN crawl_book cb ON cb.id = kc.book_id AND cb.deleted = 0
                 WHERE kc.deleted = 0
+                  AND UPPER(kc.source_type) <> 'ANALYSIS'
                 """
         );
         java.util.List<Object> args = new java.util.ArrayList<>();
         if (chunkId != null) {
-            sql.append(" AND kc.id = ?");
+            sql.append(" AND kc.id = ? AND kc.vector_status = 'INDEXED'");
             args.add(chunkId);
+            if (pointId != null && !pointId.isBlank()) {
+                sql.append(" AND kc.qdrant_point_id = ?");
+                args.add(pointId);
+            }
         } else if (pointId != null && !pointId.isBlank()) {
-            sql.append(" AND kc.qdrant_point_id = ?");
+            sql.append(" AND kc.qdrant_point_id = ? AND kc.vector_status = 'INDEXED'");
             args.add(pointId);
         } else {
             return Optional.empty();
@@ -479,6 +504,7 @@ public class KnowledgeRepository {
                 LEFT JOIN crawl_book cb ON cb.id = kc.book_id AND cb.deleted = 0
                 WHERE kc.deleted = 0
                   AND kc.vector_status = 'INDEXED'
+                  AND UPPER(kc.source_type) <> 'ANALYSIS'
                 """
         );
         List<Object> args = new ArrayList<>();
@@ -663,6 +689,151 @@ public class KnowledgeRepository {
         return jdbcTemplate.query(sql.toString(), (rs, rowNum) -> mapRankLookupResult(rs), args.toArray());
     }
 
+    public List<RankLookupResultVO> lookupRankSnapshotsInDateRange(String platform,
+                                                                   String channelCode,
+                                                                   String boardCode,
+                                                                   String category,
+                                                                   Integer rankNo,
+                                                                   LocalDate snapshotStartDate,
+                                                                   LocalDate snapshotEndDate,
+                                                                   int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+        Optional<RankSnapshotDateBounds> bounds = findRankSnapshotDateBounds(
+            platform,
+            channelCode,
+            boardCode,
+            category,
+            rankNo,
+            snapshotStartDate,
+            snapshotEndDate
+        );
+        if (bounds.isEmpty()) {
+            return List.of();
+        }
+        List<RankLookupResultVO> latestRows = lookupRankSnapshotsOnDate(
+            platform, channelCode, boardCode, category, rankNo, bounds.get().latest(), safeLimit
+        );
+        if (bounds.get().earliest().equals(bounds.get().latest())) {
+            return latestRows;
+        }
+        List<RankLookupResultVO> earliestRows = lookupRankSnapshotsOnDate(
+            platform, channelCode, boardCode, category, rankNo, bounds.get().earliest(), safeLimit
+        );
+        List<RankLookupResultVO> balanced = new ArrayList<>(safeLimit);
+        int rowIndex = 0;
+        while (balanced.size() < safeLimit
+            && (rowIndex < latestRows.size() || rowIndex < earliestRows.size())) {
+            if (rowIndex < latestRows.size()) {
+                balanced.add(latestRows.get(rowIndex));
+            }
+            if (balanced.size() < safeLimit && rowIndex < earliestRows.size()) {
+                balanced.add(earliestRows.get(rowIndex));
+            }
+            rowIndex++;
+        }
+        return balanced;
+    }
+
+    private Optional<RankSnapshotDateBounds> findRankSnapshotDateBounds(String platform,
+                                                                         String channelCode,
+                                                                         String boardCode,
+                                                                         String category,
+                                                                         Integer rankNo,
+                                                                         LocalDate snapshotStartDate,
+                                                                         LocalDate snapshotEndDate) {
+        StringBuilder sql = new StringBuilder(
+            """
+                SELECT MIN(rs.snapshot_time) AS earliest_snapshot_time,
+                       MAX(rs.snapshot_time) AS latest_snapshot_time
+                FROM rank_board rb
+                JOIN rank_snapshot rs ON rs.rank_board_id = rb.id
+                    AND rs.deleted = 0
+                    AND rs.snapshot_time >= ?
+                    AND rs.snapshot_time < ?
+                JOIN crawl_rank cr ON cr.snapshot_id = rs.id
+                    AND cr.deleted = 0
+                    AND cr.platform = rb.platform
+                WHERE rb.deleted = 0
+                  AND rb.platform = ?
+                """
+        );
+        List<Object> args = new ArrayList<>();
+        args.add(snapshotStartDate.atStartOfDay());
+        args.add(snapshotEndDate.plusDays(1).atStartOfDay());
+        args.add(platform);
+        appendRankFilters(sql, args, "cr", "rb", channelCode, boardCode, category);
+        if (rankNo != null) {
+            sql.append(" AND cr.rank_no = ?");
+            args.add(rankNo);
+        }
+        return jdbcTemplate.query(sql.toString(), rs -> {
+            if (!rs.next()) {
+                return Optional.empty();
+            }
+            Timestamp earliest = rs.getTimestamp("earliest_snapshot_time");
+            Timestamp latest = rs.getTimestamp("latest_snapshot_time");
+            if (earliest == null || latest == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new RankSnapshotDateBounds(
+                earliest.toLocalDateTime().toLocalDate(),
+                latest.toLocalDateTime().toLocalDate()
+            ));
+        }, args.toArray());
+    }
+
+    private List<RankLookupResultVO> lookupRankSnapshotsOnDate(String platform,
+                                                                String channelCode,
+                                                                String boardCode,
+                                                                String category,
+                                                                Integer rankNo,
+                                                                LocalDate snapshotDate,
+                                                                int limit) {
+        StringBuilder sql = new StringBuilder(
+            """
+                SELECT cr.id AS rank_id,
+                       cr.snapshot_id,
+                       rs.snapshot_time AS snapshot_time,
+                       cr.platform,
+                       COALESCE(cr.channel_code, rb.channel_code) AS channel_code,
+                       COALESCE(cr.board_code, rb.board_code) AS board_code,
+                       rb.description AS channel_name,
+                       rb.board_name,
+                       cr.category,
+                       cr.rank_no,
+                       cr.book_id,
+                       cr.book_name,
+                       cr.author,
+                       cr.intro
+                FROM rank_board rb
+                JOIN rank_snapshot rs ON rs.rank_board_id = rb.id
+                    AND rs.deleted = 0
+                    AND rs.snapshot_time >= ?
+                    AND rs.snapshot_time < ?
+                JOIN crawl_rank cr ON cr.snapshot_id = rs.id
+                    AND cr.deleted = 0
+                    AND cr.platform = rb.platform
+                WHERE rb.deleted = 0
+                  AND rb.platform = ?
+                """
+        );
+        List<Object> args = new ArrayList<>();
+        args.add(snapshotDate.atStartOfDay());
+        args.add(snapshotDate.plusDays(1).atStartOfDay());
+        args.add(platform);
+        appendRankFilters(sql, args, "cr", "rb", channelCode, boardCode, category);
+        if (rankNo != null) {
+            sql.append(" AND cr.rank_no = ?");
+            args.add(rankNo);
+        }
+        sql.append(" ORDER BY cr.rank_no ASC, rs.snapshot_time DESC, cr.id ASC LIMIT ?");
+        args.add(Math.max(1, Math.min(limit, 100)));
+        return jdbcTemplate.query(sql.toString(), (rs, rowNum) -> mapRankLookupResult(rs), args.toArray());
+    }
+
+    private record RankSnapshotDateBounds(LocalDate earliest, LocalDate latest) {
+    }
+
     private Optional<LocalDateTime> findLatestRankSnapshotTime(String platform,
                                                                String channelCode,
                                                                String boardCode,
@@ -722,18 +893,20 @@ public class KnowledgeRepository {
                                         String channelCode,
                                         String boardCode) {
         if (channelCode != null && !channelCode.isBlank()) {
-            List<String> channelCodes = rankChannelAliases(channelCode);
-            sql.append(" AND (")
-                .append(inClause(boardAlias + ".channel_code", channelCodes.size()));
-            for (String alias : channelCodes) {
-                args.add(alias);
-            }
             String channelLabel = rankChannelLabel(channelCode);
             if (channelLabel != null) {
-                sql.append(" OR ").append(boardAlias).append(".description LIKE ?");
+                sql.append(" AND (")
+                    .append(boardAlias).append(".channel_code = ? OR ")
+                    .append(boardAlias).append(".description LIKE ?");
+                args.add(channelCode.trim());
                 args.add("%" + channelLabel + "%");
+            } else {
+                sql.append(" AND ").append(boardAlias).append(".channel_code = ?");
+                args.add(channelCode.trim());
             }
-            sql.append(")");
+            if (channelLabel != null) {
+                sql.append(")");
+            }
         }
         if (boardCode != null && !boardCode.isBlank()) {
             sql.append(" AND ").append(boardAlias).append(".board_code = ?");
@@ -749,21 +922,21 @@ public class KnowledgeRepository {
                                    String boardCode,
                                    String category) {
         if (channelCode != null && !channelCode.isBlank()) {
-            List<String> channelCodes = rankChannelAliases(channelCode);
-            sql.append(" AND (")
-                .append(inClause(rankAlias + ".channel_code", channelCodes.size()))
-                .append(" OR ")
-                .append(inClause(boardAlias + ".channel_code", channelCodes.size()));
-            for (String alias : channelCodes) {
-                args.add(alias);
-            }
-            for (String alias : channelCodes) {
-                args.add(alias);
-            }
             String channelLabel = rankChannelLabel(channelCode);
             if (channelLabel != null) {
-                sql.append(" OR ").append(boardAlias).append(".description LIKE ?");
+                sql.append(" AND (")
+                    .append(rankAlias).append(".channel_code = ? OR ")
+                    .append(boardAlias).append(".channel_code = ? OR ")
+                    .append(boardAlias).append(".description LIKE ?");
+                args.add(channelCode.trim());
+                args.add(channelCode.trim());
                 args.add("%" + channelLabel + "%");
+            } else {
+                sql.append(" AND (")
+                    .append(rankAlias).append(".channel_code = ? OR ")
+                    .append(boardAlias).append(".channel_code = ?");
+                args.add(channelCode.trim());
+                args.add(channelCode.trim());
             }
             sql.append(")");
         }
@@ -782,17 +955,6 @@ public class KnowledgeRepository {
             args.add(pattern);
             args.add(pattern);
         }
-    }
-
-    private List<String> rankChannelAliases(String channelCode) {
-        String normalized = channelCode == null ? "" : channelCode.trim();
-        if ("male-new".equals(normalized)) {
-            return List.of("male-new", "male");
-        }
-        if ("female-new".equals(normalized)) {
-            return List.of("female-new", "female");
-        }
-        return List.of(normalized);
     }
 
     private String rankChannelLabel(String channelCode) {

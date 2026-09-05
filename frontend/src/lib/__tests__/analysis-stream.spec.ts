@@ -276,6 +276,52 @@ describe('analysis stream runtime', () => {
     expect(onDelta).toHaveBeenCalledTimes(1);
   });
 
+  test('forwards context compaction lifecycle events through the progress callback', async () => {
+    const onProgress = vi.fn();
+    const runtime = createAnalysisStreamRunner({
+      getAccessToken: () => 'token-1',
+      refreshToken: vi.fn(),
+      applyTokenResponse: vi.fn(),
+      clearSession: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(
+        createSseResponse(
+          [
+            'event: context_compacting',
+            'data: {"event":"context_compacting","phase":"context","message":"正在自动压缩","progressEvent":"context_compacting","contextWindowTokens":10000,"beforeInputTokens":9200}',
+            '',
+            'event: context_compacted',
+            'data: {"event":"context_compacted","phase":"context","message":"上下文已自动压缩","progressEvent":"context_compacted","contextWindowTokens":10000,"beforeInputTokens":9200,"afterInputTokens":2400}',
+            '',
+            'event: done',
+            `data: ${JSON.stringify({ event: 'done', data: result })}`,
+            '',
+          ].join('\n'),
+        ),
+      ),
+      fallbackRequest: vi.fn(),
+    });
+
+    const task = runtime.run('/api/knowledge/chat/stream', payload, {
+      onStart: vi.fn(),
+      onProgress,
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    await expect(task.result).resolves.toEqual(result);
+    expect(onProgress).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      event: 'context_compacting',
+      progressEvent: 'context_compacting',
+      beforeInputTokens: 9200,
+    }));
+    expect(onProgress).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      event: 'context_compacted',
+      progressEvent: 'context_compacted',
+      afterInputTokens: 2400,
+    }));
+  });
+
   test('falls back when progress is followed by an error before first answer delta', async () => {
     const fallbackRequest = vi.fn().mockResolvedValue(result);
     const onProgress = vi.fn();

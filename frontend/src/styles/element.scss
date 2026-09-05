@@ -3,9 +3,14 @@
 
 :root {
   --el-color-primary: var(--color-primary);
-  --el-color-primary-light-3: #45665d;
+  --el-color-primary-light-3: color-mix(in srgb, var(--color-primary) 72%, white);
+  --el-color-primary-light-5: color-mix(in srgb, var(--color-primary) 54%, white);
+  --el-color-primary-light-7: color-mix(in srgb, var(--color-primary) 30%, white);
+  --el-color-primary-light-8: color-mix(in srgb, var(--color-primary) 20%, white);
+  --el-color-primary-light-9: color-mix(in srgb, var(--color-primary) 12%, white);
   --el-color-danger: var(--color-danger);
-  --el-border-radius-base: 14px;
+  --el-color-success: var(--color-success);
+  --el-border-radius-base: 10px;
   --el-font-size-base: 15px;
   --el-bg-color: var(--color-surface-strong);
   --el-bg-color-page: var(--color-bg);
@@ -25,8 +30,72 @@
   --el-mask-color-extra-light: rgba(5, 8, 18, 0.3);
 }
 
+.el-button {
+  border-radius: 10px;
+  font-weight: 600;
+  transition: color var(--motion-fast) ease, background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease,
+    transform var(--motion-fast) ease;
+}
+
+.el-button--primary {
+  border-color: transparent;
+  color: #fff;
+  background: var(--gradient-primary);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--color-primary) 22%, transparent);
+}
+
+.el-button--primary:hover,
+.el-button--primary:focus-visible {
+  border-color: transparent;
+  color: #fff;
+  filter: saturate(1.08) brightness(1.03);
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--color-primary) 30%, transparent);
+  transform: translateY(-1px);
+}
+
+.el-button--primary:active {
+  transform: translateY(1px) scale(var(--motion-press-scale));
+}
+
+.el-button:not(.is-disabled):active {
+  transform: translateY(1px) scale(var(--motion-press-scale));
+}
+
+.el-button.is-plain:not(.el-button--danger):not(.el-button--success):not(.el-button--warning):not(.el-button--info) {
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary-soft) 58%, var(--color-surface));
+}
+
+.el-button.is-plain:not(.el-button--danger):not(.el-button--success):not(.el-button--warning):not(.el-button--info):hover,
+.el-button.is-plain:not(.el-button--danger):not(.el-button--success):not(.el-button--warning):not(.el-button--info):focus-visible {
+  color: var(--color-accent-strong);
+  border-color: color-mix(in srgb, var(--color-accent-strong) 48%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary-soft) 88%, var(--color-surface));
+}
+
+.el-button.is-circle {
+  flex: 0 0 auto;
+  aspect-ratio: 1;
+  padding: 0;
+}
+
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: 10px;
+  transition: box-shadow var(--motion-fast) ease, border-color var(--motion-fast) ease;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  box-shadow: var(--focus-ring), 0 0 0 1px var(--color-primary) inset !important;
+}
+
 :root[data-theme='dark'] {
-  --el-color-primary-light-3: #a4b3ff;
+  --el-color-primary-light-3: color-mix(in srgb, var(--color-primary) 72%, white);
   --el-bg-color: color-mix(in srgb, var(--color-surface-strong) 100%, transparent);
   --el-bg-color-overlay: color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
   --el-fill-color-blank: color-mix(in srgb, var(--color-surface-strong) 100%, transparent);
@@ -113,6 +182,13 @@
 @media (max-width: 768px) {
   .el-button {
     min-height: 44px;
+  }
+
+  .el-button.is-circle {
+    min-width: 44px;
+    width: 44px;
+    min-height: 44px;
+    height: 44px;
   }
 
   .el-input__wrapper {

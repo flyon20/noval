@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import AppHeader from '@/components/layout/AppHeader.vue';
 import AppSidebar from '@/components/layout/AppSidebar.vue';
@@ -21,6 +21,15 @@ const knowledgeSidebarMode = ref<'projects' | 'nav'>('projects');
 const mobileProjectDrawerVisible = ref(false);
 const isKnowledgeChatRoute = computed(() => route.path === '/knowledge');
 
+function syncKnowledgeRouteScrollLock(locked: boolean) {
+  if (typeof document === 'undefined') {
+    return;
+  }
+
+  document.documentElement.classList.toggle('knowledge-chat-route', locked);
+  document.body.classList.toggle('knowledge-chat-route', locked);
+}
+
 watch(
   () => route.path,
   (path) => {
@@ -28,13 +37,18 @@ watch(
     if (path !== '/knowledge') {
       mobileProjectDrawerVisible.value = false;
     }
+    syncKnowledgeRouteScrollLock(path === '/knowledge');
   },
   { immediate: true },
 );
+
+onBeforeUnmount(() => {
+  syncKnowledgeRouteScrollLock(false);
+});
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'is-knowledge-chat': isKnowledgeChatRoute }">
     <div class="app-shell__backdrop"></div>
 
     <div class="app-shell__sidebar" data-test="knowledge-sidebar-mode">
@@ -93,10 +107,7 @@ watch(
   min-height: 100vh;
   max-width: 100%;
   padding: 1.35rem;
-  background:
-    radial-gradient(circle at top left, rgba(199, 146, 92, 0.15), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(36, 61, 54, 0.1), transparent 20%),
-    linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
+  background: linear-gradient(135deg, var(--color-bg), var(--color-bg-secondary));
 }
 
 .app-shell__backdrop {
@@ -104,17 +115,34 @@ watch(
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(130deg, rgba(255, 255, 255, 0.3), transparent 42%),
-    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.32), transparent 26%);
+    linear-gradient(130deg, color-mix(in srgb, var(--color-primary-soft) 34%, transparent), transparent 46%),
+    linear-gradient(315deg, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 52%),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--color-primary) 4%, transparent) 0 1px, transparent 1px var(--workspace-grid-size)),
+    repeating-linear-gradient(0deg, color-mix(in srgb, var(--color-secondary) 4%, transparent) 0 1px, transparent 1px var(--workspace-grid-size));
+  --workspace-grid-size: 64px;
 }
 
 .app-shell__surface {
   position: relative;
+  isolation: isolate;
   min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
   background: var(--color-surface);
   box-shadow: var(--shadow-soft);
+}
+
+.app-shell__surface::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: var(--radius-xl);
+  right: var(--radius-xl);
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-accent) 52%, transparent), transparent);
+  opacity: 0.72;
 }
 
 .app-shell__sidebar {
@@ -163,12 +191,32 @@ watch(
       color-mix(in srgb, var(--color-surface-strong) 98%, transparent),
       color-mix(in srgb, var(--color-surface) 94%, transparent)
     );
-  box-shadow: 0 12px 28px rgba(18, 25, 58, 0.08);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.app-shell__surface :deep(.rank-page__item),
+.app-shell__surface :deep(.trend-result-preview__card),
+.app-shell__surface :deep(.analysis-result-card) {
+  transition: transform var(--motion-base) var(--motion-spring),
+    border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
 }
 
 .app-shell__surface :deep(.rank-page__item:hover),
 .app-shell__surface :deep(.analysis-result-card:hover) {
-  box-shadow: 0 14px 30px rgba(18, 25, 58, 0.1);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-shell__surface :deep(.rank-page__item:hover),
+  .app-shell__surface :deep(.trend-result-preview__card:hover),
+  .app-shell__surface :deep(.analysis-result-card:hover) {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+  }
+}
+
+.app-shell__surface :deep(.rank-page__item:active) {
+  transform: translateY(0) scale(0.995);
 }
 
 /* Tablet breakpoint */
@@ -192,6 +240,13 @@ watch(
     overflow-x: clip;
   }
 
+  .app-shell.is-knowledge-chat {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   .app-shell__backdrop {
     display: none;
   }
@@ -210,9 +265,19 @@ watch(
     overflow: visible;
   }
 
+  .app-shell__surface::before {
+    display: none;
+  }
+
+  .app-shell.is-knowledge-chat .app-shell__surface {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   .app-shell__content {
     padding:
-      calc(0.875rem + 56px)
+      calc(0.5rem + 56px)
       0.875rem
       calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 1.5rem);
     width: 100%;
@@ -221,8 +286,14 @@ watch(
   }
 
   .app-shell__content.is-knowledge-chat {
-    padding: calc(0.875rem + 56px) 0 0;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    padding: calc(0.5rem + 56px) 0 0;
     overflow: hidden;
+    overscroll-behavior: none;
   }
 }
 

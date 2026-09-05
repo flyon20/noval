@@ -1,5 +1,6 @@
 package com.novelanalyzer.modules.knowledge.service;
 
+import com.novelanalyzer.modules.knowledge.dto.AiMemoryCandidateRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -10,16 +11,18 @@ import java.util.Map;
 public class KnowledgeMemoryCandidateService {
 
     private final JdbcTemplate jdbcTemplate;
+    private final KnowledgeMemoryService knowledgeMemoryService;
 
     public KnowledgeMemoryCandidateService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
+        this.knowledgeMemoryService = new KnowledgeMemoryService(jdbcTemplate);
     }
 
     public int persistCandidates(Long projectId,
                                  Long userId,
                                  List<Map<String, Object>> candidates,
                                  String fallbackTraceId) {
-        if (projectId == null || userId == null || candidates == null || candidates.isEmpty()) {
+        if (userId == null || candidates == null || candidates.isEmpty()) {
             return 0;
         }
         int saved = 0;
@@ -33,29 +36,37 @@ public class KnowledgeMemoryCandidateService {
             if (scope == null || type == null || content == null) {
                 continue;
             }
+            if ("project".equals(scope) && projectId == null) {
+                continue;
+            }
             String sourceTraceId = trimToNull(stringValue(candidate.get("sourceTraceId")));
             if (sourceTraceId == null) {
                 sourceTraceId = trimToNull(fallbackTraceId);
             }
-            jdbcTemplate.update(
-                "insert into ai_memory_candidate(project_id, user_id, candidate_type, content, status, source_trace_id) values(?, ?, ?, ?, ?, ?)",
-                projectId,
-                userId,
-                scope + "." + type,
-                content,
-                statusFor(scope, confidence(candidate.get("confidence"))),
-                sourceTraceId
-            );
+            AiMemoryCandidateRequest request = new AiMemoryCandidateRequest();
+            request.setUserId(userId);
+            request.setProjectId(projectId);
+            request.setConversationId(trimToNull(stringValue(candidate.get("conversationId"))));
+            request.setScope(scope);
+            request.setMemoryType(type);
+            request.setContent(content);
+            request.setSummary(trimToNull(stringValue(candidate.get("summary"))));
+            request.setConfidence(confidence(candidate.get("confidence")));
+            request.setSourceTraceId(sourceTraceId);
+            request.setFactKey(trimToNull(stringValue(candidate.get("factKey"))));
+            request.setCandidateKey(trimToNull(stringValue(candidate.get("candidateKey"))));
+            request.setProvenanceJson(trimToNull(stringValue(candidate.get("provenanceJson"))));
+            request.setEvidenceJson(trimToNull(stringValue(candidate.get("evidenceJson"))));
+            request.setSourceEvidenceIdsJson(trimToNull(stringValue(candidate.get("sourceEvidenceIdsJson"))));
+            request.setSourceChapterVersionsJson(trimToNull(stringValue(candidate.get("sourceChapterVersionsJson"))));
+            request.setIndexGeneration(trimToNull(stringValue(candidate.get("indexGeneration"))));
+            request.setExtractorVersion(trimToNull(stringValue(candidate.get("extractorVersion"))));
+            request.setSupersedesId(longValue(candidate.get("supersedesId")));
+            request.setTtlDays(ttlDays(candidate.get("ttlDays")));
+            knowledgeMemoryService.createCandidate(request);
             saved++;
         }
         return saved;
-    }
-
-    private String statusFor(String scope, double confidence) {
-        if ("project".equals(scope) && confidence >= 0.8d) {
-            return "APPROVED";
-        }
-        return "PENDING";
     }
 
     private double confidence(Object value) {
@@ -70,6 +81,24 @@ public class KnowledgeMemoryCandidateService {
             }
         }
         return 0.0d;
+    }
+
+    private Long longValue(Object value) {
+        if (value instanceof Number number) return number.longValue();
+        if (value instanceof String text) {
+            try {
+                return Long.parseLong(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private int ttlDays(Object value) {
+        Long parsed = longValue(value);
+        if (parsed == null) return 30;
+        return (int) Math.max(1L, Math.min(365L, parsed));
     }
 
     private String stringValue(Object value) {

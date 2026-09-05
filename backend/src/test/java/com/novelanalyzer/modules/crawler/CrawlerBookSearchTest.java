@@ -106,6 +106,32 @@ class CrawlerBookSearchTest {
     }
 
     @Test
+    void shouldFindLocalBookByDescriptionWithoutCallingCrawlerWhenEnough() throws Exception {
+        insertBook(
+            "fanqie",
+            "201",
+            "神眷纪元",
+            "Author C",
+            "在这个文明里，每个城邦都相信自己有神眷顾。",
+            "https://fanqienovel.com/page/201"
+        );
+
+        String token = loginAndGetToken("admin123");
+        mockMvc.perform(post("/api/crawler/books/search")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","keyword":"这个文明有神眷顾","limit":1}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(1))
+            .andExpect(jsonPath("$.data[0].bookName").value("神眷纪元"));
+
+        verify(pythonCrawlerClient, never()).searchBooks("fanqie", "这个文明有神眷顾", 1);
+    }
+
+    @Test
     void shouldCallCrawlerWhenLocalCandidatesAreInsufficient() throws Exception {
         insertBook("fanqie", "101", "Book Alpha", "Author A", "Intro A", "https://fanqienovel.com/page/101");
         when(pythonCrawlerClient.searchBooks("fanqie", "Book", 3)).thenReturn(List.of(

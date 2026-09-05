@@ -17,10 +17,13 @@ CREATE TABLE IF NOT EXISTS async_job (
     retry_count INT DEFAULT 0 COMMENT 'retry count',
     started_at DATETIME COMMENT 'started at',
     finished_at DATETIME COMMENT 'finished at',
+    queue_published_at DATETIME COMMENT 'last confirmed queue publication time',
+    queue_published_attempt INT COMMENT 'attempt confirmed in the queue',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
     deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
     INDEX idx_async_job_type_key_time (job_type, job_key, create_time),
+    UNIQUE KEY uk_async_job_type_key_active (job_type, job_key, deleted),
     INDEX idx_async_job_resource_key (resource_key),
     INDEX idx_async_job_status_time (status, create_time),
     INDEX idx_async_job_trigger_user_time (trigger_user_id, create_time)

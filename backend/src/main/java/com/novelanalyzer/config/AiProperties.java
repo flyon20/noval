@@ -10,6 +10,8 @@ public class AiProperties {
     private String difyApiKeyRef;
     private String fallbackModel = "local-fallback";
     private int timeoutMillis = 15000;
+    private String mcpBackendAttestationKey = "";
+    private int mcpBackendAttestationMaxAgeSeconds = 60;
     private OpenAiCompatible openAiCompatible = new OpenAiCompatible();
     private LangGraphWorker langgraphWorker = new LangGraphWorker();
 
@@ -51,6 +53,22 @@ public class AiProperties {
 
     public void setTimeoutMillis(int timeoutMillis) {
         this.timeoutMillis = timeoutMillis;
+    }
+
+    public String getMcpBackendAttestationKey() {
+        return mcpBackendAttestationKey;
+    }
+
+    public void setMcpBackendAttestationKey(String mcpBackendAttestationKey) {
+        this.mcpBackendAttestationKey = mcpBackendAttestationKey;
+    }
+
+    public int getMcpBackendAttestationMaxAgeSeconds() {
+        return mcpBackendAttestationMaxAgeSeconds;
+    }
+
+    public void setMcpBackendAttestationMaxAgeSeconds(int mcpBackendAttestationMaxAgeSeconds) {
+        this.mcpBackendAttestationMaxAgeSeconds = mcpBackendAttestationMaxAgeSeconds;
     }
 
     public OpenAiCompatible getOpenAiCompatible() {

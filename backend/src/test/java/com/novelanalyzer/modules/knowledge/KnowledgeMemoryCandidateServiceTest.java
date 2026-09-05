@@ -36,12 +36,37 @@ class KnowledgeMemoryCandidateServiceTest {
             .containsEntry("PROJECT_ID", 900L)
             .containsEntry("USER_ID", 7L)
             .containsEntry("CANDIDATE_TYPE", "project.constraint")
-            .containsEntry("STATUS", "APPROVED")
+            .containsEntry("STATUS", "candidate")
             .containsEntry("SOURCE_TRACE_ID", "trace-1");
         assertThat(rows.get(1))
             .containsEntry("CANDIDATE_TYPE", "user.preference")
-            .containsEntry("STATUS", "PENDING")
+            .containsEntry("STATUS", "candidate")
             .containsEntry("SOURCE_TRACE_ID", "trace-fallback");
+    }
+
+    @Test
+    void shouldPersistUserAndThreadCandidatesWithoutProjectButSkipProjectCandidates() {
+        JdbcTemplate jdbcTemplate = KnowledgeMemoryServiceTest.jdbcTemplate();
+        KnowledgeMemoryCandidateService service = new KnowledgeMemoryCandidateService(jdbcTemplate);
+
+        int saved = service.persistCandidates(
+            null,
+            7L,
+            List.of(
+                Map.of("scope", "user", "type", "preference", "content", "user fact", "candidateKey", "user-1"),
+                Map.of("scope", "thread", "type", "decision", "content", "thread fact", "candidateKey", "thread-1"),
+                Map.of("scope", "project", "type", "fact", "content", "cannot save", "candidateKey", "project-1")
+            ),
+            "trace-null-project"
+        );
+
+        assertThat(saved).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForList(
+            "select scope, project_id, candidate_key from ai_memory_candidate order by id"
+        )).hasSize(2).allSatisfy(row -> {
+            assertThat(row.get("PROJECT_ID")).isNull();
+            assertThat(row.get("CANDIDATE_KEY")).isNotNull();
+        });
     }
 
     private JdbcTemplate jdbcTemplate() {

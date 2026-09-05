@@ -8,10 +8,7 @@ body,
 }
 
 html {
-  background:
-    radial-gradient(circle at 15% 10%, rgba(92, 124, 250, 0.18), transparent 30%),
-    radial-gradient(circle at 85% 0%, rgba(255, 255, 255, 0.2), transparent 35%),
-    linear-gradient(180deg, var(--color-bg), var(--color-bg-secondary));
+  background: linear-gradient(135deg, var(--color-bg), var(--color-bg-secondary));
   color: var(--color-text);
   overflow-x: hidden;
 }
@@ -38,6 +35,19 @@ body {
   body {
     padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   }
+
+  html.knowledge-chat-route,
+  body.knowledge-chat-route,
+  body.knowledge-chat-route #app {
+    height: 100%;
+    min-height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  body.knowledge-chat-route {
+    padding-bottom: 0;
+  }
 }
 
 a {
@@ -51,4 +61,67 @@ h4 {
   font-family: var(--font-heading);
   font-weight: 600;
   letter-spacing: 0.01em;
+}
+
+button,
+[role='button'] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+@media (min-width: 769px) {
+  .app-sidebar,
+  .knowledge-project-space {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .app-sidebar.is-scrolling,
+  .knowledge-project-space.is-scrolling,
+  .app-sidebar:focus-within,
+  .knowledge-project-space:focus-within {
+    scrollbar-color: color-mix(in srgb, var(--color-primary) 62%, transparent) transparent;
+  }
+
+  .app-sidebar::-webkit-scrollbar,
+  .knowledge-project-space::-webkit-scrollbar {
+    width: 7px;
+  }
+
+  .app-sidebar::-webkit-scrollbar-track,
+  .knowledge-project-space::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .app-sidebar::-webkit-scrollbar-thumb,
+  .knowledge-project-space::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+  }
+
+  .app-sidebar.is-scrolling::-webkit-scrollbar-thumb,
+  .knowledge-project-space.is-scrolling::-webkit-scrollbar-thumb,
+  .app-sidebar:focus-within::-webkit-scrollbar-thumb,
+  .knowledge-project-space:focus-within::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-primary) 62%, transparent);
+    background-clip: padding-box;
+  }
 }

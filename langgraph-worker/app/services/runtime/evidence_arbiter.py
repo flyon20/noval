@@ -11,6 +11,11 @@ from app.models.evidence_contract import (
     SnapshotGroup,
 )
 from app.models.knowledge import KnowledgeSource
+from app.services.harness.contracts import (
+    EvidenceCommit,
+    EvidenceDecision,
+    EvidenceDecisionState,
+)
 
 
 class EvidenceArbiter:
@@ -31,11 +36,20 @@ class EvidenceArbiter:
         required_evidence: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> EvidenceContract:
         policy = source_policy or {}
+        historical_range = bool(
+            policy.get("allowHistorical")
+            and policy.get("snapshotStartDate")
+            and policy.get("snapshotEndDate")
+        )
         requested_platform = requested_platform or policy.get("requestedPlatform")
         requested_channel_code = requested_channel_code or policy.get("requestedChannelCode")
         requested_board_code = requested_board_code or policy.get("requestedBoardCode")
         requested_category = requested_category or policy.get("requestedCategory")
-        top_n = self._positive_int(top_n or policy.get("topRankLimit"), default=3)
+        enforce_requested_top_n = self._positive_int(policy.get("currentRankLimit"), default=0) > 0
+        top_n = self._positive_int(
+            policy.get("currentRankLimit") or top_n or policy.get("topRankLimit"),
+            default=3,
+        )
         required = self._required_evidence(required_evidence, policy)
 
         rank_sources = [
@@ -62,7 +76,10 @@ class EvidenceArbiter:
                 requiredActions=["rank.lookup"],
             ), required, sources)
 
-        grouped_sources = self._group_rank_sources(rank_sources)
+        grouped_sources = self._group_rank_sources(
+            rank_sources,
+            historical_range=historical_range,
+        )
         groups = [
             self._build_snapshot_group(
                 group_id=group_id,
@@ -82,20 +99,41 @@ class EvidenceArbiter:
                 sources,
             )
 
-        selected_group = max(groups, key=lambda group: group.score)
+        selected_group = max(
+            groups,
+            key=(
+                (lambda group: (group.snapshotTime or "", group.score))
+                if historical_range
+                else (lambda group: group.score)
+            ),
+        )
         selected_sources = self._sort_rank_sources(grouped_sources[selected_group.groupId])
-        rejected_groups = sorted(
+        comparison_groups = sorted(
             [group for group in groups if group.groupId != selected_group.groupId],
             key=lambda group: group.score,
             reverse=True,
         )
+        contract_selected_sources = selected_sources
+        rejected_groups = comparison_groups
+        if historical_range:
+            contract_selected_sources = [
+                source
+                for group in sorted(
+                    groups,
+                    key=lambda item: (item.snapshotTime or "", item.score),
+                    reverse=True,
+                )
+                for source in self._sort_rank_sources(grouped_sources[group.groupId])
+            ]
+            rejected_groups = []
         reference_signals = [
             self._reference_signal(group)
-            for group in rejected_groups
+            for group in comparison_groups
         ]
         warnings = self._warnings_for_groups(
             selected_group=selected_group,
-            rejected_groups=rejected_groups,
+            rejected_groups=comparison_groups,
+            historical_range=historical_range,
         )
         is_mixed_creation = intent == "mixed_creation_research"
         has_mixed_snapshots = self._has_mixed_snapshot_markers(groups)
@@ -106,17 +144,40 @@ class EvidenceArbiter:
             and selected_group.channelMatch
             and selected_group.boardMatch
         )
+        broad_historical_sample_complete = self._has_broad_historical_rank_coverage(
+            selected_sources,
+            historical_range=historical_range,
+            requested_channel_code=requested_channel_code,
+            requested_board_code=requested_board_code,
+            requested_category=requested_category,
+            top_n=top_n,
+        )
 
         if not selected_usable:
             status = EvidenceStatus.missing
             required_actions = ["refresh_rank_board"]
-        elif has_mixed_snapshots and not is_mixed_creation:
+        elif (
+            enforce_requested_top_n
+            and self._is_pure_market_intent(intent)
+            and selected_group.topRankCoverage < top_n
+            and not broad_historical_sample_complete
+        ):
+            status = EvidenceStatus.missing
+            required_actions = ["refresh_rank_board"]
+            warnings.append(
+                EvidenceWarning(
+                    code="incomplete_structured_rank_snapshot",
+                    message=f"Current rank snapshot covers {selected_group.topRankCoverage} of requested Top{top_n}.",
+                    severity="error",
+                )
+            )
+        elif has_mixed_snapshots and not is_mixed_creation and not historical_range:
             status = EvidenceStatus.conflict
             required_actions = ["refresh_rank_board"]
         elif not selected_matches_request:
             status = EvidenceStatus.conflict
             required_actions = ["rank.lookup"]
-        elif selected_stale and not is_mixed_creation:
+        elif selected_stale and not is_mixed_creation and not historical_range:
             status = EvidenceStatus.stale
             required_actions = ["refresh_rank_board"]
         elif is_mixed_creation and (
@@ -141,13 +202,351 @@ class EvidenceArbiter:
 
         return self._apply_required_evidence_contract(EvidenceContract(
             status=status,
-            selectedSources=selected_sources,
+            selectedSources=contract_selected_sources,
             referenceSignals=reference_signals,
             warnings=warnings,
             selectedSnapshotGroup=selected_group,
             rejectedGroups=rejected_groups,
             requiredActions=required_actions,
+            factualBoundary=(
+                "selected historical snapshot groups within requested range only"
+                if historical_range
+                else "selected rank snapshot group only"
+            ),
+            inferenceBoundary=(
+                "other snapshots are comparison signals within the requested historical range"
+                if historical_range
+                else "non-selected rank groups are reference signals, not latest facts"
+            ),
         ), required, sources)
+
+    def _has_broad_historical_rank_coverage(
+        self,
+        sources: list[KnowledgeSource],
+        *,
+        historical_range: bool,
+        requested_channel_code: str | None,
+        requested_board_code: str | None,
+        requested_category: str | None,
+        top_n: int,
+    ) -> bool:
+        if (
+            not historical_range
+            or any((requested_channel_code, requested_board_code, requested_category))
+        ):
+            return False
+        unique_books = {
+            source.bookId if source.bookId is not None else source.sourceRefId
+            for source in sources
+            if source.bookId is not None or source.sourceRefId is not None
+        }
+        board_scopes = {
+            (
+                self._normalize(source.channelCode),
+                self._normalize(source.boardCode or source.category),
+            )
+            for source in sources
+            if source.boardCode or source.category
+        }
+        required_scope_count = min(2, top_n)
+        return len(unique_books) >= top_n and len(board_scopes) >= required_scope_count
+
+
+    def commit(
+        self,
+        *,
+        intent: str,
+        sources: list[KnowledgeSource],
+        requested_platform: str | None = None,
+        requested_channel_code: str | None = None,
+        requested_board_code: str | None = None,
+        requested_category: str | None = None,
+        top_n: int = 3,
+        source_policy: dict[str, Any] | None = None,
+        required_evidence: list[str] | tuple[str, ...] | set[str] | None = None,
+        expected_project_id: int | None = None,
+        allowed_project_work_scopes: set[tuple[int, int]] | None = None,
+        claimed_citations: list[str] | tuple[str, ...] | set[str] | None = None,
+        repair_already_used: bool = False,
+        commit_id: str | None = None,
+    ) -> EvidenceCommit:
+        """Evaluate sources and wrap the result as the run's EvidenceCommit."""
+        contract = self.evaluate(
+            intent=intent,
+            sources=sources,
+            requested_platform=requested_platform,
+            requested_channel_code=requested_channel_code,
+            requested_board_code=requested_board_code,
+            requested_category=requested_category,
+            top_n=top_n,
+            source_policy=source_policy,
+            required_evidence=required_evidence,
+        )
+        return self.to_evidence_commit(
+            contract,
+            sources=sources,
+            expected_project_id=expected_project_id,
+            allowed_project_work_scopes=allowed_project_work_scopes,
+            claimed_citations=claimed_citations,
+            repair_already_used=repair_already_used,
+            commit_id=commit_id,
+            intent=intent,
+        )
+
+    def to_evidence_commit(
+        self,
+        contract: EvidenceContract,
+        *,
+        sources: list[KnowledgeSource] | None = None,
+        expected_project_id: int | None = None,
+        allowed_project_work_scopes: set[tuple[int, int]] | None = None,
+        claimed_citations: list[str] | tuple[str, ...] | set[str] | None = None,
+        repair_already_used: bool = False,
+        commit_id: str | None = None,
+        intent: str | None = None,
+    ) -> EvidenceCommit:
+        """Convert EvidenceContract (+ optional citation/project checks) into EvidenceCommit."""
+        all_sources = list(sources if sources is not None else contract.selectedSources or [])
+        selected_sources = list(contract.selectedSources or [])
+        decisions: list[EvidenceDecision] = []
+        reason_codes: list[str] = [f"contract_{contract.status.value}"]
+        blocking_reject = False
+
+        # Rank-oriented EvidenceContract may report missing when only chapter/project
+        # sources exist. For non-market intents those sources remain committable.
+        effective_contract = contract
+        if (
+            contract.status == EvidenceStatus.missing
+            and all_sources
+            and not self._is_pure_market_intent(intent)
+            and not any((source.sourceType or "").upper() == "RANK" for source in all_sources)
+        ):
+            effective_contract = contract.model_copy(
+                update={
+                    "status": EvidenceStatus.verified_latest,
+                    "selectedSources": list(all_sources),
+                    "requiredActions": [],
+                }
+            )
+            selected_sources = list(all_sources)
+            reason_codes.append("non_rank_sources_accepted")
+
+        base_state = self._decision_state_for_contract(effective_contract.status)
+        contract = effective_contract
+        selected_keys = {self._source_identity(source) for source in selected_sources}
+        valid_citation_ids = self._valid_citation_ids(all_sources)
+        allowed_scopes = {
+            (int(project_id), int(work_id))
+            for project_id, work_id in (allowed_project_work_scopes or set())
+            if int(project_id) > 0 and int(work_id) > 0
+        }
+
+        for index, source in enumerate(all_sources, start=1):
+            evidence_id = f"source:{index}"
+            decision_state = base_state
+            item_reasons: list[str] = []
+            identity = self._source_identity(source)
+            source_type = (source.sourceType or "").upper()
+
+            if selected_sources and source_type == "RANK" and identity not in selected_keys:
+                decision_state = EvidenceDecisionState.REJECTED
+                item_reasons.append("not_selected_snapshot")
+
+            if allowed_scopes and (source.projectId is not None or source.workId is not None):
+                try:
+                    source_scope = (int(source.projectId), int(source.workId))
+                except (TypeError, ValueError):
+                    source_scope = None
+                if source_scope not in allowed_scopes:
+                    decision_state = EvidenceDecisionState.REJECTED
+                    item_reasons.append("cross_project_evidence")
+                    blocking_reject = True
+                    reason_codes.append("cross_project_evidence")
+            elif expected_project_id is not None and source.projectId is not None:
+                try:
+                    if int(source.projectId) != int(expected_project_id):
+                        decision_state = EvidenceDecisionState.REJECTED
+                        item_reasons.append("cross_project_evidence")
+                        blocking_reject = True
+                        reason_codes.append("cross_project_evidence")
+                except (TypeError, ValueError):
+                    decision_state = EvidenceDecisionState.REJECTED
+                    item_reasons.append("cross_project_evidence")
+                    blocking_reject = True
+                    reason_codes.append("cross_project_evidence")
+
+            if source_type == "RANK" and contract.status == EvidenceStatus.stale:
+                decision_state = EvidenceDecisionState.REJECTED
+                item_reasons.append("stale_market_claim")
+                blocking_reject = True
+                reason_codes.append("stale_market_claim")
+
+            if contract.status in {EvidenceStatus.missing, EvidenceStatus.conflict}:
+                if source_type == "RANK" or not selected_sources:
+                    decision_state = EvidenceDecisionState.REJECTED
+                    item_reasons.append(f"contract_{contract.status.value}")
+                    blocking_reject = True
+
+            if decision_state is EvidenceDecisionState.ACCEPTED and not item_reasons:
+                item_reasons.append("selected_evidence")
+            elif decision_state is EvidenceDecisionState.DEGRADED and not item_reasons:
+                item_reasons.append("directional_only")
+
+            freshness = None
+            if source.snapshotTime:
+                freshness = "latest" if contract.status == EvidenceStatus.verified_latest else contract.status.value
+            elif source_type == "RANK":
+                freshness = contract.status.value
+
+            decisions.append(
+                EvidenceDecision(
+                    evidenceId=evidence_id,
+                    decision=decision_state,
+                    freshness=freshness,
+                    provenanceRef=(
+                        f"snapshot:{source.snapshotId}"
+                        if source.snapshotId is not None
+                        else (f"project:{source.projectId}" if source.projectId is not None else None)
+                    ),
+                    citationRef=evidence_id,
+                    reasonCodes=tuple(dict.fromkeys(item_reasons)),
+                )
+            )
+
+        for citation in self._normalize_citations(claimed_citations):
+            if citation in valid_citation_ids:
+                continue
+            decisions.append(
+                EvidenceDecision(
+                    evidenceId=f"citation:{citation}",
+                    decision=EvidenceDecisionState.REJECTED,
+                    citationRef=citation,
+                    reasonCodes=("forged_citation",),
+                )
+            )
+            blocking_reject = True
+            reason_codes.append("forged_citation")
+
+        if not decisions and contract.status == EvidenceStatus.missing:
+            decisions.append(
+                EvidenceDecision(
+                    evidenceId="evidence:missing",
+                    decision=EvidenceDecisionState.REJECTED,
+                    reasonCodes=("missing_evidence",),
+                )
+            )
+            blocking_reject = True
+            reason_codes.append("missing_evidence")
+
+        can_commit = (
+            contract.status in {EvidenceStatus.verified_latest, EvidenceStatus.degraded_directional}
+            and not blocking_reject
+            and "forged_citation" not in reason_codes
+        )
+        repair_allowed = (
+            (not can_commit)
+            and (not repair_already_used)
+            and (
+                contract.status in {
+                    EvidenceStatus.stale,
+                    EvidenceStatus.missing,
+                    EvidenceStatus.conflict,
+                }
+                or bool(contract.requiredActions)
+            )
+        )
+        if repair_already_used:
+            reason_codes.append("repair_budget_exhausted")
+        if repair_allowed:
+            reason_codes.append("targeted_repair_allowed")
+        if can_commit:
+            reason_codes.append("evidence_sufficient" if contract.status == EvidenceStatus.verified_latest else "directional_commit_allowed")
+        else:
+            reason_codes.append("commit_blocked")
+
+        resolved_commit_id = (commit_id or "").strip() or self._default_commit_id(
+            intent=intent,
+            contract=contract,
+            source_count=len(all_sources),
+        )
+        return EvidenceCommit(
+            commitId=resolved_commit_id[:128],
+            decisions=tuple(decisions),
+            canCommit=can_commit,
+            repairAllowed=repair_allowed,
+            reasonCodes=tuple(dict.fromkeys(reason_codes)),
+        )
+
+    def _is_pure_market_intent(self, intent: str | None) -> bool:
+        normalized = self._normalize(intent)
+        return normalized in {
+            "market_scan",
+            "trend_research",
+            "rank_research",
+            "market",
+            "trend",
+        }
+
+    def _decision_state_for_contract(self, status: EvidenceStatus) -> EvidenceDecisionState:
+        if status == EvidenceStatus.verified_latest:
+            return EvidenceDecisionState.ACCEPTED
+        if status == EvidenceStatus.degraded_directional:
+            return EvidenceDecisionState.DEGRADED
+        return EvidenceDecisionState.REJECTED
+
+    def _source_identity(self, source: KnowledgeSource) -> tuple[Any, ...]:
+        return (
+            (source.sourceType or "").upper(),
+            source.bookId,
+            source.snapshotId,
+            source.snapshotTime,
+            source.projectId,
+            source.workId,
+            source.chapterId,
+            source.rankNo,
+            source.retrievalBackend,
+            source.title,
+        )
+
+    def _valid_citation_ids(self, sources: list[KnowledgeSource]) -> set[str]:
+        valid: set[str] = set()
+        for index, _source in enumerate(sources, start=1):
+            valid.add(str(index))
+            valid.add(f"source:{index}")
+        return valid
+
+    def _normalize_citations(
+        self,
+        claimed_citations: list[str] | tuple[str, ...] | set[str] | None,
+    ) -> list[str]:
+        if not claimed_citations:
+            return []
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw in claimed_citations:
+            value = str(raw or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
+
+    def _default_commit_id(
+        self,
+        *,
+        intent: str | None,
+        contract: EvidenceContract,
+        source_count: int,
+    ) -> str:
+        selected = contract.selectedSnapshotGroup
+        snapshot_part = (
+            f"{selected.snapshotId or selected.snapshotTime}"
+            if selected is not None
+            else "none"
+        )
+        raw = f"{intent or 'unknown'}|{contract.status.value}|{snapshot_part}|{source_count}"
+        digest = re.sub(r"[^a-zA-Z0-9:_-]+", "", raw)[:96]
+        return f"evidence:{digest or 'commit'}"
 
     def _apply_required_evidence_contract(
         self,
@@ -207,7 +606,12 @@ class EvidenceArbiter:
     def _has_required_evidence(self, requirement: str, sources: list[KnowledgeSource]) -> bool:
         normalized = self._normalize(requirement)
         source_types = {(source.sourceType or "").upper() for source in sources}
-        if normalized in {"fresh_rank", "current_structured_rank_topn", "rank_evidence"}:
+        if normalized in {
+            "fresh_rank",
+            "current_structured_rank_topn",
+            "rank_evidence",
+            "historical_rank_snapshot",
+        }:
             return any(
                 (source.sourceType or "").upper() == "RANK"
                 and (source.snapshotId is not None or bool(source.snapshotTime))
@@ -219,22 +623,47 @@ class EvidenceArbiter:
             return "ANALYSIS" in source_types
         if normalized in {"vector_evidence", "knowledge_vector"}:
             return bool(sources)
+        if normalized == "project_bound_chapter_or_memory_evidence":
+            return any(
+                source.projectId is not None
+                and source.workId is not None
+                and (source.sourceType or "").upper().startswith("PROJECT_")
+                for source in sources
+            )
         return any(self._normalize(source.sourceType) == normalized for source in sources)
 
     def _requires_rank_evidence(self, requirements: list[str]) -> bool:
         return any(
-            self._normalize(requirement) in {"fresh_rank", "current_structured_rank_topn", "rank_evidence"}
+            self._normalize(requirement) in {
+                "fresh_rank",
+                "current_structured_rank_topn",
+                "rank_evidence",
+                "historical_rank_snapshot",
+            }
             for requirement in requirements
         )
 
-    def _group_rank_sources(self, sources: list[KnowledgeSource]) -> dict[str, list[KnowledgeSource]]:
+    def _group_rank_sources(
+        self,
+        sources: list[KnowledgeSource],
+        *,
+        historical_range: bool = False,
+    ) -> dict[str, list[KnowledgeSource]]:
         groups: dict[str, list[KnowledgeSource]] = {}
         for source in sources:
-            key = self._group_key(source)
+            key = self._group_key(source, historical_range=historical_range)
             groups.setdefault(key, []).append(source)
         return groups
 
-    def _group_key(self, source: KnowledgeSource) -> str:
+    def _group_key(self, source: KnowledgeSource, *, historical_range: bool = False) -> str:
+        if historical_range:
+            parsed = self._parse_snapshot_time(source.snapshotTime or "")
+            snapshot_marker = parsed.date().isoformat() if parsed is not None else source.snapshotTime
+            return "|".join([
+                self._clean(source.platform),
+                self._clean(snapshot_marker),
+                self._clean(source.retrievalBackend or "unknown_tool"),
+            ])
         values = [
             self._clean(source.platform),
             self._clean(source.channelCode),
@@ -291,6 +720,8 @@ class EvidenceArbiter:
                 [first.boardCode, first.boardName, first.title, first.preview],
             ),
             snapshotAgeDays=round(age_days, 3) if age_days is not None else None,
+            freshness=self._aggregate_freshness(sources),
+            historicalReference=self._aggregate_historical(sources),
         )
         group.score = self._score_group(group)
         if requested_platform and self._normalize(first.platform) != self._normalize(requested_platform):
@@ -328,13 +759,22 @@ class EvidenceArbiter:
         *,
         selected_group: SnapshotGroup,
         rejected_groups: list[SnapshotGroup],
+        historical_range: bool = False,
     ) -> list[EvidenceWarning]:
         warnings: list[EvidenceWarning] = []
         if rejected_groups:
             warnings.append(
                 EvidenceWarning(
-                    code="mixed_structured_rank_snapshot",
-                    message="Multiple structured rank snapshot groups were found; one group was selected for the answer.",
+                    code=(
+                        "historical_comparison_snapshots"
+                        if historical_range
+                        else "mixed_structured_rank_snapshot"
+                    ),
+                    message=(
+                        "Multiple snapshots in the requested historical range are available for comparison."
+                        if historical_range
+                        else "Multiple structured rank snapshot groups were found; one group was selected for the answer."
+                    ),
                 )
             )
         for group in rejected_groups:
@@ -347,7 +787,7 @@ class EvidenceArbiter:
                     ),
                 )
             )
-        if self._is_stale(selected_group):
+        if self._is_stale(selected_group) and not historical_range:
             warnings.append(
                 EvidenceWarning(
                     code="stale_structured_rank_snapshot",
@@ -374,7 +814,39 @@ class EvidenceArbiter:
         }
         return len(markers) > 1
 
+
+    def _aggregate_freshness(self, sources: list[KnowledgeSource]) -> str | None:
+        states = []
+        for source in sources:
+            value = getattr(source, "freshness", None)
+            if value:
+                states.append(str(value).upper())
+        if not states:
+            return None
+        if "EXPIRED" in states:
+            return "EXPIRED"
+        if "STALE" in states:
+            return "STALE"
+        if all(state == "FRESH" for state in states):
+            return "FRESH"
+        return states[0]
+
+    def _aggregate_historical(self, sources: list[KnowledgeSource]) -> bool | None:
+        flags = [getattr(source, "historicalReference", None) for source in sources]
+        known = [flag for flag in flags if flag is not None]
+        if not known:
+            return None
+        return any(bool(flag) for flag in known)
+
     def _is_stale(self, group: SnapshotGroup) -> bool:
+        # Prefer Backend three-state freshness when present; Worker must not invent a second clock policy.
+        state = str(getattr(group, "freshness", None) or "").upper()
+        if state in {"EXPIRED", "STALE"}:
+            return True
+        if state == "FRESH":
+            return False
+        if getattr(group, "historicalReference", None) is True:
+            return True
         return group.snapshotAgeDays is not None and group.snapshotAgeDays > self.max_snapshot_age_days
 
     def _snapshot_age_days(self, snapshot_time: str | None) -> float | None:

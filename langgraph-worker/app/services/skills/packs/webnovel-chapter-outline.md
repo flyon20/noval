@@ -2,6 +2,7 @@
 skillId: webnovel-chapter-outline
 version: 1.0.0
 intents: [chapter_outline]
+requestedCapabilities: []
 triggers: [chapter, scene, beat, cliffhanger]
 ---
 

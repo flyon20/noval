@@ -6,6 +6,8 @@ import com.novelanalyzer.modules.asyncjob.dto.AsyncJobSubmitResponse;
 import com.novelanalyzer.modules.crawler.service.CrawlerService;
 import com.novelanalyzer.modules.knowledge.client.EmbeddingClient;
 import com.novelanalyzer.modules.knowledge.client.QdrantClient;
+import com.novelanalyzer.modules.knowledge.dto.KnowledgeChatRequest;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeChatService;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeIndexJobExecutor;
 import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +33,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
@@ -73,7 +76,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "classpath:sql/phase5-schema-h2.sql",
         "classpath:sql/phase2-data-h2.sql",
         "classpath:sql/phase7-knowledge-schema-h2.sql",
-        "classpath:sql/phase8-knowledge-chat-memory-schema-h2.sql"
+        "classpath:sql/phase8-knowledge-chat-memory-schema-h2.sql",
+        "classpath:sql/phase12-webnovel-agent-project-trace-h2.sql",
+        "classpath:sql/phase13-agent-memory-mcp-h2.sql",
+        "classpath:sql/phase18-agent-harness-conversation-rag-h2.sql"
     },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
@@ -89,6 +95,9 @@ class KnowledgeChatServiceTest {
 
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+
+    @Autowired
+    private KnowledgeChatService knowledgeChatService;
 
     @MockBean
     private LangGraphWorkerClient langGraphWorkerClient;
@@ -198,7 +207,12 @@ class KnowledgeChatServiceTest {
         jobResponse.setJobType("KNOWLEDGE_INDEX_BOOK");
         jobResponse.setJobKey("book:401");
         jobResponse.setStatus("PENDING");
-        when(knowledgeIndexJobExecutor.submitAndExecute(401L, 1L)).thenReturn(jobResponse);
+        when(knowledgeIndexJobExecutor.submitAndExecute(
+            eq(401L),
+            eq(1L),
+            eq("ALL"),
+            argThat(key -> key != null && key.startsWith("chat-run:") && key.endsWith(":index-book"))
+        )).thenReturn(jobResponse);
 
         KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
         workerResponse.setStatus("insufficient_evidence");
@@ -224,7 +238,12 @@ class KnowledgeChatServiceTest {
             .andExpect(jsonPath("$.data.resultJson.localBookId").value(401))
             .andExpect(jsonPath("$.data.resultJson.indexJob.jobId").value(188));
 
-        verify(knowledgeIndexJobExecutor).submitAndExecute(401L, 1L);
+        verify(knowledgeIndexJobExecutor).submitAndExecute(
+            eq(401L),
+            eq(1L),
+            eq("ALL"),
+            argThat(key -> key != null && key.startsWith("chat-run:") && key.endsWith(":index-book"))
+        );
     }
 
     @Test
@@ -315,6 +334,204 @@ class KnowledgeChatServiceTest {
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
         assertThat(payloadCaptor.getValue()).containsEntry("reasoningMode", "deep");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldForwardRequestedReasoningEffortToWorkerPayload() throws Exception {
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("中档思考回答");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给我扫榜并做大纲","reasoningMode":"deep","reasoningEffort":"medium"}
+                    """))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("reasoningEffort", "medium");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldForwardGpt56ExclusiveXhighTier() throws Exception {
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("极高档思考回答");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给我扫榜并做大纲","reasoningMode":"deep","reasoningEffort":"xhigh"}
+                    """))
+            .andExpect(status().isOk());
+
+        // xhigh 只有 gpt-5.6 一代报得出来，白名单漏掉它等于前端选了却被静默丢弃。
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("reasoningEffort", "xhigh");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldDropUnknownReasoningEffortInsteadOfForwardingIt() throws Exception {
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("回答");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给我扫榜并做大纲","reasoningEffort":"turbo"}
+                    """))
+            .andExpect(status().isOk());
+
+        // 未知枚举不能透传：供应商对未知字段值返回 400，宁可退回族内默认。
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).doesNotContainKey("reasoningEffort");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldResolveRequestedModelKeyIntoWorkerModelName() throws Exception {
+        upsertSystemConfig("ai.model-registry.json", """
+            {
+              "defaultModelKey": "deepseek-chat",
+              "models": [
+                {
+                  "modelKey": "deepseek-chat",
+                  "displayName": "DeepSeek",
+                  "providerType": "deepseek",
+                  "modelName": "deepseek-chat",
+                  "enabled": true
+                },
+                {
+                  "modelKey": "kimi-main",
+                  "displayName": "Kimi",
+                  "providerType": "moonshot",
+                  "modelName": "kimi-k3-thinking",
+                  "enabled": true
+                },
+                {
+                  "modelKey": "kimi-backup",
+                  "displayName": "Kimi Backup",
+                  "providerType": "moonshot",
+                  "modelName": "kimi-k3-thinking",
+                  "enabled": true
+                },
+                {
+                  "modelKey": "retired-glm",
+                  "displayName": "GLM",
+                  "providerType": "zhipu",
+                  "modelName": "glm-4.6",
+                  "enabled": false
+                }
+              ]
+            }
+            """);
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("回答");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给我扫榜并做大纲","modelKey":"kimi-main"}
+                    """))
+            .andExpect(status().isOk());
+
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        Map<String, Object> limits = (Map<String, Object>) payloadCaptor.getValue().get("limits");
+        assertThat(limits).containsEntry("modelKey", "kimi-main");
+        assertThat(limits).containsEntry("modelName", "kimi-k3-thinking");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldIgnoreDisabledOrUnknownModelKeyAndFallBackToRuntimeDefault() throws Exception {
+        upsertSystemConfig("ai.model-registry.json", """
+            {
+              "defaultModelKey": "deepseek-chat",
+              "models": [
+                {
+                  "modelKey": "deepseek-chat",
+                  "displayName": "DeepSeek",
+                  "providerType": "deepseek",
+                  "modelName": "deepseek-chat",
+                  "enabled": true
+                },
+                {
+                  "modelKey": "retired-glm",
+                  "displayName": "GLM",
+                  "providerType": "zhipu",
+                  "modelName": "glm-4.6",
+                  "enabled": false
+                }
+              ]
+            }
+            """);
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("回答");
+        workerResponse.setActions(List.of());
+        workerResponse.setResultJson(Map.of("status", "answered"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"给我扫榜并做大纲","modelKey":"retired-glm"}
+                    """))
+            .andExpect(status().isOk());
+
+        // 注册表里下线的模型不能生效，也不该报错：老会话继续用运行时默认模型跑完。
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
+        Map<String, Object> limits = (Map<String, Object>) payloadCaptor.getValue().get("limits");
+        assertThat(limits).doesNotContainKey("modelKey");
+        assertThat(limits).doesNotContainKey("modelName");
+    }
+
+    @Test
+    void shouldRejectInvalidPreferredSkillId() throws Exception {
+        String token = loginAndGetToken();
+
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"question":"分析榜单","preferredSkillId":"../admin-skill"}
+                    """))
+            .andExpect(status().isBadRequest());
+
+        verify(langGraphWorkerClient, never()).runKnowledgeChat(any());
     }
 
     @Test
@@ -532,7 +749,12 @@ class KnowledgeChatServiceTest {
         jobResponse.setJobType("KNOWLEDGE_INDEX_BOOK");
         jobResponse.setJobKey("book:401:CHAPTER_MISSING");
         jobResponse.setStatus("PENDING");
-        when(knowledgeIndexJobExecutor.submitAndExecute(401L, 1L, "CHAPTER_MISSING")).thenReturn(jobResponse);
+        when(knowledgeIndexJobExecutor.submitAndExecute(
+            eq(401L),
+            eq(1L),
+            eq("CHAPTER_MISSING"),
+            argThat(key -> key != null && key.startsWith("chat-run:") && key.endsWith(":chapter-missing"))
+        )).thenReturn(jobResponse);
 
         KnowledgeChatResponseVO.SourceVO source = new KnowledgeChatResponseVO.SourceVO();
         source.setChunkId(null);
@@ -569,7 +791,71 @@ class KnowledgeChatServiceTest {
             .andExpect(jsonPath("$.data.status").value("answered"))
             .andExpect(jsonPath("$.data.resultJson.chapterIndexJob.jobId").value(288));
 
-        verify(knowledgeIndexJobExecutor).submitAndExecute(401L, 1L, "CHAPTER_MISSING");
+        verify(knowledgeIndexJobExecutor).submitAndExecute(
+            eq(401L),
+            eq(1L),
+            eq("CHAPTER_MISSING"),
+            argThat(key -> key != null && key.startsWith("chat-run:") && key.endsWith(":chapter-missing"))
+        );
+    }
+
+    @Test
+    void shouldUseDistinctDurableActionKeysForTerminalIndexArtifacts() {
+        AsyncJobSubmitResponse bookJob = new AsyncJobSubmitResponse();
+        bookJob.setJobId(301L);
+        bookJob.setStatus("SUCCESS");
+        bookJob.setReused(true);
+        AsyncJobSubmitResponse chapterJob = new AsyncJobSubmitResponse();
+        chapterJob.setJobId(302L);
+        chapterJob.setStatus("SUCCESS");
+        chapterJob.setReused(true);
+        when(knowledgeIndexJobExecutor.submitAndExecute(
+            401L,
+            1L,
+            "ALL",
+            "chat-run:run-1:outbox:9:index-book"
+        )).thenReturn(bookJob);
+        when(knowledgeIndexJobExecutor.submitAndExecute(
+            401L,
+            1L,
+            "CHAPTER_MISSING",
+            "chat-run:run-1:outbox:9:chapter-missing"
+        )).thenReturn(chapterJob);
+
+        KnowledgeChatRequest request = new KnowledgeChatRequest();
+        request.setQuestion("continue analysis");
+        KnowledgeChatResponseVO.SourceVO source = new KnowledgeChatResponseVO.SourceVO();
+        source.setSourceType("CHAPTER");
+        source.setBookId(401L);
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setActions(List.of("index_book"));
+        response.setSources(List.of(source));
+        response.setResultJson(Map.of("bookId", 401L));
+
+        knowledgeChatService.persistCompletedRunIndexArtifacts(
+            1L,
+            request,
+            response,
+            null,
+            "chat-run:run-1:outbox:9"
+        );
+
+        assertThat(response.getResultJson())
+            .containsEntry("localBookId", 401L)
+            .containsEntry("indexJob", bookJob)
+            .containsEntry("chapterIndexJob", chapterJob);
+        verify(knowledgeIndexJobExecutor).submitAndExecute(
+            401L,
+            1L,
+            "ALL",
+            "chat-run:run-1:outbox:9:index-book"
+        );
+        verify(knowledgeIndexJobExecutor).submitAndExecute(
+            401L,
+            1L,
+            "CHAPTER_MISSING",
+            "chat-run:run-1:outbox:9:chapter-missing"
+        );
     }
 
     @Test
@@ -622,7 +908,6 @@ class KnowledgeChatServiceTest {
 
     @Test
     void shouldPersistConversationSummaryForWorkerMemoryAgent() throws Exception {
-        createConversationSummaryTable();
         createProjectTablesAndProject(900L, 1L);
         KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
         workerResponse.setStatus("answered");
@@ -680,7 +965,9 @@ class KnowledgeChatServiceTest {
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(langGraphWorkerClient).runKnowledgeChat(payloadCaptor.capture());
         Map<String, Object> limits = (Map<String, Object>) payloadCaptor.getValue().get("limits");
-        assertThat(limits).containsEntry("maxInputTokens", 1_000_000);
+        assertThat(limits).containsEntry("maxInputTokens", 300_000);
+        assertThat(limits).containsEntry("compactionThresholdPercent", 85);
+        assertThat(limits).containsEntry("runTokenBudgetPercent", 150);
     }
 
     @Test
@@ -720,22 +1007,6 @@ class KnowledgeChatServiceTest {
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.data.accessToken");
-    }
-
-    private void createConversationSummaryTable() {
-        jdbcTemplate.execute("""
-            create table if not exists ai_conversation_summary (
-                id bigint auto_increment primary key,
-                conversation_id varchar(80) not null,
-                user_id bigint not null,
-                project_id bigint,
-                summary clob not null,
-                source_trace_id varchar(80),
-                created_at timestamp default current_timestamp,
-                updated_at timestamp default current_timestamp,
-                constraint uk_ai_conversation_summary_chat_test unique(conversation_id, user_id)
-            )
-            """);
     }
 
     private void createProjectTablesAndProject(long projectId, long userId) {

@@ -1,5 +1,7 @@
 package com.novelanalyzer.modules.config.vo;
 
+import com.novelanalyzer.modules.config.model.AiProviderCapabilities;
+
 import java.util.Map;
 
 public class AiModelRegistryModelVO {
@@ -7,6 +9,8 @@ public class AiModelRegistryModelVO {
     private String modelKey;
     private String displayName;
     private String providerType;
+    private String protocol;
+    private AiProviderCapabilities providerCapabilities;
     private String modelName;
     private String baseUrl;
     private String apiKey;
@@ -45,6 +49,22 @@ public class AiModelRegistryModelVO {
 
     public String getModelName() {
         return modelName;
+    }
+
+    public String getProtocol() {
+        return protocol;
+    }
+
+    public void setProtocol(String protocol) {
+        this.protocol = protocol;
+    }
+
+    public AiProviderCapabilities getProviderCapabilities() {
+        return providerCapabilities;
+    }
+
+    public void setProviderCapabilities(AiProviderCapabilities providerCapabilities) {
+        this.providerCapabilities = providerCapabilities;
     }
 
     public void setModelName(String modelName) {

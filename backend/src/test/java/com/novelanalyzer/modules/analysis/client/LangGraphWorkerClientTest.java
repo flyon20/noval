@@ -6,6 +6,7 @@ import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.knowledge.dto.AgentEvalRunRequest;
 import com.novelanalyzer.modules.knowledge.vo.AgentEvalRunVO;
+import com.novelanalyzer.modules.knowledge.vo.AgentProviderProbeVO;
 import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
 import com.novelanalyzer.modules.knowledge.vo.RuntimeSkillVO;
 import org.junit.jupiter.api.Test;
@@ -23,7 +24,9 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 
 class LangGraphWorkerClientTest {
 
@@ -142,8 +145,11 @@ class LangGraphWorkerClientTest {
               {
                 "skillId": "webnovel-market-scan",
                 "version": "1.0.0",
+                "description": "Use current market evidence.",
                 "intents": ["market_scan"],
-                "triggers": ["榜单", "趋势"]
+                "triggers": ["榜单", "趋势"],
+                "requestedCapabilities": ["market.read"],
+                "skillMetadata": {"legacyFormat": false}
               }
             ]
             """);
@@ -160,8 +166,65 @@ class LangGraphWorkerClientTest {
 
         assertThat(skills).hasSize(1);
         assertThat(skills.get(0).getSkillId()).isEqualTo("webnovel-market-scan");
+        assertThat(skills.get(0).getDescription()).isEqualTo("Use current market evidence.");
         assertThat(skills.get(0).getIntents()).containsExactly("market_scan");
         assertThat(skills.get(0).getTriggers()).containsExactly("榜单", "趋势");
+        assertThat(skills.get(0).getRequestedCapabilities()).containsExactly("market.read");
+        assertThat(skills.get(0).getSkillMetadata()).containsEntry("legacyFormat", false);
+    }
+
+    @Test
+    void shouldProbeProviderThroughInternalPathAndDropUnexpectedSensitiveFields() throws Exception {
+        HttpClient httpClient = mock(HttpClient.class);
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(systemConfigService.getValueOrDefault("ai.langgraph-worker.base-url", null))
+            .thenReturn("http://127.0.0.1:18001");
+        when(systemConfigService.getValueOrDefault("ai.langgraph-worker.internal-api-key", null))
+            .thenReturn("test-langgraph-key");
+        when(systemConfigService.getIntValueOrDefault("ai.langgraph-worker.timeout-millis", 30000))
+            .thenReturn(30000);
+        when(response.statusCode()).thenReturn(200);
+        when(response.body()).thenReturn("""
+            {
+              "status": "SUCCEEDED",
+              "profileKey": "gateway-primary",
+              "profileVersion": "version-1",
+              "endpointFingerprint": "endpoint-sha256",
+              "model": "deepseek-chat",
+              "protocol": "responses",
+              "latencyMillis": 25,
+              "usageReported": true,
+              "cacheUsageReported": false,
+              "content": "must not propagate",
+              "apiKey": "must not propagate"
+            }
+            """);
+        when(httpClient.send(org.mockito.ArgumentMatchers.any(HttpRequest.class), org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+            .thenReturn(response);
+        LangGraphWorkerClient runtimeClient = new LangGraphWorkerClient(
+            httpClient,
+            new ObjectMapper(),
+            new AiProperties(),
+            systemConfigService
+        );
+
+        AgentProviderProbeVO result = runtimeClient.probeAgentProvider("gateway-primary", "version-1");
+
+        ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(httpClient).send(
+            requestCaptor.capture(),
+            org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()
+        );
+        assertThat(requestCaptor.getValue().uri().toString())
+            .isEqualTo("http://127.0.0.1:18001/internal/knowledge/agent/provider-probe");
+        assertThat(result.getProfileKey()).isEqualTo("gateway-primary");
+        assertThat(result.getProfileVersion()).isEqualTo("version-1");
+        assertThat(result.getStatus()).isEqualTo("SUCCEEDED");
+        Map<String, Object> publicProjection = new ObjectMapper().convertValue(
+            result,
+            new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}
+        );
+        assertThat(publicProjection).doesNotContainKeys("content", "apiKey");
     }
 
     @Test
@@ -293,5 +356,57 @@ class LangGraphWorkerClientTest {
         assertThat(result).isNull();
         assertThat(accumulatedContent).hasToString("answer");
         assertThat(deltas).isEmpty();
+    }
+
+    @Test
+    void shouldForwardOnlyAllowlistedContextCompactionProgressFields() {
+        List<String> phases = new ArrayList<>();
+        List<String> messages = new ArrayList<>();
+        List<Map<String, Object>> details = new ArrayList<>();
+
+        Object result = ReflectionTestUtils.invokeMethod(
+            client,
+            "processKnowledgeEvent",
+            "context_compacted",
+            """
+                {
+                  "event": "context_compacted",
+                  "phase": "context",
+                  "message": "上下文已自动压缩",
+                  "contextWindowTokens": 1000000,
+                  "thresholdTokens": 900000,
+                  "beforeInputTokens": 920000,
+                  "afterInputTokens": 240000,
+                  "retainedTurnCount": 8,
+                  "summarizedMessageCount": 24,
+                  "generation": 2,
+                  "compactedSummary": "PRIVATE_SUMMARY",
+                  "prompt": "PRIVATE_PROMPT"
+                }
+                """,
+            new StringBuilder(),
+            (Consumer<String>) ignored -> { },
+            (LangGraphWorkerClient.KnowledgeProgressConsumer) (phase, message, progressDetails) -> {
+                phases.add(phase);
+                messages.add(message);
+                details.add(progressDetails);
+            }
+        );
+
+        assertThat(result).isNull();
+        assertThat(phases).containsExactly("context");
+        assertThat(messages).containsExactly("上下文已自动压缩");
+        assertThat(details).singleElement().satisfies(progressDetails -> {
+            assertThat(progressDetails)
+                .containsEntry("progressEvent", "context_compacted")
+                .containsEntry("contextWindowTokens", 1000000L)
+                .containsEntry("thresholdTokens", 900000L)
+                .containsEntry("beforeInputTokens", 920000L)
+                .containsEntry("afterInputTokens", 240000L)
+                .containsEntry("retainedTurnCount", 8L)
+                .containsEntry("summarizedMessageCount", 24L)
+                .containsEntry("generation", 2L)
+                .doesNotContainKeys("compactedSummary", "prompt");
+        });
     }
 }

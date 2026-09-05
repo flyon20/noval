@@ -22,6 +22,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(OutputCaptureExtension.class)
 class QdrantClientTest {
@@ -113,6 +114,22 @@ class QdrantClientTest {
     }
 
     @Test
+    void shouldDeletePointsOnlyWithExplicitMetadataFilter() throws Exception {
+        String baseUrl = startServer();
+        QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
+
+        client.deletePoints(Map.of("generation_id", 19L));
+
+        CapturedRequest request = requests.get(0);
+        assertThat(request.method()).isEqualTo("POST");
+        assertThat(request.path()).isEqualTo("/collections/novel_knowledge_chunks/points/delete");
+        Map<String, Object> body = objectMapper.readValue(request.body(), new TypeReference<>() {});
+        assertThat(body.get("filter").toString()).contains("generation_id").contains("19");
+        assertThatThrownBy(() -> client.deletePoints(Map.of()))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void shouldNotLogFullPayloadTextOnUpsert(CapturedOutput output) throws Exception {
         String baseUrl = startServer();
         QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
@@ -150,6 +167,32 @@ class QdrantClientTest {
         assertThat(body.get("vector")).isEqualTo(List.of(0.1, 0.2, 0.3));
         Map<String, Object> filter = objectMapper.convertValue(body.get("filter"), new TypeReference<>() {});
         assertThat(filter.toString()).contains("bookId").contains("101");
+    }
+
+    @Test
+    void shouldSearchWithScopedAnyMatchFilter() throws Exception {
+        String baseUrl = startServer("{\"result\": []}");
+        QdrantClient client = new QdrantClient(HttpClient.newHttpClient(), objectMapper, knowledgeProperties(baseUrl));
+
+        client.searchWithAnyMatch(
+            List.of(0.1, 0.2, 0.3),
+            Map.of("user_id", 7, "project_id", 900, "work_id", 1, "visibility", "private"),
+            "generation_id",
+            List.of(11L, 12L),
+            8
+        );
+
+        Map<String, Object> body = objectMapper.readValue(requests.get(0).body(), new TypeReference<>() {});
+        Map<String, Object> filter = objectMapper.convertValue(body.get("filter"), new TypeReference<>() {});
+        assertThat(filter.toString())
+            .contains("user_id")
+            .contains("project_id")
+            .contains("work_id")
+            .contains("visibility")
+            .contains("generation_id")
+            .contains("any")
+            .contains("11")
+            .contains("12");
     }
 
     private String startServer() throws IOException {

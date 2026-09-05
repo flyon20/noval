@@ -42,6 +42,22 @@ class KnowledgeConversationSummaryServiceTest {
         assertThat(service.readSummary(8L, "conv-1")).isEmpty();
     }
 
+    @Test
+    void shouldRetainStructuredCompactionSummaryBeyondTwelveThousandCharacters() {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        KnowledgeConversationSummaryService service = new KnowledgeConversationSummaryService(jdbcTemplate);
+        String summary = "<!-- NOVAL_CONTEXT_STATE_V1 {\"generation\":2} -->\n" + "长期上下文".repeat(10_000);
+
+        service.updateSummary(7L, 900L, "conv-large", summary, "trace-large");
+
+        assertThat(service.readSummary(7L, "conv-large"))
+            .get()
+            .extracting(KnowledgeConversationSummaryService.ConversationSummary::summary)
+            .asString()
+            .startsWith("<!-- NOVAL_CONTEXT_STATE_V1")
+            .hasSizeGreaterThan(12_000);
+    }
+
     private JdbcTemplate jdbcTemplate() {
         JdbcTemplate jdbcTemplate = KnowledgeProjectServiceTest.jdbcTemplate();
         jdbcTemplate.execute("create table ai_conversation_summary (" +

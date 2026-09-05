@@ -112,6 +112,17 @@ server {
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
 
+    # The app shell and service worker must revalidate so clients discover releases promptly.
+    location = /index.html {
+        try_files \$uri =404;
+        expires -1;
+    }
+
+    location = /sw.js {
+        try_files \$uri =404;
+        expires -1;
+    }
+
     location /assets/ {
         try_files \$uri =404;
         access_log off;

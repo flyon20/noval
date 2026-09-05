@@ -7,6 +7,9 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.modules.config.dto.AiModelRegistryModelRequest;
 import com.novelanalyzer.modules.config.dto.AiModelRegistrySaveRequest;
 import com.novelanalyzer.modules.config.dto.SystemConfigUpdateRequest;
+import com.novelanalyzer.modules.config.model.AiProviderCapabilities;
+import com.novelanalyzer.modules.config.model.AiPromptCacheCapabilities;
+import com.novelanalyzer.modules.config.model.AiProviderRoutingPolicy;
 import com.novelanalyzer.modules.config.model.SystemConfigEntity;
 import com.novelanalyzer.modules.config.repository.SystemConfigRepository;
 import com.novelanalyzer.modules.config.vo.AiModelOptionVO;
@@ -48,13 +51,15 @@ public class SystemConfigService {
         Map.entry("ai.langgraph-worker.internal-api-key", new DefaultSystemConfig("", "ai", "后端调用 LangGraph worker 的内部鉴权令牌。", true)),
         Map.entry("ai.langgraph-worker.timeout-millis", new DefaultSystemConfig("30000", "ai", "后端等待 LangGraph worker 响应的超时时间。", true)),
         Map.entry("ai.knowledge.reasoning-mode.default", new DefaultSystemConfig("fast", "ai", "AI 问答默认推理模式：fast 为快速模式，deep 为 DeepSeek 思考模式并使用 max 强度。", true)),
+        Map.entry("ai.conversation.read-rollout-percent", new DefaultSystemConfig("100", "ai", "Conversation/Message 新读路径灰度比例：0、10、50 或 100；生产默认使用新会话数据。", true)),
+        Map.entry("ai.conversation.legacy-fallback-enabled", new DefaultSystemConfig("true", "ai", "Conversation 新读路径缺失时是否立即回退旧 Run 数据。", true)),
         Map.entry("ai.available-models", new DefaultSystemConfig("deepseek-chat", "ai", "旧版逗号分隔模型列表，模型注册表保存后会同步。", true)),
         Map.entry("auth.bootstrap-admin-phones", new DefaultSystemConfig("15599316908", "auth", "逗号分隔的管理员手机号列表，登录或刷新时自动补齐 ADMIN 角色。", true)),
         Map.entry("crawler.default.chapter-count", new DefaultSystemConfig("3", "crawler", "扫榜页默认抓取的章节数量。", true)),
         Map.entry("crawler.http.timeout-seconds", new DefaultSystemConfig("20", "crawler", "爬虫请求页面时的超时时间。", true)),
         Map.entry("crawler.chapter.fetch-workers", new DefaultSystemConfig("3", "crawler", "多章节抓取时的最大并发数。", true)),
         Map.entry("crawler.chapter.force-refresh.user-max-times", new DefaultSystemConfig("3", "crawler", "普通用户在当前窗口内的章节重抓上限。", true)),
-        Map.entry("crawler.rank.refresh-days", new DefaultSystemConfig("5", "crawler", "榜单缓存期与章节重抓统计窗口。", true)),
+        Map.entry("crawler.rank.refresh-days", new DefaultSystemConfig("3", "crawler", "榜单缓存期与章节重抓统计窗口。", true)),
         Map.entry("crawler.rank.force-cooldown-days", new DefaultSystemConfig("2", "crawler", "普通用户强制刷新榜单后的冷却天数。", true)),
         Map.entry("crawler.rank.force-max-times", new DefaultSystemConfig("2", "crawler", "普通用户在冷却窗口内可强制刷新榜单的次数。", true)),
         Map.entry("crawler.book.refresh-days", new DefaultSystemConfig("7", "crawler", "书籍详情和章节信息的缓存天数。", true)),
@@ -151,7 +156,10 @@ public class SystemConfigService {
         AiModelRegistryVO existingRegistry = getModelRegistryInternal();
         AiModelRegistryVO registry = normalizeModelRegistry(
             request.getDefaultModelKey(),
-            mergeModelRegistryRequests(existingRegistry, request.getModels())
+            mergeModelRegistryRequests(existingRegistry, request.getModels()),
+            request.getProviderRoutingPolicy() == null
+                ? copyProviderRoutingPolicy(existingRegistry.getProviderRoutingPolicy())
+                : copyProviderRoutingPolicy(request.getProviderRoutingPolicy())
         );
         SystemConfigEntity entity = new SystemConfigEntity();
         entity.setConfigKey(MODEL_REGISTRY_CONFIG_KEY);
@@ -216,11 +224,25 @@ public class SystemConfigService {
             .map(this::toRuntimeModel);
     }
 
+    public Optional<AiModelRegistryModelVO> resolveEnabledModelByKey(String modelKey) {
+        String normalizedModelKey = trimToNull(modelKey);
+        if (normalizedModelKey == null) {
+            return Optional.empty();
+        }
+        return getModelRegistryInternal().getModels().stream()
+            .filter(model -> Boolean.TRUE.equals(model.getEnabled()))
+            .filter(model -> normalizedModelKey.equals(model.getModelKey()))
+            .findFirst()
+            .map(this::toRuntimeModel);
+    }
+
     private AiModelRegistryModelVO toRuntimeModel(AiModelRegistryModelVO model) {
         AiModelRegistryModelVO runtime = new AiModelRegistryModelVO();
         runtime.setModelKey(model.getModelKey());
         runtime.setDisplayName(model.getDisplayName());
         runtime.setProviderType(model.getProviderType());
+        runtime.setProtocol(model.getProtocol());
+        runtime.setProviderCapabilities(copyProviderCapabilities(model.getProviderCapabilities()));
         runtime.setModelName(model.getModelName());
         runtime.setBaseUrl(model.getBaseUrl());
         runtime.setApiKey(configSecretService.decryptIfNecessary(model.getApiKey()));
@@ -339,6 +361,7 @@ public class SystemConfigService {
                 request.setModelKey(modelKey);
                 request.setDisplayName(prettyModelName(modelKey));
                 request.setProviderType(OPENAI_COMPATIBLE_PROVIDER);
+                request.setProtocol("unspecified");
                 request.setModelName(modelKey);
                 request.setBaseUrl(configuredBaseUrl);
                 request.setApiKey(configuredApiKey);
@@ -350,7 +373,7 @@ public class SystemConfigService {
                 return request;
             })
             .toList();
-        return normalizeModelRegistry(configuredDefaultModel, models);
+        return normalizeModelRegistry(configuredDefaultModel, models, new AiProviderRoutingPolicy());
     }
 
     private List<String> getLegacyAvailableModels() {
@@ -378,6 +401,8 @@ public class SystemConfigService {
                     request.setModelKey(model.getModelKey());
                     request.setDisplayName(model.getDisplayName());
                     request.setProviderType(model.getProviderType());
+                    request.setProtocol(model.getProtocol());
+                    request.setProviderCapabilities(copyProviderCapabilities(model.getProviderCapabilities()));
                     request.setModelName(model.getModelName());
                     request.setBaseUrl(model.getBaseUrl());
                     request.setApiKey(model.getApiKey());
@@ -390,14 +415,19 @@ public class SystemConfigService {
                     requests.add(request);
                 }
             }
-            return normalizeModelRegistry(registry.getDefaultModelKey(), requests);
+            return normalizeModelRegistry(
+                registry.getDefaultModelKey(),
+                requests,
+                registry.getProviderRoutingPolicy()
+            );
         } catch (Exception ex) {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "model registry config is invalid");
         }
     }
 
     private AiModelRegistryVO normalizeModelRegistry(String requestedDefaultModelKey,
-                                                     List<AiModelRegistryModelRequest> modelRequests) {
+                                                     List<AiModelRegistryModelRequest> modelRequests,
+                                                     AiProviderRoutingPolicy requestedRoutingPolicy) {
         if (modelRequests == null || modelRequests.isEmpty()) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "model registry must contain at least one model");
         }
@@ -409,6 +439,13 @@ public class SystemConfigService {
             .count();
         if (enabledCount == 0) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "model registry must contain at least one enabled model");
+        }
+        long distinctModelKeyCount = models.stream()
+            .map(AiModelRegistryModelVO::getModelKey)
+            .distinct()
+            .count();
+        if (distinctModelKeyCount != models.size()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "modelKey values must be unique");
         }
 
         String defaultModelKey = firstNonBlank(
@@ -439,6 +476,8 @@ public class SystemConfigService {
                 normalized.setModelKey(model.getModelKey());
                 normalized.setDisplayName(model.getDisplayName());
                 normalized.setProviderType(model.getProviderType());
+                normalized.setProtocol(normalizeProtocol(model.getProtocol()));
+                normalized.setProviderCapabilities(copyProviderCapabilities(model.getProviderCapabilities()));
                 normalized.setModelName(model.getModelName());
                 normalized.setBaseUrl(model.getBaseUrl());
                 normalized.setApiKey(model.getApiKey());
@@ -451,6 +490,7 @@ public class SystemConfigService {
                 return normalized;
             })
             .toList());
+        registry.setProviderRoutingPolicy(normalizeProviderRoutingPolicy(requestedRoutingPolicy, registry.getModels()));
         return registry;
     }
 
@@ -463,6 +503,9 @@ public class SystemConfigService {
         model.setModelKey(modelKey);
         model.setDisplayName(firstNonBlank(trimToNull(request.getDisplayName()), prettyModelName(modelKey)));
         model.setProviderType(firstNonBlank(trimToNull(request.getProviderType()), OPENAI_COMPATIBLE_PROVIDER));
+        model.setProtocol(normalizeProtocol(request.getProtocol()));
+        model.setProviderCapabilities(normalizeProviderCapabilities(request.getProviderCapabilities()));
+        validateProviderPromptCacheProtocol(model.getProtocol(), model.getProviderCapabilities());
         model.setModelName(firstNonBlank(trimToNull(request.getModelName()), modelKey));
         model.setBaseUrl(trimToNull(request.getBaseUrl()));
         model.setApiKey(firstNonBlank(trimToNull(request.getApiKey()), ""));
@@ -537,12 +580,15 @@ public class SystemConfigService {
     private AiModelRegistryVO sanitizeModelRegistry(AiModelRegistryVO registry) {
         AiModelRegistryVO sanitized = new AiModelRegistryVO();
         sanitized.setDefaultModelKey(registry.getDefaultModelKey());
+        sanitized.setProviderRoutingPolicy(copyProviderRoutingPolicy(registry.getProviderRoutingPolicy()));
         sanitized.setModels(registry.getModels().stream()
             .map(model -> {
                 AiModelRegistryModelVO copy = new AiModelRegistryModelVO();
                 copy.setModelKey(model.getModelKey());
                 copy.setDisplayName(model.getDisplayName());
                 copy.setProviderType(model.getProviderType());
+                copy.setProtocol(model.getProtocol());
+                copy.setProviderCapabilities(copyProviderCapabilities(model.getProviderCapabilities()));
                 copy.setModelName(model.getModelName());
                 copy.setBaseUrl(model.getBaseUrl());
                 copy.setApiKey(null);
@@ -587,6 +633,14 @@ public class SystemConfigService {
                 merged.setPromptBindings(request.getPromptBindings());
 
                 AiModelRegistryModelVO existing = existingByModelKey.get(trimToNull(request.getModelKey()));
+                // Older admin clients do not send protocol; preserve an existing explicit contract.
+                merged.setProtocol(request.getProtocol() == null && existing != null
+                    ? existing.getProtocol()
+                    : request.getProtocol());
+                // Capability metadata is additive; omission from an older client must not erase it.
+                merged.setProviderCapabilities(request.getProviderCapabilities() == null && existing != null
+                    ? copyProviderCapabilities(existing.getProviderCapabilities())
+                    : copyProviderCapabilities(request.getProviderCapabilities()));
                 String requestApiKey = trimToNull(request.getApiKey());
                 if (configSecretService.isMaskedValue(requestApiKey)) {
                     merged.setApiKey(existing == null ? "" : existing.getApiKey());
@@ -629,6 +683,8 @@ public class SystemConfigService {
                 request.setModelKey(model.getModelKey());
                 request.setDisplayName(model.getDisplayName());
                 request.setProviderType(model.getProviderType());
+                request.setProtocol(model.getProtocol());
+                request.setProviderCapabilities(copyProviderCapabilities(model.getProviderCapabilities()));
                 request.setModelName(model.getModelName());
                 request.setBaseUrl(model.getBaseUrl());
                 request.setApiKey(configSecretService.encryptIfNecessary(model.getApiKey()));
@@ -641,8 +697,152 @@ public class SystemConfigService {
                 return request;
             })
             .toList();
-        entity.setConfigValue(writeJson(normalizeModelRegistry(registry.getDefaultModelKey(), migratedModels)));
+        entity.setConfigValue(writeJson(normalizeModelRegistry(
+            registry.getDefaultModelKey(),
+            migratedModels,
+            registry.getProviderRoutingPolicy()
+        )));
         return systemConfigRepository.saveOrUpdate(entity);
+    }
+
+    private AiProviderRoutingPolicy normalizeProviderRoutingPolicy(
+        AiProviderRoutingPolicy requested,
+        List<AiModelRegistryModelVO> models
+    ) {
+        AiProviderRoutingPolicy source = requested == null ? new AiProviderRoutingPolicy() : requested;
+        int schemaVersion = source.getSchemaVersion() == null
+            ? AiProviderRoutingPolicy.CURRENT_SCHEMA_VERSION
+            : source.getSchemaVersion();
+        if (schemaVersion != AiProviderRoutingPolicy.CURRENT_SCHEMA_VERSION) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "unsupported provider routing policy schema");
+        }
+        int cooldownSeconds = source.getCooldownSeconds() == null
+            ? AiProviderRoutingPolicy.DEFAULT_COOLDOWN_SECONDS
+            : source.getCooldownSeconds();
+        if (cooldownSeconds < 30 || cooldownSeconds > 3600) {
+            throw new BusinessException(
+                ResultCode.BAD_REQUEST,
+                "provider routing cooldownSeconds must be between 30 and 3600"
+            );
+        }
+
+        List<String> orderedProfileKeys = new ArrayList<>();
+        for (String rawKey : source.getOrderedProfileKeys() == null ? List.<String>of() : source.getOrderedProfileKeys()) {
+            String profileKey = trimToNull(rawKey);
+            if (profileKey == null) {
+                throw new BusinessException(ResultCode.BAD_REQUEST, "provider routing profile key is required");
+            }
+            orderedProfileKeys.add(profileKey);
+        }
+        if (orderedProfileKeys.stream().distinct().count() != orderedProfileKeys.size()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "provider routing profile keys must be unique");
+        }
+
+        // An omitted value means "walk the whole ordered list"; an explicit 0 keeps
+        // routing pinned to the first key. The upper bound is the list length so a
+        // long key chain is usable, not capped at a single hop.
+        int maxFailovers = source.getMaxFailovers() == null
+            ? Math.max(0, orderedProfileKeys.size() - 1)
+            : source.getMaxFailovers();
+        if (maxFailovers < 0 || maxFailovers > orderedProfileKeys.size()) {
+            throw new BusinessException(
+                ResultCode.BAD_REQUEST,
+                "provider routing maxFailovers must be between 0 and the ordered profile count"
+            );
+        }
+
+        boolean enabled = Boolean.TRUE.equals(source.getEnabled());
+        if (enabled) {
+            validateEnabledProviderRoutingPolicy(orderedProfileKeys, models);
+        }
+
+        AiProviderRoutingPolicy normalized = new AiProviderRoutingPolicy();
+        normalized.setSchemaVersion(schemaVersion);
+        normalized.setEnabled(enabled);
+        normalized.setOrderedProfileKeys(orderedProfileKeys);
+        normalized.setMaxFailovers(maxFailovers);
+        normalized.setCooldownSeconds(cooldownSeconds);
+        return normalized;
+    }
+
+    private void validateEnabledProviderRoutingPolicy(List<String> orderedProfileKeys,
+                                                      List<AiModelRegistryModelVO> models) {
+        if (orderedProfileKeys.size() < 2) {
+            throw new BusinessException(
+                ResultCode.BAD_REQUEST,
+                "enabled provider routing requires at least two profiles"
+            );
+        }
+        Map<String, AiModelRegistryModelVO> modelsByKey = new HashMap<>();
+        for (AiModelRegistryModelVO model : models) {
+            modelsByKey.put(model.getModelKey(), model);
+        }
+        AiModelRegistryModelVO baseline = null;
+        for (String profileKey : orderedProfileKeys) {
+            AiModelRegistryModelVO candidate = modelsByKey.get(profileKey);
+            if (candidate == null || !Boolean.TRUE.equals(candidate.getEnabled())) {
+                throw new BusinessException(
+                    ResultCode.BAD_REQUEST,
+                    "provider routing profile must exist and be enabled"
+                );
+            }
+            if (!List.of("responses", "chat_completions").contains(candidate.getProtocol())) {
+                throw new BusinessException(
+                    ResultCode.BAD_REQUEST,
+                    "provider routing profile protocol must be explicit"
+                );
+            }
+            if (candidate.getProviderCapabilities() == null) {
+                throw new BusinessException(
+                    ResultCode.BAD_REQUEST,
+                    "provider routing profile capabilities must be declared"
+                );
+            }
+            if (baseline == null) {
+                baseline = candidate;
+                continue;
+            }
+            if (!java.util.Objects.equals(baseline.getProviderType(), candidate.getProviderType())
+                || !java.util.Objects.equals(baseline.getProtocol(), candidate.getProtocol())
+                || !providerCapabilitiesCanonical(baseline.getProviderCapabilities())
+                    .equals(providerCapabilitiesCanonical(candidate.getProviderCapabilities()))) {
+                throw new BusinessException(
+                    ResultCode.BAD_REQUEST,
+                    "provider routing profiles must have compatible provider type, protocol and capabilities"
+                );
+            }
+        }
+    }
+
+    private String providerCapabilitiesCanonical(AiProviderCapabilities capabilities) {
+        return String.join(
+            ",",
+            String.valueOf(capabilities.getSchemaVersion()),
+            String.valueOf(capabilities.getSupportsStreaming()),
+            String.valueOf(capabilities.getSupportsTools()),
+            String.valueOf(capabilities.getSupportsJsonObject()),
+            String.valueOf(capabilities.getSupportsReasoning()),
+            String.valueOf(capabilities.getReportsUsage()),
+            String.valueOf(capabilities.getReportsCacheUsage()),
+            promptCacheCapabilitiesCanonical(capabilities.getPromptCache())
+        );
+    }
+
+    private String promptCacheCapabilitiesCanonical(AiPromptCacheCapabilities promptCache) {
+        if (promptCache == null) {
+            return "legacy_model_policy";
+        }
+        return String.join(
+            ":",
+            String.valueOf(promptCache.getStrategy()),
+            String.valueOf(promptCache.getMode()),
+            String.valueOf(promptCache.getRetention()),
+            String.valueOf(promptCache.getBreakpoint())
+        );
+    }
+
+    private AiProviderRoutingPolicy copyProviderRoutingPolicy(AiProviderRoutingPolicy policy) {
+        return policy == null ? new AiProviderRoutingPolicy() : policy.copy();
     }
 
     private String prepareConfigValueForStorage(String configKey, String requestedValue, String existingValue) {
@@ -695,6 +895,94 @@ public class SystemConfigService {
             }
         }
         return builder.length() == 0 ? modelKey : builder.toString();
+    }
+
+    private String normalizeProtocol(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return "unspecified";
+        }
+        normalized = normalized.toLowerCase().replace('-', '_');
+        if (normalized.equals("chat") || normalized.equals("chat_completion")) {
+            return "chat_completions";
+        }
+        if (normalized.equals("responses") || normalized.equals("chat_completions") || normalized.equals("unspecified")) {
+            return normalized;
+        }
+        throw new BusinessException(ResultCode.BAD_REQUEST, "unsupported AI model protocol");
+    }
+
+    private AiProviderCapabilities normalizeProviderCapabilities(AiProviderCapabilities capabilities) {
+        if (capabilities == null) {
+            return null;
+        }
+        if (!Integer.valueOf(AiProviderCapabilities.CURRENT_SCHEMA_VERSION)
+            .equals(capabilities.getSchemaVersion())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "unsupported provider capabilities schema");
+        }
+        if (capabilities.getSupportsStreaming() == null
+            || capabilities.getSupportsTools() == null
+            || capabilities.getSupportsJsonObject() == null
+            || capabilities.getSupportsReasoning() == null
+            || capabilities.getReportsUsage() == null
+            || capabilities.getReportsCacheUsage() == null) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "provider capabilities v1 must be complete");
+        }
+        AiProviderCapabilities normalized = capabilities.copy();
+        normalized.setPromptCache(normalizePromptCacheCapabilities(capabilities.getPromptCache()));
+        return normalized;
+    }
+
+    private AiPromptCacheCapabilities normalizePromptCacheCapabilities(AiPromptCacheCapabilities promptCache) {
+        if (promptCache == null) {
+            return null;
+        }
+        String strategy = normalizePromptCacheValue(promptCache.getStrategy());
+        String mode = normalizePromptCacheValue(promptCache.getMode());
+        String retention = normalizePromptCacheValue(promptCache.getRetention());
+        String breakpoint = normalizePromptCacheValue(promptCache.getBreakpoint());
+        boolean valid = switch (strategy) {
+            case "none" -> "disabled".equals(mode)
+                && "provider_default".equals(retention)
+                && "none".equals(breakpoint);
+            case "deepseek_automatic" -> "provider_managed".equals(mode)
+                && "provider_default".equals(retention)
+                && "none".equals(breakpoint);
+            case "openai_legacy" -> "implicit".equals(mode)
+                && Set.of("provider_default", "in_memory", "24h").contains(retention)
+                && "none".equals(breakpoint);
+            case "openai_gpt_5_6" -> Set.of("implicit", "explicit").contains(mode)
+                && Set.of("provider_default", "30m").contains(retention)
+                && Set.of("none", "stable_prefix").contains(breakpoint);
+            default -> false;
+        };
+        if (!valid) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "invalid Responses prompt cache capabilities");
+        }
+        AiPromptCacheCapabilities normalized = new AiPromptCacheCapabilities();
+        normalized.setStrategy(strategy);
+        normalized.setMode(mode);
+        normalized.setRetention(retention);
+        normalized.setBreakpoint(breakpoint);
+        return normalized;
+    }
+
+    private void validateProviderPromptCacheProtocol(String protocol, AiProviderCapabilities capabilities) {
+        AiPromptCacheCapabilities promptCache = capabilities == null ? null : capabilities.getPromptCache();
+        if (promptCache != null
+            && !"none".equals(promptCache.getStrategy())
+            && !"responses".equals(protocol)) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "prompt cache capabilities require Responses protocol");
+        }
+    }
+
+    private String normalizePromptCacheValue(String value) {
+        String normalized = trimToNull(value);
+        return normalized == null ? "" : normalized.toLowerCase().replace('-', '_');
+    }
+
+    private AiProviderCapabilities copyProviderCapabilities(AiProviderCapabilities capabilities) {
+        return capabilities == null ? null : capabilities.copy();
     }
 
     private String trimToNull(String value) {

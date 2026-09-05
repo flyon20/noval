@@ -3,7 +3,7 @@ skillId: webnovel-opening-hook
 version: 1.0.0
 intents: [opening_strategy]
 appliesTo: [opening_hook]
-allowedTools: [skill.lookup, memory.project_context, knowledge.vector_search]
+requestedCapabilities: [skill.activate, memory.project.read, book.read]
 requiredEvidence: []
 triggers: [opening, hook, first-three-chapters]
 ---

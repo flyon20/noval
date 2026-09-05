@@ -1,5 +1,7 @@
 package com.novelanalyzer.modules.crawler.vo;
 
+import java.time.LocalDateTime;
+
 public class ChapterVO {
 
     private Long bookId;
@@ -8,6 +10,7 @@ public class ChapterVO {
     private String content;
     private Integer wordCount;
     private Integer sourceWordCount;
+    private LocalDateTime crawlTime;
 
     public Long getBookId() {
         return bookId;
@@ -55,5 +58,13 @@ public class ChapterVO {
 
     public void setSourceWordCount(Integer sourceWordCount) {
         this.sourceWordCount = sourceWordCount;
+    }
+
+    public LocalDateTime getCrawlTime() {
+        return crawlTime;
+    }
+
+    public void setCrawlTime(LocalDateTime crawlTime) {
+        this.crawlTime = crawlTime;
     }
 }

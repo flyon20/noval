@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
+from app.services.harness.tool_ledger import run_tool_ledger_scope
 from app.services.knowledge_client import KnowledgeBackendClient
 
 
@@ -123,6 +124,8 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
             freshness="time_window",
             allow_historical=True,
             time_window_days=30,
+            snapshot_start_date="2026-08-03",
+            snapshot_end_date="2026-08-09",
             require_snapshot_time=True,
         )
 
@@ -136,10 +139,44 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
                 "freshness": "time_window",
                 "allowHistorical": True,
                 "timeWindowDays": 30,
+                "snapshotStartDate": "2026-08-03",
+                "snapshotEndDate": "2026-08-09",
                 "requireSnapshotTime": True,
             },
             client.post_calls[0]["payload"],
         )
+
+    async def test_should_refresh_rank_with_scoped_idempotency_payload(self) -> None:
+        client = CapturingKnowledgeBackendClient({"snapshotId": 12, "total": 30})
+
+        result = await client.refresh_rank_board(
+            platform="fanqie",
+            channel_code="male-new",
+            board_code="urban-brain",
+            rank_fetch_count=30,
+            refresh_mode="AUTO",
+            force_reason="agent_rank_cache_first_retry",
+            user_id=7,
+            project_id=91,
+            idempotency_key="run-1:rank.refresh",
+        )
+
+        self.assertEqual("/internal/knowledge/rank/refresh", client.post_calls[0]["path"])
+        self.assertEqual(
+            {
+                "userId": 7,
+                "projectId": 91,
+                "platform": "fanqie",
+                "channelCode": "male-new",
+                "boardCode": "urban-brain",
+                "rankFetchCount": 30,
+                "refreshMode": "AUTO",
+                "forceReason": "agent_rank_cache_first_retry",
+                "idempotencyKey": "run-1:rank.refresh",
+            },
+            client.post_calls[0]["payload"],
+        )
+        self.assertEqual(12, result["snapshotId"])
 
     async def test_should_get_book_research_pack_with_camel_case_payload(self) -> None:
         client = CapturingKnowledgeBackendClient({
@@ -153,11 +190,13 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
             book_name="Book Alpha",
             chapter_limit=3,
             analysis_limit=2,
+            user_id=7,
         )
 
         self.assertEqual("/internal/knowledge/research-pack/book", client.post_calls[0]["path"])
         self.assertEqual(
             {
+                "userId": 7,
                 "platform": "fanqie",
                 "bookId": 101,
                 "bookName": "Book Alpha",
@@ -184,11 +223,13 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
             rank_no=1,
             limit=5,
             chapter_limit_per_book=2,
+            user_id=7,
         )
 
         self.assertEqual("/internal/knowledge/research-pack/rank", client.post_calls[0]["path"])
         self.assertEqual(
             {
+                "userId": 7,
                 "platform": "fanqie",
                 "channelCode": "male-new",
                 "boardCode": "urban-brain",
@@ -215,11 +256,15 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
             freshness="time_window",
             allow_historical=True,
             time_window_days=30,
+            snapshot_start_date="2026-08-03",
+            snapshot_end_date="2026-08-09",
             require_snapshot_time=True,
+            user_id=7,
         )
 
         self.assertEqual(
             {
+                "userId": 7,
                 "platform": "fanqie",
                 "limit": 10,
                 "chapterLimitPerBook": 1,
@@ -229,10 +274,28 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
                 "freshness": "time_window",
                 "allowHistorical": True,
                 "timeWindowDays": 30,
+                "snapshotStartDate": "2026-08-03",
+                "snapshotEndDate": "2026-08-09",
                 "requireSnapshotTime": True,
             },
             client.post_calls[0]["payload"],
         )
+
+    async def test_sensitive_read_uses_trusted_run_user_scope_and_rejects_forgery(self) -> None:
+        client = CapturingKnowledgeBackendClient({"book": None, "chapters": [], "analyses": []})
+
+        with run_tool_ledger_scope({
+            "runId": "knowledge-client-scope",
+            "userId": "7",
+            "projectId": "9",
+            "route": "book_breakdown",
+        }):
+            await client.get_book_research_pack(platform="fanqie")
+            with self.assertRaises(ValueError):
+                await client.get_book_research_pack(platform="fanqie", user_id=8)
+
+        self.assertEqual(7, client.post_calls[0]["payload"]["userId"])
+        self.assertEqual(1, len(client.post_calls))
 
     async def test_should_get_project_memory_with_project_and_user_scope(self) -> None:
         client = CapturingKnowledgeBackendClient({
@@ -247,6 +310,177 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"userId": 7}, client.post_calls[0]["payload"])
         self.assertEqual(900, memory["projectId"])
         self.assertEqual("urban fantasy", memory["memories"]["genre"])
+
+    async def test_should_retrieve_project_knowledge_with_hybrid_request_contract(self) -> None:
+        client = CapturingKnowledgeBackendClient({
+            "evidence": [{"documentId": 101, "backend": "structured"}],
+            "gaps": ["vector_unavailable"],
+            "diagnostics": {"returnedCount": 1},
+            "partial": True,
+        })
+
+        result = await client.retrieve_project_knowledge(
+            user_id=7,
+            project_id=910,
+            work_id=920,
+            query="admin signal",
+            intent="continuity_check",
+            entities=["Lin Zhou"],
+            chapter_from=2,
+            chapter_to=7,
+            channels=["structured", "vector"],
+            filters={"chapterFrom": 2, "chapterTo": 7},
+            weights={"structured": 0.95, "vector": 0.85},
+            limit=5,
+            deep=True,
+            graph_budget_millis=123,
+            timeout_millis=1500,
+            rerank_policy="raw_score",
+        )
+
+        self.assertEqual("/internal/knowledge/projects/retrieval", client.post_calls[0]["path"])
+        self.assertEqual({
+            "userId": 7,
+            "projectId": 910,
+            "workId": 920,
+            "query": "admin signal",
+            "intent": "continuity_check",
+            "entities": ["Lin Zhou"],
+            "chapterFrom": 2,
+            "chapterTo": 7,
+            "channels": ["structured", "vector"],
+            "filters": {"chapterFrom": 2, "chapterTo": 7},
+            "weights": {"structured": 0.95, "vector": 0.85},
+            "limit": 5,
+            "deep": True,
+            "graphBudgetMillis": 123,
+            "timeoutMillis": 1500,
+            "rerankPolicy": "raw_score",
+        }, client.post_calls[0]["payload"])
+        self.assertEqual("vector_unavailable", result["gaps"][0])
+
+    async def test_should_get_exact_foreshadowing_aggregate_with_trusted_scope(self) -> None:
+        client = CapturingKnowledgeBackendClient({
+            "metric": "foreshadowing_count",
+            "count": 3,
+            "breakdown": {"OPEN": 2, "PAID_OFF": 1},
+            "generationFingerprint": "sha256:abc",
+            "complete": True,
+        })
+
+        result = await client.aggregate_project_foreshadowings(
+            user_id=7,
+            project_id=910,
+            work_id=920,
+        )
+
+        self.assertEqual(
+            "/internal/knowledge/projects/foreshadowings/aggregate",
+            client.post_calls[0]["path"],
+        )
+        self.assertEqual(
+            {"userId": 7, "projectId": 910, "workId": 920},
+            client.post_calls[0]["payload"],
+        )
+        self.assertEqual(3, result["count"])
+
+    async def test_should_append_and_list_semantic_checkpoints(self) -> None:
+        client = CapturingKnowledgeBackendClient({
+            "eventId": 11,
+            "runId": "run-semantic",
+            "sequenceNo": 3,
+            "eventType": "TOOL_PREPARED",
+            "eventIdempotencyKey": "harness:tool:prepared:call-1",
+            "payload": '{"semanticKey":"call-1"}',
+        })
+
+        appended = await client.append_semantic_checkpoint(
+            run_id="run-semantic",
+            user_id=7,
+            event_type="TOOL_PREPARED",
+            event_idempotency_key="harness:tool:prepared:call-1",
+            payload={"semanticKey": "call-1"},
+        )
+
+        self.assertEqual("/internal/knowledge/chat-runs/semantic-checkpoints", client.post_calls[0]["path"])
+        self.assertEqual(7, client.post_calls[0]["payload"]["userId"])
+        self.assertEqual("TOOL_PREPARED", appended["eventType"])
+
+        client.response_payload = [{
+            "sequenceNo": 3,
+            "eventType": "TOOL_PREPARED",
+            "payload": (
+                '{"semanticKey":"call-1","_event":{'
+                '"schemaVersion":1,"eventId":11,"runId":"run-semantic",'
+                '"sequence":3,"eventType":"TOOL_PREPARED",'
+                '"visibility":"internal",'
+                '"eventIdempotencyKey":"harness:tool:prepared:call-1"}}'
+            ),
+        }]
+        events = await client.list_semantic_checkpoints(
+            run_id="run-semantic",
+            user_id=7,
+            after_sequence=0,
+            limit=500,
+        )
+
+        self.assertEqual("/internal/knowledge/chat-runs/semantic-checkpoints/query", client.post_calls[1]["path"])
+        self.assertEqual("call-1", events[0]["payload"]["semanticKey"])
+        self.assertEqual(
+            {
+                "schemaVersion": 1,
+                "eventId": 11,
+                "runId": "run-semantic",
+                "sequence": 3,
+                "eventType": "TOOL_PREPARED",
+                "visibility": "internal",
+                "eventIdempotencyKey": "harness:tool:prepared:call-1",
+            },
+            events[0]["payload"]["_event"],
+        )
+
+    def test_should_reject_unknown_or_mismatched_semantic_event_envelope(self) -> None:
+        client = CapturingKnowledgeBackendClient({})
+        base = {
+            "eventId": 11,
+            "runId": "run-semantic",
+            "sequenceNo": 3,
+            "eventType": "TOOL_PREPARED",
+            "eventIdempotencyKey": "harness:tool:prepared:call-1",
+        }
+        unknown_version = {
+            **base,
+            "payload": {
+                "_event": {
+                    "schemaVersion": 2,
+                    "eventId": 11,
+                    "runId": "run-semantic",
+                    "sequence": 3,
+                    "eventType": "TOOL_PREPARED",
+                    "visibility": "internal",
+                    "eventIdempotencyKey": "harness:tool:prepared:call-1",
+                },
+            },
+        }
+        mismatched_type = {
+            **base,
+            "payload": {
+                "_event": {
+                    "schemaVersion": 1,
+                    "eventId": 11,
+                    "runId": "run-semantic",
+                    "sequence": 3,
+                    "eventType": "TOOL_COMMITTED",
+                    "visibility": "internal",
+                    "eventIdempotencyKey": "harness:tool:prepared:call-1",
+                },
+            },
+        }
+
+        with self.assertRaisesRegex(ValueError, "unsupported semantic checkpoint event schema"):
+            client._normalize_semantic_checkpoint(unknown_version)
+        with self.assertRaisesRegex(ValueError, "semantic checkpoint eventType mismatch"):
+            client._normalize_semantic_checkpoint(mismatched_type)
 
     async def test_should_read_conversation_summary(self) -> None:
         client = CapturingKnowledgeBackendClient({
@@ -285,10 +519,16 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
             summary=None,
             confidence=0.87,
             source_trace_id="trace-1",
+            fact_key="project.fact.setting",
+            candidate_key="memory-candidate-123",
+            provenance_json='{"source":"worker_memory_extractor"}',
+            evidence_json='{"sourceTraceId":"trace-1"}',
+            extractor_version="memory-extractor-v1",
             ttl_days=30,
         )
 
         self.assertEqual("/internal/knowledge/memory/candidates", client.post_calls[0]["path"])
+        self.assertEqual("memory-candidate-123", client.post_calls[0]["payload"]["candidateKey"])
         self.assertEqual({
             "userId": 7,
             "projectId": 900,
@@ -298,6 +538,11 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
             "content": "setting",
             "confidence": 0.87,
             "sourceTraceId": "trace-1",
+            "factKey": "project.fact.setting",
+            "candidateKey": "memory-candidate-123",
+            "provenanceJson": '{"source":"worker_memory_extractor"}',
+            "evidenceJson": '{"sourceTraceId":"trace-1"}',
+            "extractorVersion": "memory-extractor-v1",
             "ttlDays": 30,
         }, client.post_calls[0]["payload"])
         self.assertEqual(123, result["id"])
@@ -330,7 +575,7 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
                     "priority": 10,
                     "maxTokens": 1200,
                     "maxToolCalls": 4,
-                    "allowedTools": ["rank.lookup"],
+                    "requestedToolCapabilities": ["market.read"],
                 }
             ],
         )
@@ -341,6 +586,33 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("market_scan", experts[0]["expertName"])
         self.assertFalse(experts[0]["enabled"])
 
+    async def test_should_report_only_sanitized_provider_routing_outcome(self) -> None:
+        client = CapturingKnowledgeBackendClient({})
+
+        await client.report_provider_routing_outcome({
+            "profileKey": "gateway-backup",
+            "profileVersion": "v2",
+            "outcome": "SUCCEEDED",
+            "failureClass": "HTTP_503",
+            "switched": True,
+            "endpoint": "https://must-not-send.example/v1",
+            "apiKey": "must-not-send",
+            "body": "must-not-send",
+            "error": "must-not-send",
+        })
+
+        self.assertEqual(
+            "/internal/knowledge/agent/provider-routing/outcome",
+            client.post_calls[0]["path"],
+        )
+        self.assertEqual({
+            "profileKey": "gateway-backup",
+            "profileVersion": "v2",
+            "outcome": "SUCCEEDED",
+            "failureClass": "HTTP_503",
+            "switched": True,
+        }, client.post_calls[0]["payload"])
+
     async def test_should_fetch_backend_published_runtime_skills(self) -> None:
         client = CapturingKnowledgeBackendClient(
             {},
@@ -348,9 +620,11 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
                 {
                     "skillId": "webnovel-market-scan",
                     "version": "2026.07.02",
+                    "description": "Use current market evidence.",
                     "content": "Backend published prompt",
                     "intents": ["market_scan"],
-                    "allowedTools": ["rank.lookup"],
+                    "requestedCapabilities": ["market.read"],
+                    "skillMetadata": {"legacyFormat": False},
                     "requiredEvidence": ["fresh_rank"],
                     "source": "backend",
                 }
@@ -362,7 +636,8 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("/internal/knowledge/runtime-skills", client.get_calls[0]["path"])
         self.assertEqual("webnovel-market-scan", skills[0]["skillId"])
         self.assertEqual("Backend published prompt", skills[0]["content"])
-        self.assertEqual(["rank.lookup"], skills[0]["allowedTools"])
+        self.assertEqual(["market.read"], skills[0]["requestedCapabilities"])
+        self.assertFalse(skills[0]["skillMetadata"]["legacyFormat"])
 
     async def test_should_post_agent_runtime_telemetry(self) -> None:
         client = CapturingKnowledgeBackendClient({"cacheEvents": 1, "tokenMetrics": 1})
@@ -394,6 +669,40 @@ class KnowledgeBackendClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("MISS", client.post_calls[0]["payload"]["cacheEvents"][0]["cacheStatus"])
         self.assertEqual(150, client.post_calls[0]["payload"]["tokenMetrics"][0]["tokenCount"])
         self.assertEqual({"cacheEvents": 1, "tokenMetrics": 1}, result)
+
+    async def test_should_keep_readability_fields_on_book_candidates(self) -> None:
+        client = CapturingKnowledgeBackendClient([
+            {
+                "bookName": "可读小说",
+                "platform": "fanqie",
+                "platformBookId": "pa",
+                "bookUrl": "https://fanqie.example/page/a",
+                "local": False,
+                "contentType": "novel",
+                "readableNovel": True,
+            },
+            {
+                "bookName": "听书结果",
+                "platform": "fanqie",
+                "platformBookId": "pb",
+                "bookUrl": "https://fanqie.example/page/b",
+                "local": False,
+                "contentType": "audiobook",
+                "readableNovel": False,
+                "unavailableReason": "search_result_is_audiobook",
+            },
+        ])
+
+        candidates = await client.search_books(platform="fanqie", keyword="都市脑洞", limit=2)
+
+        self.assertEqual("/internal/knowledge/books/search", client.post_calls[0]["path"])
+        self.assertEqual(2, len(candidates))
+        self.assertEqual("novel", candidates[0].contentType)
+        self.assertTrue(candidates[0].readableNovel)
+        self.assertIsNone(candidates[0].unavailableReason)
+        self.assertEqual("audiobook", candidates[1].contentType)
+        self.assertFalse(candidates[1].readableNovel)
+        self.assertEqual("search_result_is_audiobook", candidates[1].unavailableReason)
 
     async def test_should_reuse_async_client_until_closed(self) -> None:
         FakeAsyncClient.created_count = 0

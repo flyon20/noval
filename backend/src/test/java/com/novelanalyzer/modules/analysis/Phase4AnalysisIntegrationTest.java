@@ -4,12 +4,14 @@ import com.jayway.jsonpath.JsonPath;
 import com.sun.net.httpserver.HttpServer;
 import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.service.AiGatewayService;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobLockService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -30,6 +32,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -94,6 +99,9 @@ class Phase4AnalysisIntegrationTest {
     @Autowired
     private AiProperties aiProperties;
 
+    @MockBean
+    private AsyncJobLockService asyncJobLockService;
+
     @DynamicPropertySource
     static void registerAiProperties(DynamicPropertyRegistry registry) {
         registry.add("app.ai.openai-compatible.base-url", () -> "http://127.0.0.1:" + MOCK_OPENAI_SERVER.getAddress().getPort() + "/v1");
@@ -110,6 +118,7 @@ class Phase4AnalysisIntegrationTest {
 
     @BeforeEach
     void resetMockOpenAiCapture() {
+        when(asyncJobLockService.tryAcquire(anyString(), anyString(), anyLong())).thenReturn(true);
         LAST_OPENAI_REQUEST_BODY.set("");
         LAST_OPENAI_AUTHORIZATION.set("");
         OPENAI_REQUEST_COUNT.set(0);

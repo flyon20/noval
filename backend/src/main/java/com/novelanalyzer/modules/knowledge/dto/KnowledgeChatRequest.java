@@ -3,6 +3,9 @@ package com.novelanalyzer.modules.knowledge.dto;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,11 +18,23 @@ public class KnowledgeChatRequest {
     private String bookName;
     private Long bookId;
     private Long projectId;
+    private Long workId;
+    @Size(max = 8, message = "referenceWorkIds exceeds maximum size")
+    private List<@Positive(message = "reference work id must be positive") Long> referenceWorkIds = List.of();
     private String conversationId;
+    private String requestId;
     @Valid
     private CandidateDTO selectedCandidate;
     private String mode;
     private String reasoningMode;
+    @Size(max = 20, message = "reasoningEffort is too long")
+    private String reasoningEffort;
+    @Size(max = 200, message = "modelKey is too long")
+    private String modelKey;
+    @Size(max = 120, message = "preferredSkillId is too long")
+    @Pattern(regexp = "^[a-z0-9][a-z0-9._-]*$", message = "preferredSkillId is invalid")
+    private String preferredSkillId;
+    private Boolean resumeFromCheckpoint;
     private String contextSummary;
     @Valid
     private List<ChatMessageDTO> history = List.of();
@@ -28,6 +43,16 @@ public class KnowledgeChatRequest {
     @AssertTrue(message = "question is required")
     public boolean isQuestionValid() {
         return question != null && !question.trim().isEmpty();
+    }
+
+    @AssertTrue(message = "projectId is required when workId is provided")
+    public boolean isWorkScopeValid() {
+        return workId == null || projectId != null;
+    }
+
+    @AssertTrue(message = "projectId and workId are required when referenceWorkIds are provided")
+    public boolean isReferenceWorkScopeValid() {
+        return referenceWorkIds == null || referenceWorkIds.isEmpty() || (projectId != null && workId != null);
     }
 
     public String getQuestion() {
@@ -62,12 +87,36 @@ public class KnowledgeChatRequest {
         this.projectId = projectId;
     }
 
+    public Long getWorkId() {
+        return workId;
+    }
+
+    public void setWorkId(Long workId) {
+        this.workId = workId;
+    }
+
+    public List<Long> getReferenceWorkIds() {
+        return referenceWorkIds;
+    }
+
+    public void setReferenceWorkIds(List<Long> referenceWorkIds) {
+        this.referenceWorkIds = referenceWorkIds == null ? List.of() : List.copyOf(referenceWorkIds);
+    }
+
     public String getConversationId() {
         return conversationId;
     }
 
     public void setConversationId(String conversationId) {
         this.conversationId = conversationId;
+    }
+
+    public String getRequestId() {
+        return requestId;
+    }
+
+    public void setRequestId(String requestId) {
+        this.requestId = requestId;
     }
 
     public CandidateDTO getSelectedCandidate() {
@@ -92,6 +141,38 @@ public class KnowledgeChatRequest {
 
     public void setReasoningMode(String reasoningMode) {
         this.reasoningMode = reasoningMode;
+    }
+
+    public String getReasoningEffort() {
+        return reasoningEffort;
+    }
+
+    public void setReasoningEffort(String reasoningEffort) {
+        this.reasoningEffort = reasoningEffort;
+    }
+
+    public String getModelKey() {
+        return modelKey;
+    }
+
+    public void setModelKey(String modelKey) {
+        this.modelKey = modelKey;
+    }
+
+    public String getPreferredSkillId() {
+        return preferredSkillId;
+    }
+
+    public void setPreferredSkillId(String preferredSkillId) {
+        this.preferredSkillId = preferredSkillId;
+    }
+
+    public Boolean getResumeFromCheckpoint() {
+        return resumeFromCheckpoint;
+    }
+
+    public void setResumeFromCheckpoint(Boolean resumeFromCheckpoint) {
+        this.resumeFromCheckpoint = resumeFromCheckpoint;
     }
 
     public String getContextSummary() {

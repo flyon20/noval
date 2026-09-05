@@ -2,12 +2,14 @@ package com.novelanalyzer.modules.data;
 
 import com.jayway.jsonpath.JsonPath;
 import com.sun.net.httpserver.HttpServer;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobLockService;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.RedisConnectionFailureException;
@@ -25,6 +27,9 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -77,8 +82,12 @@ class Phase5BackendIntegrationTest {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @MockBean
+    private AsyncJobLockService asyncJobLockService;
+
     @BeforeEach
     void clearRedisCache() {
+        when(asyncJobLockService.tryAcquire(anyString(), anyString(), anyLong())).thenReturn(true);
         try {
             RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
             connection.serverCommands().flushDb();

@@ -1,12 +1,26 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import * as Icons from '@element-plus/icons-vue';
 import { PRIMARY_NAV_ITEMS } from '@/constants/navigation';
+import { useXpbdSelector } from '@/composables/useXpbdSelector';
 
 const props = defineProps<{
   roles: string[];
   showKnowledgeSpaceAction?: boolean;
 }>();
+
+const sidebarElement = ref<HTMLElement | null>(null);
+const route = useRoute();
+const primaryNavIndex = computed(() => (
+  PRIMARY_NAV_ITEMS.findIndex((item) => route.path.startsWith(item.to))
+));
+const { position: primaryIndicatorPosition } = useXpbdSelector(primaryNavIndex);
+const primaryIndicatorStyle = computed(() => ({
+  '--sidebar-indicator-position': String(primaryIndicatorPosition.value),
+  '--sidebar-indicator-opacity': primaryNavIndex.value >= 0 ? '1' : '0',
+}));
+let scrollbarTimer: number | undefined;
 
 const emit = defineEmits<{
   openKnowledgeSpace: [];
@@ -21,7 +35,7 @@ const configNavItems = computed(() => {
     items.push({ to: '/knowledge/admin/traces', label: '智能体 Trace', icon: 'Monitor' });
     items.push({ to: '/knowledge/admin/agent-governance', label: '智能体治理', icon: 'SetUp' });
     items.push({ to: '/knowledge/admin/skills', label: '技能管理', icon: 'Operation' });
-    items.push({ to: '/knowledge/admin/memories', label: '记忆管理', icon: 'Collection' });
+    items.push({ to: '/knowledge/admin/memories', label: '记忆审核', icon: 'Collection' });
     items.push({ to: '/config/system', label: '系统配置', icon: 'Setting' });
   }
 
@@ -31,15 +45,38 @@ const configNavItems = computed(() => {
 function getIcon(name: string) {
   return (Icons as Record<string, unknown>)[name];
 }
+
+function revealScrollbar() {
+  const element = sidebarElement.value;
+  if (!element) {
+    return;
+  }
+  element.classList.add('is-scrolling');
+  if (scrollbarTimer !== undefined && typeof window !== 'undefined') {
+    window.clearTimeout(scrollbarTimer);
+  }
+  if (typeof window !== 'undefined') {
+    scrollbarTimer = window.setTimeout(() => {
+      element.classList.remove('is-scrolling');
+      scrollbarTimer = undefined;
+    }, 850);
+  }
+}
+
+onBeforeUnmount(() => {
+  if (scrollbarTimer !== undefined && typeof window !== 'undefined') {
+    window.clearTimeout(scrollbarTimer);
+  }
+});
 </script>
 
 <template>
-  <aside class="app-sidebar">
+  <aside ref="sidebarElement" class="app-sidebar" @scroll.passive="revealScrollbar">
     <div class="app-sidebar__brand">
       <div class="app-sidebar__logo">
         <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect x="3" y="4" width="16" height="20" rx="2" fill="rgba(199,146,92,0.18)" stroke="var(--color-accent)" stroke-width="1.5"/>
-          <rect x="7" y="4" width="16" height="20" rx="2" fill="rgba(36,61,54,0.08)" stroke="var(--color-primary)" stroke-width="1.5"/>
+          <rect x="3" y="4" width="16" height="20" rx="2" fill="var(--color-primary-soft)" stroke="var(--color-accent)" stroke-width="1.5"/>
+          <rect x="7" y="4" width="16" height="20" rx="2" fill="color-mix(in srgb, var(--color-secondary) 10%, transparent)" stroke="var(--color-primary)" stroke-width="1.5"/>
           <line x1="10" y1="10" x2="20" y2="10" stroke="var(--color-primary)" stroke-width="1.2" stroke-linecap="round"/>
           <line x1="10" y1="13.5" x2="20" y2="13.5" stroke="var(--color-primary)" stroke-width="1.2" stroke-linecap="round"/>
           <line x1="10" y1="17" x2="16" y2="17" stroke="var(--color-accent)" stroke-width="1.2" stroke-linecap="round"/>
@@ -51,7 +88,8 @@ function getIcon(name: string) {
       </div>
     </div>
 
-    <nav class="app-sidebar__nav" aria-label="主导航">
+    <nav class="app-sidebar__nav app-sidebar__nav--primary" aria-label="主导航" :style="primaryIndicatorStyle">
+      <span class="app-sidebar__indicator" aria-hidden="true"></span>
       <RouterLink
         v-for="item in PRIMARY_NAV_ITEMS"
         :key="item.to"
@@ -112,7 +150,7 @@ function getIcon(name: string) {
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-soft);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent),
+    linear-gradient(160deg, color-mix(in srgb, var(--color-primary-soft) 52%, transparent), transparent 44%),
     color-mix(in srgb, var(--color-surface-strong) 98%, transparent);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -172,6 +210,27 @@ function getIcon(name: string) {
 .app-sidebar__nav {
   display: grid;
   gap: 0.3rem;
+  position: relative;
+}
+
+.app-sidebar__indicator {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+  border-radius: 0.85rem;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, white 28%, transparent), transparent 62%),
+    color-mix(in srgb, var(--color-primary-soft) 76%, var(--color-surface));
+  box-shadow: var(--shadow-card);
+  opacity: var(--sidebar-indicator-opacity);
+  pointer-events: none;
+  transform: translate3d(0, calc(var(--sidebar-indicator-position) * (44px + 0.3rem)), 0);
+  transition: opacity var(--motion-fast) ease;
+  will-change: transform;
 }
 
 .app-sidebar__project-switch {
@@ -179,6 +238,9 @@ function getIcon(name: string) {
   min-height: 42px;
   border-radius: 8px;
   font-weight: 650;
+  transition: transform var(--motion-base) var(--motion-spring),
+    color var(--motion-fast) ease, border-color var(--motion-fast) ease,
+    background var(--motion-fast) ease;
 }
 
 .app-sidebar__link {
@@ -193,13 +255,16 @@ function getIcon(name: string) {
   text-decoration: none;
   font-weight: 600;
   font-size: 0.95rem;
-  transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+  transition: transform var(--motion-base) var(--motion-spring),
+    color var(--motion-fast) ease, background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
   position: relative;
+  z-index: 1;
 }
 
 .app-sidebar__link-icon {
   flex-shrink: 0;
-  transition: color 160ms ease;
+  transition: color var(--motion-fast) ease, transform var(--motion-base) var(--motion-spring);
 }
 
 .app-sidebar__link--secondary {
@@ -209,21 +274,51 @@ function getIcon(name: string) {
 
 .app-sidebar__link--primary {
   color: var(--color-primary);
-  border-color: rgba(199, 146, 92, 0.2);
-  background: rgba(255, 255, 255, 0.55);
+  border-color: transparent;
+  background: transparent;
+}
+
+.app-sidebar__link--primary .app-sidebar__link-icon {
+  width: 28px;
+  height: 28px;
+  margin-left: -0.2rem;
+  border-radius: 0.55rem;
+  color: #fff;
+  background: var(--gradient-primary);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--color-primary) 22%, transparent);
 }
 
 .app-sidebar__link:hover {
   color: var(--color-text);
-  border-color: rgba(36, 61, 54, 0.1);
-  background: rgba(255, 255, 255, 0.55);
+  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary-soft) 42%, var(--color-surface));
+  transform: translateX(3px);
 }
 
 .app-sidebar__link.is-active {
   color: var(--color-primary);
-  border-color: rgba(199, 146, 92, 0.22);
-  background: linear-gradient(135deg, rgba(199, 146, 92, 0.12), rgba(36, 61, 54, 0.06));
+  border-color: color-mix(in srgb, var(--color-accent-strong) 28%, var(--color-border));
+  background: var(--gradient-soft);
   box-shadow: var(--shadow-card);
+}
+
+.app-sidebar__nav--primary .app-sidebar__link.is-active {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-sidebar__nav--primary .app-sidebar__link.is-active::before {
+  display: none;
+}
+
+.app-sidebar__link.is-active .app-sidebar__link-icon {
+  transform: scale(1.08);
+}
+
+.app-sidebar__link:active,
+.app-sidebar__project-switch:active {
+  transform: translateX(1px) scale(var(--motion-press-scale));
 }
 
 .app-sidebar__link.is-active::before {
@@ -234,7 +329,10 @@ function getIcon(name: string) {
   bottom: 25%;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: var(--color-accent);
+  background: var(--gradient-primary);
+  transform: scaleY(0.82);
+  transform-origin: center;
+  transition: transform var(--motion-base) var(--motion-spring);
 }
 
 @media (max-width: 980px) and (min-width: 769px) {
@@ -243,6 +341,22 @@ function getIcon(name: string) {
     left: 1rem;
     width: 280px;
     max-height: calc(100dvh - 2rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar__link,
+  .app-sidebar__link-icon,
+  .app-sidebar__project-switch,
+  .app-sidebar__link.is-active::before,
+  .app-sidebar__indicator {
+    transition: none;
+  }
+
+  .app-sidebar__link:hover,
+  .app-sidebar__link:active,
+  .app-sidebar__project-switch:active {
+    transform: none;
   }
 }
 </style>

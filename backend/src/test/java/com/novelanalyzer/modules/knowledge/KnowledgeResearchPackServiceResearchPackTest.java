@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -36,9 +37,10 @@ class KnowledgeResearchPackServiceResearchPackTest {
         ));
         when(knowledgeRepository.findBooksByIds(any())).thenReturn(List.of());
         when(knowledgeRepository.findChaptersByBookIds(any(), anyInt())).thenReturn(List.of());
-        when(knowledgeRepository.findLatestAnalysisResultsForBooks(any(), anyInt())).thenReturn(List.of());
+        when(knowledgeRepository.findLatestAnalysisResultsForBooks(anyLong(), any(), anyInt())).thenReturn(List.of());
 
         RankResearchPackRequest request = new RankResearchPackRequest();
+        request.setUserId(7L);
         request.setPlatform("fanqie");
         request.setLimit(2);
         request.setChapterLimitPerBook(1);
@@ -48,10 +50,20 @@ class KnowledgeResearchPackServiceResearchPackTest {
             .containsExactly(101L, 102L);
         verify(knowledgeRepository).findBooksByIds(eq(List.of(101L, 102L)));
         verify(knowledgeRepository).findChaptersByBookIds(eq(List.of(101L, 102L)), eq(1));
-        verify(knowledgeRepository).findLatestAnalysisResultsForBooks(eq(List.of(101L, 102L)), eq(1));
+        verify(knowledgeRepository).findLatestAnalysisResultsForBooks(eq(7L), eq(List.of(101L, 102L)), eq(1));
         verify(knowledgeRepository, never()).findBook(anyLong());
         verify(knowledgeRepository, never()).findChapters(anyLong(), anyInt());
-        verify(knowledgeRepository, never()).findLatestAnalysisResultsForBook(anyLong(), anyInt());
+        verify(knowledgeRepository, never()).findLatestAnalysisResultsForBook(anyLong(), anyLong(), anyInt());
+    }
+
+    @Test
+    void buildRankPackRejectsMissingTrustedUserScope() {
+        when(rankToolService.lookupRank(any())).thenReturn(List.of());
+        RankResearchPackRequest request = new RankResearchPackRequest();
+        request.setPlatform("fanqie");
+
+        assertThatThrownBy(() -> service.buildRankPack(request))
+            .hasMessageContaining("user scope required");
     }
 
     private RankLookupResultVO rankRow(Long bookId, Integer rankNo, String bookName) {

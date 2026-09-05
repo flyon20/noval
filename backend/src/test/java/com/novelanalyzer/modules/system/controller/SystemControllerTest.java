@@ -1,9 +1,12 @@
 package com.novelanalyzer.modules.system.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobLockService;
 import com.novelanalyzer.modules.crawler.client.PythonCrawlerClient;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankBoard;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
+import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -15,9 +18,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -59,6 +67,43 @@ class SystemControllerTest {
     @MockBean
     private PythonCrawlerClient pythonCrawlerClient;
 
+    @MockBean
+    private CrawlerCacheService crawlerCacheService;
+
+    @MockBean
+    private AsyncJobLockService asyncJobLockService;
+
+    private final Map<String, Object> strictRankRefreshCache = new ConcurrentHashMap<>();
+
+    @BeforeEach
+    void prepareRankRefreshGovernance() {
+        strictRankRefreshCache.clear();
+        when(crawlerCacheService.getStrict(anyString(), any())).thenAnswer(invocation ->
+            strictRankRefreshCache.get(invocation.getArgument(0, String.class))
+        );
+        when(crawlerCacheService.putIfAbsent(anyString(), any(), anyLong())).thenAnswer(invocation ->
+            strictRankRefreshCache.putIfAbsent(
+                invocation.getArgument(0, String.class),
+                invocation.getArgument(1)
+            ) == null
+        );
+        when(crawlerCacheService.compareAndSet(anyString(), any(), any(), anyLong())).thenAnswer(invocation ->
+            strictRankRefreshCache.replace(
+                invocation.getArgument(0, String.class),
+                invocation.getArgument(1),
+                invocation.getArgument(2)
+            )
+        );
+        when(crawlerCacheService.evictIfValue(anyString(), any())).thenAnswer(invocation ->
+            strictRankRefreshCache.remove(
+                invocation.getArgument(0, String.class),
+                invocation.getArgument(1)
+            )
+        );
+        when(asyncJobLockService.tryAcquireStrict(anyString(), anyString(), anyLong())).thenReturn(true);
+        when(asyncJobLockService.renewStrict(anyString(), anyString(), anyLong())).thenReturn(true);
+    }
+
     @Test
     void shouldReturnHealthWithUnifiedResultAndTraceId() throws Exception {
         mockMvc.perform(get("/api/system/health"))
@@ -88,7 +133,7 @@ class SystemControllerTest {
     }
 
     @Test
-    void shouldBootstrapRankBoardsOnLogin() throws Exception {
+    void shouldKeepLoginBootstrapCacheOnlyWhenNoPersistedBoardExists() throws Exception {
         when(pythonCrawlerClient.fetchBoardCatalog(eq("fanqie"), any(Integer.class))).thenReturn(List.of(
             boardItem("fanqie", "male-new", "男频新书榜", "urban-brain", "都市脑洞")
         ));
@@ -103,12 +148,11 @@ class SystemControllerTest {
                 .param("platform", "fanqie"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
-            .andExpect(jsonPath("$.data.results.length()").value(1))
-            .andExpect(jsonPath("$.data.results[0].channelCode").value("male-new"))
-            .andExpect(jsonPath("$.data.results[0].boardCode").value("urban-brain"))
-            .andExpect(jsonPath("$.data.results[0].total").value(2));
+            .andExpect(jsonPath("$.data.results.length()").value(0));
 
-        verify(pythonCrawlerClient).fetchRank(eq("fanqie"), eq("male-new"), eq("urban-brain"), eq(30), any(Integer.class));
+        verify(pythonCrawlerClient, never()).fetchRank(
+            anyString(), anyString(), anyString(), any(Integer.class), any(Integer.class)
+        );
     }
 
     private String loginAndGetToken(String username, String password) throws Exception {

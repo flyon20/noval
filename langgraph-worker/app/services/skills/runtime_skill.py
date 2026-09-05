@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.services.intents import Intent
 
@@ -11,27 +12,35 @@ class RuntimeSkill:
     version: str
     intents: tuple[Intent, ...]
     triggers: tuple[str, ...]
-    promptFragment: str
+    instructions: str
+    title: str = ""
+    description: str = ""
     appliesTo: tuple[str, ...] = field(default_factory=tuple)
-    allowedTools: tuple[str, ...] = field(default_factory=tuple)
+    requestedCapabilities: tuple[str, ...] = field(default_factory=tuple)
+    metadata: dict[str, Any] = field(default_factory=dict)
     requiredEvidence: tuple[str, ...] = field(default_factory=tuple)
     qualityChecklist: tuple[str, ...] = field(default_factory=tuple)
     negativeRules: tuple[str, ...] = field(default_factory=tuple)
     outputContract: str = ""
     guardrails: tuple[str, ...] = field(default_factory=tuple)
     examples: tuple[str, ...] = field(default_factory=tuple)
+    source: str = "local"
+    status: str = "ACTIVE"
+    contentHash: str = ""
+    candidateId: int | None = None
+    sourceTraceId: str | None = None
+    inputSchema: dict[str, Any] = field(default_factory=dict)
+    outputSchema: dict[str, Any] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
         return self.skillId
 
-    def compact_prompt(self) -> str:
+    def activation_prompt(self) -> str:
         sections = [
             f"### Skill: {self.skillId} v{self.version}",
-            self.promptFragment.strip(),
+            self.instructions.strip(),
         ]
-        if self.allowedTools:
-            sections.append("Allowed Tools:\n" + "\n".join(f"- {item}" for item in self.allowedTools))
         if self.requiredEvidence:
             sections.append("Required Evidence:\n" + "\n".join(f"- {item}" for item in self.requiredEvidence))
         if self.qualityChecklist:
@@ -46,12 +55,13 @@ class RuntimeSkill:
             sections.append("Examples:\n" + "\n".join(f"- {item}" for item in self.examples[:3]))
         return "\n".join(section for section in sections if section.strip())
 
-
-@dataclass(frozen=True)
-class SkillSelection:
-    skills: tuple[RuntimeSkill, ...]
-    prompt: str
-
-    @property
-    def skill_ids(self) -> tuple[str, ...]:
-        return tuple(skill.skillId for skill in self.skills)
+    def trace_pin(self) -> dict[str, str | int | None]:
+        return {
+            "skillId": self.skillId,
+            "version": self.version,
+            "contentHash": self.contentHash,
+            "status": self.status,
+            "source": self.source,
+            "candidateId": self.candidateId,
+            "sourceTraceId": self.sourceTraceId,
+        }

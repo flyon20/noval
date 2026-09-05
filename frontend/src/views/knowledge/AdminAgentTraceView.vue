@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { knowledgeApi } from '@/api/knowledge';
-import type { AgentTracePage, AgentTraceSummary, GoldenCandidateDraft } from '@/types/knowledge';
+import type { AgentTraceListItem, AgentTracePage, AgentTraceSummary, GoldenCandidateDraft } from '@/types/knowledge';
 import LangGraphRuntimeGraph from '@/components/knowledge/trace/LangGraphRuntimeGraph.vue';
 import TaskGraphDisplay from '@/components/knowledge/trace/TaskGraphDisplay.vue';
 import ToolRunsTable from '@/components/knowledge/trace/ToolRunsTable.vue';
 import EvidencePackSummary from '@/components/knowledge/trace/EvidencePackSummary.vue';
 import PerspectiveResultsList from '@/components/knowledge/trace/PerspectiveResultsList.vue';
+import { knowledgeStatusLabel } from '@/utils/knowledgeDisplay';
 
 defineOptions({
   name: 'AdminAgentTraceView',
 });
 
 const pageSize = 20;
-const traces = ref<AgentTraceSummary[]>([]);
+const traces = ref<AgentTraceListItem[]>([]);
 const selected = ref<AgentTraceSummary | null>(null);
 const detailOpen = ref(false);
 const pageState = ref<AgentTracePage>({
@@ -36,11 +37,13 @@ const activeNames = ref([
   'toolRuns',
   'evidencePack',
   'intentDecision',
+  'skillActivation',
   'sourcePolicy',
   'contextUsed',
   'memoryUsed',
   'memoryDiagnostics',
   'retrievalDiagnostics',
+  'resourceDiagnostics',
   'projectKnowledge',
   'supervisorDecision',
   'memoryCandidates',
@@ -79,7 +82,7 @@ async function loadTraces(page = pageState.value.page) {
   }
 }
 
-async function selectTrace(trace: AgentTraceSummary, focusDetail = true) {
+async function selectTrace(trace: AgentTraceListItem, focusDetail = true) {
   detailLoading.value = true;
   goldenDraft.value = null;
   goldenMessage.value = '';
@@ -169,8 +172,12 @@ function formatJson(value?: string) {
   }
 }
 
-function parseObject(value?: string): Record<string, any> {
+function parseObject(value?: unknown): Record<string, any> {
   if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, any>;
+  }
+  if (typeof value !== 'string') return {};
   try {
     const parsed = JSON.parse(value);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
@@ -179,8 +186,45 @@ function parseObject(value?: string): Record<string, any> {
   }
 }
 
-function traceHealth(trace?: AgentTraceSummary | null): Record<string, string> {
-  const result = parseObject(trace?.resultJson);
+function skillMediation(trace?: AgentTraceSummary | null): Record<string, any> {
+  return parseObject(trace?.skillMediation);
+}
+
+function skillMediationRecords(trace?: AgentTraceSummary | null): Record<string, any>[] {
+  const records = skillMediation(trace).records;
+  return Array.isArray(records) ? records.filter((record) => record && typeof record === 'object') : [];
+}
+
+function skillBomItems(trace?: AgentTraceSummary | null): Record<string, any>[] {
+  const skills = parseObject(trace?.skillBom).skills;
+  return Array.isArray(skills) ? skills.filter((skill) => skill && typeof skill === 'object') : [];
+}
+
+function skillReason(record: Record<string, any>) {
+  const reasons = [...(record.candidateReasons ?? []), ...(record.rejectionReasons ?? [])]
+    .map((reason) => String(reason || '').trim())
+    .filter(Boolean);
+  return [...new Set(reasons)].join(', ') || '-';
+}
+
+function skillStateLabel(value: unknown) {
+  const state = String(value || '').trim().toUpperCase();
+  if (state === 'ACTIVATED') return '已激活';
+  if (state === 'REJECTED') return '已拒绝';
+  if (state === 'ELIGIBLE') return '可激活';
+  return state || '-';
+}
+
+function skillStateType(value: unknown) {
+  const state = String(value || '').trim().toUpperCase();
+  if (state === 'ACTIVATED') return 'success';
+  if (state === 'REJECTED') return 'warning';
+  return 'info';
+}
+
+function traceHealth(trace?: AgentTraceListItem | null): Record<string, string> {
+  const compactHealth = trace?.healthSummary ?? {};
+  const result = parseObject((trace as AgentTraceSummary | undefined)?.resultJson);
   const resultTrace = result.trace && typeof result.trace === 'object' ? result.trace as Record<string, any> : {};
   const health = resultTrace.health && typeof resultTrace.health === 'object'
     ? resultTrace.health as Record<string, any>
@@ -189,11 +233,11 @@ function traceHealth(trace?: AgentTraceSummary | null): Record<string, string> {
       : {};
   return {
     status: trace?.status || '-',
-    model: String(health.model || (result.fallbackUsed ? 'fallback_used' : '-')),
-    tools: String(health.tools || '-'),
-    evidence: String(health.evidence || '-'),
-    memory: String(health.memory || '-'),
-    experts: String(health.experts || '-'),
+    model: String(compactHealth.model || health.model || (result.fallbackUsed ? 'fallback_used' : '-')),
+    tools: String(compactHealth.tools || health.tools || '-'),
+    evidence: String(compactHealth.evidence || health.evidence || '-'),
+    memory: String(compactHealth.memory || health.memory || '-'),
+    experts: String(compactHealth.experts || health.experts || '-'),
   };
 }
 
@@ -219,18 +263,132 @@ function projectKnowledgeItems(trace: AgentTraceSummary | null, key: string): Re
 
 function projectKnowledgeItemLabel(item: Record<string, any>) {
   const prefix = item.chapterNo ? `第${item.chapterNo}章 ` : '';
-  return `${prefix}${item.title || item.characterName || item.summary || item.status || '未命名'}`;
+  return `${prefix}${item.title || item.characterName || item.summary || knowledgeStatusLabel(item.status, '未命名')}`;
 }
 
-function healthBlocks(trace?: AgentTraceSummary | null) {
+
+function resourceDiagnostics(trace?: AgentTraceSummary | null): Record<string, any> {
+  const result = parseObject(trace?.resultJson);
+  const resultTrace = result.trace && typeof result.trace === 'object' ? result.trace as Record<string, any> : {};
+  const fromTrace = resultTrace.resourceDiagnostics && typeof resultTrace.resourceDiagnostics === 'object'
+    ? resultTrace.resourceDiagnostics as Record<string, any>
+    : {};
+  const fromRoot = result.resourceDiagnostics && typeof result.resourceDiagnostics === 'object'
+    ? result.resourceDiagnostics as Record<string, any>
+    : {};
+  return Object.keys(fromRoot).length > 0 ? fromRoot : fromTrace;
+}
+
+function hasResourceDiagnostics(trace?: AgentTraceSummary | null) {
+  return Object.keys(resourceDiagnostics(trace)).length > 0;
+}
+
+function providerCalls(trace?: AgentTraceSummary | null): Record<string, any>[] {
+  const result = parseObject(trace?.resultJson);
+  const resultCalls = Array.isArray(result.providerCalls) ? result.providerCalls : [];
+  const resultTrace = result.trace && typeof result.trace === 'object' ? result.trace as Record<string, any> : {};
+  const traceCalls = Array.isArray(resultTrace.providerCalls) ? resultTrace.providerCalls : [];
+  const calls = resultCalls.length ? resultCalls : traceCalls;
+  return calls.filter((call): call is Record<string, any> => Boolean(call && typeof call === 'object'));
+}
+
+function providerRequestSummary(call: Record<string, any>) {
+  const summary = call.requestSummary && typeof call.requestSummary === 'object'
+    ? call.requestSummary as Record<string, any>
+    : {};
+  return Object.keys(summary).length ? summary : null;
+}
+
+function providerResponseSummary(call: Record<string, any>) {
+  const summary = call.responseSummary && typeof call.responseSummary === 'object'
+    ? call.responseSummary as Record<string, any>
+    : {};
+  return Object.keys(summary).length ? summary : null;
+}
+
+function providerModel(call: Record<string, any>) {
+  const value = String(call.actualModel || call.model || call.requestedModel || '').replace(/[\r\n\t]+/g, ' ').trim();
+  if (!value || /^(?:[a-z]:[\\/]|\\\\|\/|file:)/i.test(value) || value.includes('\\')) return '-';
+  return value.slice(0, 80);
+}
+
+function providerCallStatus(call: Record<string, any>) {
+  return knowledgeStatusLabel(call.status || 'unknown');
+}
+
+function providerRequestLabel(call: Record<string, any>) {
+  const summary = providerRequestSummary(call);
+  if (!summary) return '无请求摘要';
+  const reasoning = summary.reasoningRequested ? '已请求推理' : '常规模式';
+  return `请求 ${summary.messageCount ?? 0} 条消息 · ${summary.messageChars ?? 0} 字符 · ${summary.toolSchemaCount ?? 0} 个工具定义 · ${reasoning}`;
+}
+
+function providerResponseLabel(call: Record<string, any>) {
+  const summary = providerResponseSummary(call);
+  if (!summary) return '无返回摘要';
+  return `返回 ${summary.outputChars ?? 0} 字符 · ${summary.toolCallCount ?? 0} 个工具调用 · ${summary.emptyResponse ? '空返回' : '非空返回'}`;
+}
+
+function providerWireLabel(call: Record<string, any>) {
+  const wire = String(call.wireApi || '').trim().toLowerCase().replace(/-/g, '_');
+  if (wire === 'responses') return 'Responses API';
+  if (wire === 'chat_completions' && call.providerTransportFallback) {
+    return 'Chat compatibility fallback';
+  }
+  return wire === 'chat_completions' ? 'Chat Completions' : '';
+}
+
+function providerUsageLabel(call: Record<string, any>) {
+  const usage = call.usage && typeof call.usage === 'object'
+    ? call.usage as Record<string, any>
+    : {};
+  // 这里读的是原始记录，没上报时 _usage_summary 留下的是一排 0。0 和"不知道"
+  // 在页面上长得一样但处置相反，所以没有上报标志时把 0 当占位丢掉。
+  const usageReported = call.usageReported === true || usage.usageReported === true;
+  const cacheReported = call.cacheUsageReported === true || usage.cacheUsageReported === true;
+  const kept = (value: any, reported: boolean) => {
+    const parsed = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(parsed) || parsed < 0) {
+      return undefined;
+    }
+    return reported || parsed > 0 ? parsed : undefined;
+  };
+  const input = kept(usage.inputTokens, usageReported) ?? kept(usage.promptTokens, usageReported);
+  const output = kept(usage.outputTokens, usageReported) ?? kept(usage.completionTokens, usageReported);
+  const reasoning = kept(usage.reasoningTokens, usageReported);
+  const cached = kept(usage.cachedInputTokens, cacheReported)
+    ?? kept(usage.promptCacheHitTokens, cacheReported);
+  const missed = kept(usage.promptCacheMissTokens, cacheReported);
+  const parts = [
+    input != null ? `上下文 ${input}` : '',
+    output != null ? `输出 ${output}` : '',
+    reasoning != null ? `推理 ${reasoning}` : '',
+    cached != null ? `缓存命中 ${cached}` : '',
+    missed != null ? `未命中 ${missed}` : '',
+  ].filter(Boolean);
+  if (!parts.length) {
+    return usageReported ? '' : '用量未上报';
+  }
+  const suffix = cached == null && missed == null && !cacheReported ? ' · 缓存未上报' : '';
+  return `${parts.join(' · ')} Token${suffix}`;
+}
+
+function conversationContinuity(trace?: AgentTraceSummary | null) {
+  const result = parseObject(trace?.resultJson);
+  const budget = parseObject(result.contextBudget);
+  const continuity = parseObject(budget.conversationContinuity);
+  return Object.keys(continuity).length ? continuity : null;
+}
+
+function healthBlocks(trace?: AgentTraceListItem | null) {
   const health = traceHealth(trace);
   return [
-    { key: 'status', label: '状态', value: health.status },
-    { key: 'model', label: '模型', value: health.model },
-    { key: 'tools', label: '工具', value: health.tools },
-    { key: 'evidence', label: '证据', value: health.evidence },
-    { key: 'memory', label: '记忆', value: health.memory },
-    { key: 'experts', label: '专家', value: health.experts },
+    { key: 'status', label: '状态', rawValue: health.status, value: knowledgeStatusLabel(health.status) },
+    { key: 'model', label: '模型', rawValue: health.model, value: knowledgeStatusLabel(health.model) },
+    { key: 'tools', label: '工具', rawValue: health.tools, value: knowledgeStatusLabel(health.tools) },
+    { key: 'evidence', label: '证据', rawValue: health.evidence, value: knowledgeStatusLabel(health.evidence) },
+    { key: 'memory', label: '记忆', rawValue: health.memory, value: knowledgeStatusLabel(health.memory) },
+    { key: 'experts', label: '专家', rawValue: health.experts, value: knowledgeStatusLabel(health.experts) },
   ];
 }
 
@@ -258,9 +416,9 @@ function healthTone(value?: string) {
           <p>共 {{ pageState.total }} 条</p>
         </div>
         <el-select v-model="statusFilter" clearable size="small" placeholder="状态" class="trace-filter">
-          <el-option label="answered" value="answered" />
-          <el-option label="failed" value="failed" />
-          <el-option label="needs_clarification" value="needs_clarification" />
+          <el-option label="已回答" value="answered" />
+          <el-option label="失败" value="failed" />
+          <el-option label="需要补充信息" value="needs_clarification" />
         </el-select>
         <el-input v-model="keyword" clearable size="small" placeholder="Trace / 问题" @keyup.enter="search" />
         <el-button size="small" type="primary" data-test="trace-search" @click="search">搜索</el-button>
@@ -278,7 +436,7 @@ function healthTone(value?: string) {
         >
           <span class="trace-row__top">
             <span class="trace-row__id">{{ trace.traceId }}</span>
-            <el-tag v-if="trace.status" size="small" type="info">{{ trace.status }}</el-tag>
+            <el-tag v-if="trace.status" size="small" type="info">{{ knowledgeStatusLabel(trace.status) }}</el-tag>
           </span>
           <span v-if="trace.question" class="trace-row__question">{{ trace.question }}</span>
           <span class="trace-row__meta">
@@ -291,7 +449,7 @@ function healthTone(value?: string) {
               v-for="block in healthBlocks(trace)"
               :key="`${trace.id}-${block.key}`"
               class="trace-health-block"
-              :class="`trace-health-block--${healthTone(block.value)}`"
+              :class="`trace-health-block--${healthTone(block.rawValue)}`"
             >
               <span>{{ block.label }}</span>
               <strong>{{ block.value }}</strong>
@@ -338,14 +496,14 @@ function healthTone(value?: string) {
             >
               生成 Golden 候选
             </el-button>
-            <el-tag v-if="selected.status" type="info">{{ selected.status }}</el-tag>
+            <el-tag v-if="selected.status" type="info">{{ knowledgeStatusLabel(selected.status) }}</el-tag>
             <el-tag v-if="selected.snapshotTime" type="success">快照 {{ selected.snapshotTime }}</el-tag>
           </div>
         </div>
 
         <section v-if="goldenMessage || goldenDraft" class="trace-golden-status">
           <strong>{{ goldenMessage }}</strong>
-          <span v-if="goldenDraft?.status">{{ goldenDraft.status }}</span>
+          <span v-if="goldenDraft?.status">{{ knowledgeStatusLabel(goldenDraft.status) }}</span>
           <span v-if="goldenDraft?.traceId">{{ goldenDraft.traceId }}</span>
         </section>
 
@@ -357,7 +515,7 @@ function healthTone(value?: string) {
         <section class="trace-overview" aria-label="Trace overview">
           <div>
             <span>状态</span>
-            <strong>{{ selected.status || '-' }}</strong>
+            <strong>{{ knowledgeStatusLabel(selected.status) }}</strong>
           </div>
           <div>
             <span>用户</span>
@@ -387,11 +545,65 @@ function healthTone(value?: string) {
               v-for="block in healthBlocks(selected)"
               :key="`selected-${block.key}`"
               class="trace-health-block trace-health-block--large"
-              :class="`trace-health-block--${healthTone(block.value)}`"
+              :class="`trace-health-block--${healthTone(block.rawValue)}`"
             >
               <span>{{ block.label }}</span>
               <strong>{{ block.value }}</strong>
             </span>
+          </div>
+        </section>
+
+        <section
+          v-if="providerCalls(selected).length"
+          class="trace-provider-ledger"
+          data-test="trace-provider-ledger"
+          aria-label="模型调用账本"
+        >
+          <header>
+            <h3>模型调用账本</h3>
+            <p>每次真实 Provider 请求均可追踪；请求与返回正文已脱敏省略。</p>
+          </header>
+          <div class="trace-provider-ledger__table" role="table" aria-label="模型调用请求与返回摘要">
+            <div class="trace-provider-ledger__row trace-provider-ledger__row--header" role="row">
+              <span role="columnheader">阶段 / 模型</span>
+              <span role="columnheader">状态 / 用量</span>
+              <span role="columnheader">请求摘要</span>
+              <span role="columnheader">返回摘要</span>
+            </div>
+            <div
+              v-for="(call, index) in providerCalls(selected)"
+              :key="`${call.node || 'call'}-${index}`"
+              class="trace-provider-ledger__row"
+              data-test="trace-provider-call"
+              role="row"
+            >
+              <span role="cell">
+                <strong>{{ call.node || `第 ${index + 1} 次模型调用` }}</strong>
+                <small>{{ providerModel(call) }}</small>
+                <small v-if="providerWireLabel(call)">{{ providerWireLabel(call) }}</small>
+              </span>
+              <span role="cell">
+                <strong>{{ providerCallStatus(call) }}</strong>
+                <small v-if="providerUsageLabel(call)" data-test="trace-provider-usage">{{ providerUsageLabel(call) }}</small>
+                <small>{{ call.durationMs ?? '-' }} 毫秒 · {{ call.tokenUsed ?? '-' }} Token</small>
+              </span>
+              <span role="cell">
+                <small>{{ providerRequestLabel(call) }}</small>
+                <small v-if="providerRequestSummary(call)?.bodyRedacted">请求正文已省略</small>
+              </span>
+              <span role="cell">
+                <small>{{ providerResponseLabel(call) }}</small>
+                <small v-if="providerResponseSummary(call)?.bodyRedacted">返回正文已省略</small>
+              </span>
+            </div>
+          </div>
+          <div v-if="conversationContinuity(selected)" class="trace-provider-ledger__continuity" data-test="trace-conversation-continuity">
+            <strong>会话连续性</strong>
+            <span>
+              携带 {{ conversationContinuity(selected)?.historyIncludedCount ?? 0 }}/{{ conversationContinuity(selected)?.historyTotalCount ?? 0 }} 条历史消息，
+              {{ conversationContinuity(selected)?.historyIncludedChars ?? 0 }} 字符；上下文摘要 {{ conversationContinuity(selected)?.contextSummaryChars ?? 0 }} 字符。
+            </span>
+            <el-tag v-if="conversationContinuity(selected)?.historyTruncated" size="small" type="warning">历史已裁剪</el-tag>
           </div>
         </section>
 
@@ -404,24 +616,69 @@ function healthTone(value?: string) {
             <LangGraphRuntimeGraph :result-json="selected.resultJson" />
           </el-collapse-item>
 
-          <el-collapse-item title="任务图" name="taskGraph">
+          <el-collapse-item v-if="hasJsonSection(selected.taskGraph)" title="任务图" name="taskGraph">
             <TaskGraphDisplay :task-graph-json="selected.taskGraph" />
           </el-collapse-item>
 
-          <el-collapse-item title="工具调用" name="toolRuns">
+          <el-collapse-item v-if="hasJsonSection(selected.toolRuns)" title="工具调用" name="toolRuns">
             <ToolRunsTable :tool-runs-json="selected.toolRuns" />
           </el-collapse-item>
 
-          <el-collapse-item title="证据包" name="evidencePack">
+          <el-collapse-item v-if="hasJsonSection(selected.evidencePack)" title="证据包" name="evidencePack">
             <EvidencePackSummary :evidence-pack-json="selected.evidencePack" />
           </el-collapse-item>
 
-          <el-collapse-item title="多视角结果" name="perspectiveResults">
+          <el-collapse-item v-if="hasJsonSection(selected.perspectiveResults)" title="多视角结果" name="perspectiveResults">
             <PerspectiveResultsList :perspective-results-json="selected.perspectiveResults" />
           </el-collapse-item>
 
           <el-collapse-item v-if="hasJsonSection(selected.intentDecision)" title="意图决策" name="intentDecision">
             <pre class="trace-raw-json">{{ formatJson(selected.intentDecision) }}</pre>
+          </el-collapse-item>
+
+          <el-collapse-item
+            v-if="hasJsonSection(selected.skillMediation) || hasJsonSection(selected.skillBom)"
+            title="技能激活"
+            name="skillActivation"
+          >
+            <section class="trace-skill-mediation" data-test="trace-skill-mediation">
+              <div class="trace-skill-summary">
+                <span>候选 <strong>{{ skillMediation(selected).candidateCount ?? 0 }}</strong></span>
+                <span>可激活 <strong>{{ skillMediation(selected).eligibleCount ?? 0 }}</strong></span>
+                <span>已激活 <strong>{{ skillMediation(selected).activatedCount ?? 0 }}</strong></span>
+                <span>已拒绝 <strong>{{ skillMediation(selected).rejectedCount ?? 0 }}</strong></span>
+              </div>
+              <el-table v-if="skillMediationRecords(selected).length" :data="skillMediationRecords(selected)" size="small">
+                <el-table-column label="Skill" min-width="220">
+                  <template #default="{ row }">
+                    <strong>{{ row.skillId || '-' }}</strong>
+                    <small class="trace-skill-version">v{{ row.version || '-' }}</small>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="100">
+                  <template #default="{ row }">
+                    <el-tag :type="skillStateType(row.state)" size="small">{{ skillStateLabel(row.state) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="原因" min-width="220">
+                  <template #default="{ row }">
+                    <span class="trace-skill-reasons">{{ skillReason(row) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="正文" width="100">
+                  <template #default="{ row }">{{ row.bodyInjected ? '已注入' : '未注入' }}</template>
+                </el-table-column>
+              </el-table>
+              <p v-else class="trace-skill-empty">无技能激活记录</p>
+              <h4 class="trace-section-subtitle">Runtime Skill-BOM</h4>
+              <ul v-if="skillBomItems(selected).length" class="trace-skill-bom">
+                <li v-for="skill in skillBomItems(selected)" :key="`${skill.skillId}-${skill.version}`">
+                  <span>{{ skill.skillId || '-' }}@{{ skill.version || '-' }}</span>
+                  <small>{{ knowledgeStatusLabel(skill.status) }}</small>
+                </li>
+              </ul>
+              <p v-else class="trace-skill-empty">BOM 为空</p>
+            </section>
           </el-collapse-item>
 
           <el-collapse-item v-if="hasJsonSection(selected.sourcePolicy)" title="来源策略" name="sourcePolicy">
@@ -449,7 +706,15 @@ function healthTone(value?: string) {
             title="检索诊断"
             name="retrievalDiagnostics"
           >
-            <pre class="trace-raw-json">{{ formatJson(selected.retrievalDiagnostics) }}</pre>
+            <pre class="trace-raw-json" data-test="trace-retrieval-diagnostics">{{ formatJson(selected.retrievalDiagnostics) }}</pre>
+          </el-collapse-item>
+
+          <el-collapse-item
+            v-if="hasResourceDiagnostics(selected)"
+            title="资源诊断"
+            name="resourceDiagnostics"
+          >
+            <pre class="trace-raw-json" data-test="trace-resource-diagnostics">{{ JSON.stringify(resourceDiagnostics(selected), null, 2) }}</pre>
           </el-collapse-item>
 
           <el-collapse-item
@@ -483,7 +748,7 @@ function healthTone(value?: string) {
                     :key="`${section.key}-${index}`"
                   >
                     <span>{{ projectKnowledgeItemLabel(item) }}</span>
-                    <small v-if="item.status">{{ item.status }}</small>
+                    <small v-if="item.status">{{ knowledgeStatusLabel(item.status) }}</small>
                   </li>
                 </ul>
                 <p v-else>未命中</p>
@@ -571,7 +836,7 @@ function healthTone(value?: string) {
         </el-collapse>
       </template>
     </section>
-    <section v-else class="admin-agent-trace__placeholder" data-test="agent-trace-detail">
+    <section v-else class="admin-agent-trace__placeholder" data-test="agent-trace-placeholder">
       <el-empty description="请选择一条 Trace 记录" />
     </section>
   </main>
@@ -756,6 +1021,81 @@ function healthTone(value?: string) {
   font-size: 0.8rem;
 }
 
+.trace-provider-ledger {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.trace-provider-ledger header h3,
+.trace-provider-ledger header p {
+  margin: 0;
+}
+
+.trace-provider-ledger header h3 {
+  color: var(--el-text-color-primary);
+  font-size: 0.95rem;
+}
+
+.trace-provider-ledger header p {
+  margin-top: 0.2rem;
+  color: var(--el-text-color-secondary);
+  font-size: 0.78rem;
+}
+
+.trace-provider-ledger__table {
+  display: grid;
+  gap: 0.35rem;
+  overflow-x: auto;
+}
+
+.trace-provider-ledger__row {
+  min-width: 48rem;
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(8rem, 0.8fr) minmax(14rem, 1.4fr) minmax(14rem, 1.4fr);
+  gap: 0.6rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank);
+  font-size: 0.78rem;
+}
+
+.trace-provider-ledger__row--header {
+  border: 0;
+  border-radius: 0;
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  font-size: 0.72rem;
+}
+
+.trace-provider-ledger__row > span {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 0.2rem;
+}
+
+.trace-provider-ledger__row small {
+  color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
+}
+
+.trace-provider-ledger__continuity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  color: var(--el-text-color-secondary);
+  font-size: 0.78rem;
+}
+
+.trace-provider-ledger__continuity strong {
+  color: var(--el-text-color-primary);
+}
+
 .trace-pagination {
   display: flex;
   align-items: center;
@@ -921,6 +1261,50 @@ function healthTone(value?: string) {
 .trace-section-subtitle {
   margin: 0.75rem 0 0.375rem;
   font-size: 0.8125rem;
+}
+
+.trace-skill-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 0.75rem;
+  color: var(--el-text-color-secondary);
+}
+
+.trace-skill-summary strong {
+  margin-left: 0.25rem;
+  color: var(--el-text-color-primary);
+}
+
+.trace-skill-version {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--el-text-color-secondary);
+}
+
+.trace-skill-reasons {
+  overflow-wrap: anywhere;
+}
+
+.trace-skill-bom {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-skill-bom li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.trace-skill-bom small,
+.trace-skill-empty {
+  color: var(--el-text-color-secondary);
 }
 
 .trace-project-knowledge {

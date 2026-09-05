@@ -7,7 +7,11 @@ import com.novelanalyzer.modules.knowledge.client.EmbeddingClient;
 import com.novelanalyzer.modules.knowledge.client.QdrantClient;
 import com.novelanalyzer.modules.knowledge.dto.AgentEvalRunRequest;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeIndexJobExecutor;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeProjectMemoryOverviewService;
 import com.novelanalyzer.modules.knowledge.vo.AgentEvalRunVO;
+import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
+import com.novelanalyzer.modules.knowledge.vo.ProjectMemoryOverviewVO;
+import com.novelanalyzer.modules.knowledge.vo.RuntimeSkillVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,15 +32,25 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(
@@ -46,7 +60,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.data.redis.database=15",
-        "spring.sql.init.mode=never",
+        "spring.sql.init.mode=always",
+        "spring.sql.init.schema-locations=classpath:sql/phase12-webnovel-agent-project-trace-h2.sql,classpath:sql/phase13-agent-memory-mcp-h2.sql,classpath:sql/phase16-project-knowledge-rag-h2.sql,classpath:sql/phase23-skill-memory-lifecycle-h2.sql,classpath:sql/phase24-project-ingest-generation-h2.sql,classpath:sql/phase25-project-hybrid-retrieval-story-graph-h2.sql,classpath:sql/phase26-project-retrieval-eval-observability-h2.sql,classpath:sql/phase27-agent-skill-contract-h2.sql",
         "app.security.rate-limit-per-minute=100",
         "app.security.protected-path-prefixes[0]=/api/auth",
         "app.security.protected-path-prefixes[1]=/api/secure",
@@ -75,7 +90,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "classpath:sql/phase7-knowledge-schema-h2.sql",
         "classpath:sql/phase11-rag-eval-observability-h2.sql",
         "classpath:sql/phase12-webnovel-agent-project-trace-h2.sql",
-        "classpath:sql/phase16-project-knowledge-rag-h2.sql"
+        "classpath:sql/phase16-project-knowledge-rag-h2.sql",
+        "classpath:sql/phase18-agent-harness-conversation-rag-h2.sql"
     },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
@@ -102,11 +118,24 @@ class KnowledgeControllerTest {
     private KnowledgeIndexJobExecutor knowledgeIndexJobExecutor;
 
     @MockBean
+    private KnowledgeProjectMemoryOverviewService knowledgeProjectMemoryOverviewService;
+
+    @MockBean
     private LangGraphWorkerClient langGraphWorkerClient;
 
     @BeforeEach
     void prepareState() {
         jdbcTemplate.update("UPDATE sys_user SET phone = ? WHERE id = 1", ADMIN_PHONE);
+        jdbcTemplate.update("""
+            merge into system_config(config_key, config_value, config_type, description, is_editable, deleted)
+            key(config_key) values('ai.conversation.read-rollout-percent', '100', 'ai',
+                'conversation read rollout for controller tests', 1, 0)
+            """);
+        jdbcTemplate.update("""
+            merge into system_config(config_key, config_value, config_type, description, is_editable, deleted)
+            key(config_key) values('ai.conversation.legacy-fallback-enabled', 'true', 'ai',
+                'conversation legacy fallback for controller tests', 1, 0)
+            """);
         RedisConnection connection;
         try {
             connection = stringRedisTemplate.getConnectionFactory().getConnection();
@@ -132,7 +161,7 @@ class KnowledgeControllerTest {
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"query":"主角目标是什么","bookId":%d,"platform":"fanqie","limit":3}
+                    {"userId":1,"query":"主角目标是什么","bookId":%d,"platform":"fanqie","limit":3}
                     """.formatted(bookId)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
@@ -152,6 +181,38 @@ class KnowledgeControllerTest {
                     {"query":"   ","limit":3}
                     """))
             .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void shouldExposeOnlySanitizedSkillShortcutsToAuthenticatedUsers() throws Exception {
+        RuntimeSkillVO runtimeSkill = new RuntimeSkillVO();
+        runtimeSkill.setSkillId("webnovel-market-scan");
+        runtimeSkill.setTitle("榜单分析");
+        runtimeSkill.setDescription("分析当前网文榜单与热度结构");
+        runtimeSkill.setAppliesTo(List.of("market_scan", "mixed_creation_research"));
+        runtimeSkill.setContent("private governed skill body");
+        runtimeSkill.setGuardrails("private guardrails");
+        runtimeSkill.setRequestedCapabilities(List.of("market.read"));
+        runtimeSkill.setSkillMetadata(Map.of(
+            "shortcutEnabled", true,
+            "shortcutLabel", "榜单分析",
+            "shortcutOrder", 10
+        ));
+        when(langGraphWorkerClient.listRuntimeSkills()).thenReturn(List.of(runtimeSkill));
+
+        String token = loginAndGetToken();
+        mockMvc.perform(get("/api/knowledge/skills/shortcuts")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data[0].skillId").value("webnovel-market-scan"))
+            .andExpect(jsonPath("$.data[0].title").value("榜单分析"))
+            .andExpect(jsonPath("$.data[0].description").value("分析当前网文榜单与热度结构"))
+            .andExpect(jsonPath("$.data[0].appliesTo[0]").value("market_scan"))
+            .andExpect(jsonPath("$.data[0].content").doesNotExist())
+            .andExpect(jsonPath("$.data[0].guardrails").doesNotExist())
+            .andExpect(jsonPath("$.data[0].requestedCapabilities").doesNotExist())
+            .andExpect(jsonPath("$.data[0].version").doesNotExist())
+            .andExpect(jsonPath("$.data[0].status").doesNotExist());
     }
 
     @Test
@@ -246,24 +307,486 @@ class KnowledgeControllerTest {
             .andReturn();
         Number workId = JsonPath.read(workResult.getResponse().getContentAsString(), "$.data.workId");
 
-        mockMvc.perform(post("/api/knowledge/projects/" + projectId.longValue() + "/works/" + workId.longValue() + "/chapters/import")
+        mockMvc.perform(post("/api/knowledge/projects/" + projectId.longValue() + "/works/" + workId.longValue() + "/ingest-jobs")
                 .header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"chapterNo":1,"title":"退稿夜，系统降临","content":"主角被甲方退稿后绑定三端一体系统。"}
+                    {"chapterNo":1,"title":"退稿夜，系统降临","content":"主角被甲方退稿后绑定三端一体系统。","idempotencyKey":"it-import-1"}
                     """))
-            .andExpect(status().isOk())
+            .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.chapterNo").value(1))
-            .andExpect(jsonPath("$.data.version").value(1));
+            .andExpect(jsonPath("$.data.status").isNotEmpty());
+
+        mockMvc.perform(get("/api/knowledge/projects/" + projectId.longValue() + "/ingest-jobs")
+                .header("Authorization", "Bearer " + token)
+                .param("workId", String.valueOf(workId.longValue())))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(1));
 
         mockMvc.perform(get("/api/knowledge/projects/" + projectId.longValue() + "/works/" + workId.longValue() + "/chapters")
                 .header("Authorization", "Bearer " + token))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andExpect(jsonPath("$.data.length()").value(1))
-            .andExpect(jsonPath("$.data[0].title").value("退稿夜，系统降临"))
-            .andExpect(jsonPath("$.data[0].content").value("主角被甲方退稿后绑定三端一体系统。"));
+            .andExpect(jsonPath("$.data[0].chapterNo").value(1));
+    }
+
+    @Test
+    void shouldReturnOwnedProjectMemoryOverviewForAuthenticatedUser() throws Exception {
+        ProjectMemoryOverviewVO overview = new ProjectMemoryOverviewVO();
+        overview.setProjectId(7L);
+        overview.setWorkId(11L);
+        overview.setActiveChapterCount(10L);
+        overview.setChapterFrom(1);
+        overview.setChapterTo(10);
+        overview.setIndexedDocumentCount(3L);
+        overview.setForeshadowingCount(4L);
+        overview.setSummaryCoverageStatus("PARTIAL");
+        overview.setSummaryCoveredChapterCount(8L);
+        overview.setRecognizedRecordsOnly(true);
+        when(knowledgeProjectMemoryOverviewService.overview(1L, 7L, 11L)).thenReturn(overview);
+
+        String token = loginAndGetToken();
+        mockMvc.perform(get("/api/knowledge/projects/7/works/11/memory-overview")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.projectId").value(7))
+            .andExpect(jsonPath("$.data.workId").value(11))
+            .andExpect(jsonPath("$.data.activeChapterCount").value(10))
+            .andExpect(jsonPath("$.data.chapterFrom").value(1))
+            .andExpect(jsonPath("$.data.chapterTo").value(10))
+            .andExpect(jsonPath("$.data.indexedDocumentCount").value(3))
+            .andExpect(jsonPath("$.data.summaryCoverageStatus").value("PARTIAL"))
+            .andExpect(jsonPath("$.data.recognizedRecordsOnly").value(true));
+
+        verify(knowledgeProjectMemoryOverviewService).overview(1L, 7L, 11L);
+    }
+
+    @Test
+    void shouldReplayChatRunEventsStrictlyAfterSequence() throws Exception {
+        insertTerminalRunWithEvents("run-event-replay");
+        String token = loginAndGetToken();
+
+        mockMvc.perform(get("/api/knowledge/chat-runs/run-event-replay/events")
+                .param("afterSequence", "1")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0].sequenceNo").value(2))
+            .andExpect(jsonPath("$.data[1].sequenceNo").value(3));
+    }
+
+    @Test
+    void shouldResumeChatRunSseFromLastEventId() throws Exception {
+        insertTerminalRunWithEvents("run-event-stream");
+        String token = loginAndGetToken();
+
+        MvcResult started = mockMvc.perform(get("/api/knowledge/chat-runs/run-event-stream/events/stream")
+                .header("Authorization", "Bearer " + token)
+                .header("Last-Event-ID", "1"))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        started.getAsyncResult(7000);
+        MvcResult completed = mockMvc.perform(asyncDispatch(started))
+            .andExpect(status().isOk())
+            .andReturn();
+        String body = completed.getResponse().getContentAsString();
+        assertThat(body).contains("id:2", "id:3").doesNotContain("id:1\n");
+    }
+
+    @Test
+    void shouldResumeCancellationTerminalWithoutSynthesizingDone() throws Exception {
+        insertCancelledRunWithEvents("run-cancel-event-stream");
+        String token = loginAndGetToken();
+
+        MvcResult started = mockMvc.perform(
+                get("/api/knowledge/chat-runs/run-cancel-event-stream/events/stream")
+                    .header("Authorization", "Bearer " + token)
+                    .header("Last-Event-ID", "1")
+            )
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        started.getAsyncResult(7000);
+        MvcResult completed = mockMvc.perform(asyncDispatch(started))
+            .andExpect(status().isOk())
+            .andReturn();
+        String body = completed.getResponse().getContentAsString();
+        assertThat(body)
+            .contains("id:2", "event:cancel_requested", "id:3", "event:cancelled")
+            .doesNotContain("id:1\n", "event:answered", "event:done");
+    }
+
+    @Test
+    void shouldReplayAnswerSnapshotWhenSseEventHistoryHasGap() throws Exception {
+        insertTerminalRunWithEvents("run-event-gap");
+        jdbcTemplate.update("""
+            update ai_chat_run
+            set answer = 'snapshot answer', snapshot_sequence_no = 2
+            where run_id = 'run-event-gap'
+            """);
+        jdbcTemplate.update("""
+            delete from ai_chat_run_event
+            where run_id = 'run-event-gap' and sequence_no = 2
+            """);
+        String token = loginAndGetToken();
+
+        MvcResult started = mockMvc.perform(get("/api/knowledge/chat-runs/run-event-gap/events/stream")
+                .header("Authorization", "Bearer " + token)
+                .header("Last-Event-ID", "1"))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        started.getAsyncResult(7000);
+        MvcResult completed = mockMvc.perform(asyncDispatch(started))
+            .andExpect(status().isOk())
+            .andReturn();
+        String body = completed.getResponse().getContentAsString();
+        assertThat(body).contains("event:snapshot", "id:2", "snapshot answer", "id:3");
+    }
+
+    @Test
+    void shouldReplaySnapshotForGapInsideReturnedEventBatch() throws Exception {
+        insertTerminalRunWithEvents("run-event-internal-gap");
+        jdbcTemplate.update("""
+            insert into ai_chat_run_event(
+                run_id, sequence_no, event_type, event_idempotency_key, payload, created_at
+            ) values('run-event-internal-gap', 4, 'PROGRESS', 'run:internal-gap:4', '{}', current_timestamp)
+            """);
+        jdbcTemplate.update("""
+            update ai_chat_run
+            set answer = 'internal gap snapshot', snapshot_sequence_no = 3, next_sequence_no = 4
+            where run_id = 'run-event-internal-gap'
+            """);
+        jdbcTemplate.update("""
+            delete from ai_chat_run_event
+            where run_id = 'run-event-internal-gap' and sequence_no = 3
+            """);
+        String token = loginAndGetToken();
+
+        MvcResult started = mockMvc.perform(
+                get("/api/knowledge/chat-runs/run-event-internal-gap/events/stream")
+                    .header("Authorization", "Bearer " + token)
+                    .header("Last-Event-ID", "1")
+            )
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        started.getAsyncResult(7000);
+        MvcResult completed = mockMvc.perform(asyncDispatch(started))
+            .andExpect(status().isOk())
+            .andReturn();
+        String body = completed.getResponse().getContentAsString();
+        assertThat(body).contains(
+            "event:snapshot", "id:3", "internal gap snapshot", "id:4"
+        );
+    }
+
+    @Test
+    void shouldCreateListLoadMessagesAndArchiveConversation() throws Exception {
+        String token = loginAndGetToken();
+        MvcResult projectResult = mockMvc.perform(post("/api/knowledge/projects")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Conversation Project\"}"))
+            .andExpect(status().isOk())
+            .andReturn();
+        Number projectId = JsonPath.read(projectResult.getResponse().getContentAsString(), "$.data.projectId");
+
+        MvcResult conversationResult = mockMvc.perform(post("/api/knowledge/conversations")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"projectId\":" + projectId.longValue() + ",\"title\":\"Opening Ideas\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.projectId").value(projectId.longValue()))
+            .andExpect(jsonPath("$.data.title").value("Opening Ideas"))
+            .andReturn();
+        String conversationId = JsonPath.read(
+            conversationResult.getResponse().getContentAsString(),
+            "$.data.conversationId"
+        );
+
+        jdbcTemplate.update(
+            "insert into ai_chat_message(conversation_id, user_id, project_id, role, content) values(?, ?, ?, ?, ?)",
+            conversationId, 1L, projectId.longValue(), "USER", "Question one"
+        );
+        jdbcTemplate.update(
+            "insert into ai_chat_message(conversation_id, user_id, project_id, role, content) values(?, ?, ?, ?, ?)",
+            conversationId, 1L, projectId.longValue(), "ASSISTANT", "Answer one"
+        );
+
+        mockMvc.perform(get("/api/knowledge/conversations")
+                .header("Authorization", "Bearer " + token)
+                .param("projectId", String.valueOf(projectId.longValue())))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.length()").value(2))
+            .andExpect(jsonPath("$.data[0].conversationId").value(conversationId));
+
+        mockMvc.perform(get("/api/knowledge/conversations/" + conversationId)
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.messages.length()").value(2))
+            .andExpect(jsonPath("$.data.messages[0].role").value("USER"))
+            .andExpect(jsonPath("$.data.messages[1].role").value("ASSISTANT"));
+
+        mockMvc.perform(get("/api/knowledge/conversations/" + conversationId + "/messages")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.length()").value(2));
+
+        mockMvc.perform(post("/api/knowledge/conversations/" + conversationId + "/archive")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200));
+
+        mockMvc.perform(get("/api/knowledge/conversations")
+                .header("Authorization", "Bearer " + token)
+                .param("projectId", String.valueOf(projectId.longValue())))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.length()").value(1));
+    }
+
+    @Test
+    void shouldDualWriteBlockingChatMessagesFromAuthenticatedConversationScope() throws Exception {
+        String token = loginAndGetToken();
+        MvcResult projectResult = mockMvc.perform(post("/api/knowledge/projects")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Blocking Chat Project\"}"))
+            .andExpect(status().isOk())
+            .andReturn();
+        Number projectId = JsonPath.read(projectResult.getResponse().getContentAsString(), "$.data.projectId");
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("Blocking answer");
+        workerResponse.setResultJson(Map.of("conversationId", "conv-blocking"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"Blocking question\",\"conversationId\":\"conv-blocking\"," +
+                    "\"projectId\":" + projectId.longValue() + "}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.answer").value("Blocking answer"));
+
+        List<Map<String, Object>> messages = jdbcTemplate.queryForList(
+            "select message_id, user_id, project_id, run_id, role, content from ai_chat_message " +
+                "where conversation_id = ? order by message_id",
+            "conv-blocking"
+        );
+        assertThat(messages).extracting(row -> row.get("role")).containsExactly("USER", "ASSISTANT");
+        assertThat(messages).extracting(row -> ((Number) row.get("user_id")).longValue()).containsOnly(1L);
+        assertThat(messages).extracting(row -> ((Number) row.get("project_id")).longValue())
+            .containsOnly(projectId.longValue());
+        assertThat(messages).extracting(row -> row.get("run_id"))
+            .containsOnly(messages.get(0).get("run_id"));
+        assertThat(String.valueOf(messages.get(0).get("run_id"))).startsWith("chatrun-");
+        assertThat(messages).extracting(row -> row.get("content"))
+            .containsExactly("Blocking question", "Blocking answer");
+        String runId = String.valueOf(messages.get(0).get("run_id"));
+        Map<String, Object> run = jdbcTemplate.queryForMap(
+            "select status, request_id, trigger_message_id, response_message_id " +
+                "from ai_chat_run where run_id = ?",
+            runId
+        );
+        assertThat(run.get("status")).isEqualTo("ANSWERED");
+        assertThat(run.get("request_id")).isNotNull();
+        assertThat(run.get("trigger_message_id")).isEqualTo(messages.get(0).get("message_id"));
+        assertThat(run.get("response_message_id")).isEqualTo(messages.get(1).get("message_id"));
+    }
+
+    @Test
+    void shouldPersistOnlyUserMessageWhenBlockingChatReturnsNoOutput() throws Exception {
+        String token = loginAndGetToken();
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer(" ");
+        workerResponse.setResultJson(Map.of("conversationId", "conv-blocking-empty"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"Blocking question\",\"conversationId\":\"conv-blocking-empty\"}"))
+            .andExpect(status().isOk());
+
+        List<Map<String, Object>> messages = jdbcTemplate.queryForList(
+            "select project_id, role, content from ai_chat_message " +
+                "where conversation_id = ? order by message_id",
+            "conv-blocking-empty"
+        );
+        assertThat(messages).extracting(row -> row.get("role")).containsExactly("USER");
+        assertThat(messages).extracting(row -> row.get("project_id")).containsOnlyNulls();
+        assertThat(messages).extracting(row -> row.get("content")).containsExactly("Blocking question");
+    }
+
+    @Test
+    void shouldReuseBlockingChatResultForTheSameRequestId() throws Exception {
+        String token = loginAndGetToken();
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("Idempotent answer");
+        workerResponse.setResultJson(Map.of("conversationId", "conv-idempotent"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+        String requestBody = "{\"question\":\"Idempotent question\"," +
+            "\"conversationId\":\"conv-idempotent\",\"requestId\":\"request-idempotent-1\"}";
+
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.answer").value("Idempotent answer"));
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.answer").value("Idempotent answer"));
+
+        verify(langGraphWorkerClient, times(1)).runKnowledgeChat(any());
+        List<Map<String, Object>> messages = jdbcTemplate.queryForList(
+            "select role, content from ai_chat_message where conversation_id = ? order by message_id",
+            "conv-idempotent"
+        );
+        assertThat(messages).extracting(row -> row.get("ROLE"))
+            .containsExactly("USER", "ASSISTANT");
+        assertThat(messages).extracting(row -> row.get("CONTENT"))
+            .containsExactly("Idempotent question", "Idempotent answer");
+    }
+
+    @Test
+    void shouldRejectReusingBlockingRequestIdWithDifferentPayload() throws Exception {
+        String token = loginAndGetToken();
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("Fast answer");
+        workerResponse.setResultJson(Map.of("conversationId", "conv-idempotent-conflict"));
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenReturn(workerResponse);
+
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"Same question\",\"conversationId\":\"conv-idempotent-conflict\"," +
+                    "\"requestId\":\"request-conflict-1\",\"reasoningMode\":\"fast\"}"))
+            .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/knowledge/chat")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"Same question\",\"conversationId\":\"conv-idempotent-conflict\"," +
+                    "\"requestId\":\"request-conflict-1\",\"reasoningMode\":\"deep\"}"))
+            .andExpect(status().isBadRequest());
+
+        verify(langGraphWorkerClient, times(1)).runKnowledgeChat(any());
+    }
+
+    @Test
+    void shouldNotExecuteConcurrentBlockingRequestsWithTheSameRequestIdTwice() throws Exception {
+        String token = loginAndGetToken();
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("Concurrent answer");
+        workerResponse.setResultJson(Map.of("conversationId", "conv-concurrent-idempotent"));
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        when(langGraphWorkerClient.runKnowledgeChat(any())).thenAnswer(invocation -> {
+            if (calls.incrementAndGet() == 1) {
+                firstEntered.countDown();
+                assertThat(releaseFirst.await(10, TimeUnit.SECONDS)).isTrue();
+            }
+            return workerResponse;
+        });
+        String body = "{\"question\":\"Concurrent question\"," +
+            "\"conversationId\":\"conv-concurrent-idempotent\"," +
+            "\"requestId\":\"request-concurrent-1\"}";
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<MvcResult> first = executor.submit(() -> mockMvc.perform(post("/api/knowledge/chat")
+                    .header("Authorization", "Bearer " + token)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+                .andReturn());
+            assertThat(firstEntered.await(10, TimeUnit.SECONDS)).isTrue();
+
+            mockMvc.perform(post("/api/knowledge/chat")
+                    .header("Authorization", "Bearer " + token)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+                .andExpect(status().isBadRequest());
+
+            releaseFirst.countDown();
+            assertThat(first.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(200);
+        } finally {
+            releaseFirst.countDown();
+            executor.shutdownNow();
+        }
+        verify(langGraphWorkerClient, times(1)).runKnowledgeChat(any());
+    }
+
+    @Test
+    void shouldPersistStreamChatRunAndMessages() throws Exception {
+        String token = loginAndGetToken();
+        KnowledgeChatResponseVO workerResponse = new KnowledgeChatResponseVO();
+        workerResponse.setStatus("answered");
+        workerResponse.setAnswer("Stream answer");
+        workerResponse.setResultJson(Map.of("conversationId", "conv-stream-persisted"));
+        when(langGraphWorkerClient.streamKnowledgeChat(any(), any(), any(), any())).thenReturn(workerResponse);
+
+        mockMvc.perform(post("/api/knowledge/chat/stream")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"Stream question\"," +
+                    "\"conversationId\":\"conv-stream-persisted\"," +
+                    "\"requestId\":\"request-stream-persisted\"}"))
+            .andExpect(status().isOk());
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        String status = null;
+        while (System.nanoTime() < deadline) {
+            List<String> statuses = jdbcTemplate.queryForList(
+                "select status from ai_chat_run where request_id = ?",
+                String.class,
+                "request-stream-persisted"
+            );
+            status = statuses.isEmpty() ? null : statuses.get(0);
+            if ("ANSWERED".equals(status)) {
+                break;
+            }
+            Thread.sleep(50L);
+        }
+
+        assertThat(status).isEqualTo("ANSWERED");
+        assertThat(jdbcTemplate.queryForList(
+            "select role, content from ai_chat_message where conversation_id = ? order by message_id",
+            "conv-stream-persisted"
+        )).extracting(row -> row.get("ROLE"))
+            .containsExactly("USER", "ASSISTANT");
+    }
+
+    @Test
+    void shouldCreateInitialConversationWithNewProject() throws Exception {
+        String token = loginAndGetToken();
+        MvcResult result = mockMvc.perform(post("/api/knowledge/projects")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"Project With Conversation\"}"))
+            .andExpect(status().isOk())
+            .andReturn();
+        Number projectId = JsonPath.read(result.getResponse().getContentAsString(), "$.data.projectId");
+
+        assertThat(jdbcTemplate.queryForObject(
+            "select count(1) from ai_conversation where project_id = ? and user_id = 1 and status = 'ACTIVE'",
+            Integer.class,
+            projectId.longValue()
+        )).isEqualTo(1);
     }
 
     @Test
@@ -478,6 +1001,58 @@ class KnowledgeControllerTest {
                 && "agent-runtime:manual-001".equals(payload.getRunKey())
                 && Integer.valueOf(10).equals(payload.getCaseLimit())
         ));
+    }
+
+    private void insertTerminalRunWithEvents(String runId) {
+        jdbcTemplate.update("""
+            insert into ai_chat_run(
+                run_id, user_id, conversation_id, question, request_json, status,
+                next_sequence_no, deleted, queued_at, finished_at, update_time
+            ) values(?, 1, ?, 'question', '{}', 'ANSWERED', 3, 0,
+                current_timestamp, current_timestamp, current_timestamp)
+            """,
+            runId,
+            "conv-" + runId
+        );
+        for (int sequence = 1; sequence <= 3; sequence++) {
+            jdbcTemplate.update("""
+                insert into ai_chat_run_event(
+                    run_id, sequence_no, event_type, event_idempotency_key, payload, created_at
+                ) values(?, ?, ?, ?, '{}', current_timestamp)
+                """,
+                runId,
+                sequence,
+                sequence == 3 ? "ANSWERED" : "PROGRESS",
+                runId + ":event:" + sequence
+            );
+        }
+    }
+
+    private void insertCancelledRunWithEvents(String runId) {
+        jdbcTemplate.update("""
+            insert into ai_chat_run(
+                run_id, user_id, conversation_id, question, request_json, status,
+                next_sequence_no, cancel_requested, deleted, queued_at, finished_at, update_time
+            ) values(?, 1, ?, 'question', '{}', 'CANCELLED', 3, true, 0,
+                current_timestamp, current_timestamp, current_timestamp)
+            """,
+            runId,
+            "conv-" + runId
+        );
+        String[] eventTypes = {"PROGRESS", "CANCEL_REQUESTED", "CANCELLED"};
+        for (int index = 0; index < eventTypes.length; index++) {
+            int sequence = index + 1;
+            jdbcTemplate.update("""
+                insert into ai_chat_run_event(
+                    run_id, sequence_no, event_type, event_idempotency_key, payload, created_at
+                ) values(?, ?, ?, ?, '{}', current_timestamp)
+                """,
+                runId,
+                sequence,
+                eventTypes[index],
+                runId + ":event:" + sequence
+            );
+        }
     }
 
     private String loginAndGetToken() throws Exception {

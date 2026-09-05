@@ -124,6 +124,7 @@ onBeforeUnmount(() => {
           plain
           :icon="currentTheme === 'dark' ? Sunny : Moon"
           size="small"
+          aria-label="切换主题"
           @click="handleThemeToggle"
         />
       </div>
@@ -142,13 +143,15 @@ onBeforeUnmount(() => {
   max-width: 100%;
   padding: 1.2rem 1.6rem;
   border-bottom: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--color-primary-soft) 34%, transparent), transparent 42%),
+    color-mix(in srgb, var(--color-surface-strong) 96%, transparent);
   backdrop-filter: blur(10px) saturate(1.08);
   -webkit-backdrop-filter: blur(10px) saturate(1.08);
   position: sticky;
   top: 0;
   z-index: 30;
-  box-shadow: 0 10px 24px rgba(18, 25, 58, 0.06);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--color-primary) 8%, transparent);
 }
 
 .app-header__identity {
@@ -177,21 +180,32 @@ onBeforeUnmount(() => {
 }
 
 .app-header__tag {
-  background: rgba(92, 124, 250, 0.08);
-  border-color: rgba(92, 124, 250, 0.18);
+  background: color-mix(in srgb, var(--color-primary-soft) 72%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
   color: var(--color-accent-strong);
 }
 
 .app-header__theme-toggle,
 .app-header__mobile-project,
 .app-header__mobile-theme {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  padding: 0;
   border-color: color-mix(in srgb, var(--color-border-strong) 76%, transparent);
-  background: color-mix(in srgb, var(--color-surface-strong) 88%, transparent);
+  background: color-mix(in srgb, var(--color-primary-soft) 42%, var(--color-surface-strong));
+  transition: transform var(--motion-base) var(--motion-spring),
+    color var(--motion-fast) ease, background var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
 }
 
 .app-header__mobile-project {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
 }
 
 .app-header__desktop-only {
@@ -206,28 +220,58 @@ onBeforeUnmount(() => {
 
 .app-header__avatar-button {
   display: inline-flex;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
   padding: 0;
   border: 0;
   background: transparent;
   cursor: pointer;
+  transition: transform var(--motion-base) var(--motion-spring);
 }
 
 .app-header__avatar {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  aspect-ratio: 1;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--color-accent), var(--color-primary));
+  background: var(--gradient-primary);
   color: #fff;
   font-size: 0.8rem;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 7px 16px color-mix(in srgb, var(--color-primary) 22%, transparent);
+  transition: transform var(--motion-base) var(--motion-spring),
+    box-shadow var(--motion-fast) ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-header__avatar-button:hover .app-header__avatar,
+  .app-header__theme-toggle:hover,
+  .app-header__mobile-project:hover,
+  .app-header__mobile-theme:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px color-mix(in srgb, var(--color-primary) 26%, transparent);
+  }
+}
+
+.app-header__avatar-button:active,
+.app-header__theme-toggle:active,
+.app-header__mobile-project:active,
+.app-header__mobile-theme:active {
+  transform: translateY(1px) scale(var(--motion-press-scale));
 }
 
 @media (max-width: 768px) {
   .app-header {
-    padding: 0.75rem 0.875rem;
+    padding: 0.375rem 0.75rem;
     min-height: var(--app-header-mobile-height);
     position: fixed;
     top: 0;
@@ -241,12 +285,12 @@ onBeforeUnmount(() => {
     background: color-mix(in srgb, var(--color-surface-strong) 94%, transparent);
     backdrop-filter: blur(8px) saturate(1.04);
     -webkit-backdrop-filter: blur(8px) saturate(1.04);
-    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 8px 18px color-mix(in srgb, var(--color-primary) 10%, transparent);
   }
 
   .app-header__title {
     font-size: 1.05rem;
-    max-width: 58vw;
+    max-width: min(58vw, 14rem);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -258,6 +302,15 @@ onBeforeUnmount(() => {
 
   .app-header__mobile-actions {
     display: flex;
+    flex: 0 0 auto;
+    gap: 0.25rem;
+  }
+
+  .app-header__mobile-theme {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
   }
 }
 

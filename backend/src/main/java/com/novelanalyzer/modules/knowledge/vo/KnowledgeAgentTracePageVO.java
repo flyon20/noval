@@ -8,7 +8,7 @@ public class KnowledgeAgentTracePageVO {
     private Integer pageSize;
     private Long total;
     private Boolean hasNext;
-    private List<KnowledgeAgentTraceVO> items = new ArrayList<>();
+    private List<KnowledgeAgentTraceSummaryVO> items = new ArrayList<>();
 
     public Integer getPage() {
         return page;
@@ -42,11 +42,11 @@ public class KnowledgeAgentTracePageVO {
         this.hasNext = hasNext;
     }
 
-    public List<KnowledgeAgentTraceVO> getItems() {
+    public List<KnowledgeAgentTraceSummaryVO> getItems() {
         return items;
     }
 
-    public void setItems(List<KnowledgeAgentTraceVO> items) {
+    public void setItems(List<KnowledgeAgentTraceSummaryVO> items) {
         this.items = items == null ? new ArrayList<>() : new ArrayList<>(items);
     }
 }

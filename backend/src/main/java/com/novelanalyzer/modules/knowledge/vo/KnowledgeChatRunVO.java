@@ -14,6 +14,7 @@ public class KnowledgeChatRunVO {
     private String resultJson;
     private String traceId;
     private Integer sourceCount;
+    private Long snapshotSequenceNo;
     private String errorMessage;
     private Boolean cancelRequested;
     private Integer retryCount;
@@ -117,6 +118,14 @@ public class KnowledgeChatRunVO {
 
     public void setSourceCount(Integer sourceCount) {
         this.sourceCount = sourceCount;
+    }
+
+    public Long getSnapshotSequenceNo() {
+        return snapshotSequenceNo;
+    }
+
+    public void setSnapshotSequenceNo(Long snapshotSequenceNo) {
+        this.snapshotSequenceNo = snapshotSequenceNo;
     }
 
     public String getErrorMessage() {

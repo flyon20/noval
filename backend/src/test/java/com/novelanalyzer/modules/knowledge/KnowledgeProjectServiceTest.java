@@ -119,6 +119,32 @@ class KnowledgeProjectServiceTest {
             .isEqualTo(ResultCode.NOT_FOUND);
     }
 
+    @Test
+    void shouldResolveOnlyExplicitOwnedReferenceWorksInRequestedOrder() {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        KnowledgeProjectService service = new KnowledgeProjectService(jdbcTemplate);
+        jdbcTemplate.update("insert into ai_project(project_id, user_id, name, status) values(11, 7, 'Active', 'ACTIVE')");
+        jdbcTemplate.update("insert into ai_project(project_id, user_id, name, status) values(12, 7, 'Reference', 'ACTIVE')");
+        jdbcTemplate.update("insert into ai_project(project_id, user_id, name, status) values(13, 8, 'Other user', 'ACTIVE')");
+        jdbcTemplate.update("insert into ai_project_work(work_id, user_id, project_id, title, status) values(21, 7, 11, 'Current', 'ACTIVE')");
+        jdbcTemplate.update("insert into ai_project_work(work_id, user_id, project_id, title, status) values(22, 7, 12, 'Second', 'ACTIVE')");
+        jdbcTemplate.update("insert into ai_project_work(work_id, user_id, project_id, title, status) values(23, 7, 12, 'Third', 'ACTIVE')");
+        jdbcTemplate.update("insert into ai_project_work(work_id, user_id, project_id, title, status) values(24, 8, 13, 'Private', 'ACTIVE')");
+
+        List<KnowledgeProjectService.ReferenceWorkScope> resolved = service.resolveReferenceWorks(
+            7L, List.of(23L, 21L, 22L, 23L), 11L, 21L
+        );
+
+        assertThat(resolved).extracting(KnowledgeProjectService.ReferenceWorkScope::workId)
+            .containsExactly(23L, 22L);
+        assertThat(resolved).extracting(KnowledgeProjectService.ReferenceWorkScope::projectId)
+            .containsExactly(12L, 12L);
+        assertThatThrownBy(() -> service.resolveReferenceWorks(7L, List.of(24L), 11L, 21L))
+            .isInstanceOf(BusinessException.class)
+            .extracting("resultCode")
+            .isEqualTo(ResultCode.NOT_FOUND);
+    }
+
     static JdbcTemplate jdbcTemplate() {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(
             "jdbc:h2:mem:project-test-" + System.nanoTime() + ";MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1",
@@ -141,6 +167,14 @@ class KnowledgeProjectServiceTest {
             "conversation_id varchar(80) not null," +
             "created_at timestamp default current_timestamp," +
             "unique(project_id, conversation_id))");
+        jdbcTemplate.execute("create table ai_project_work (" +
+            "work_id bigint auto_increment primary key," +
+            "user_id bigint not null," +
+            "project_id bigint not null," +
+            "title varchar(200) not null," +
+            "status varchar(20) not null," +
+            "created_at timestamp default current_timestamp," +
+            "updated_at timestamp default current_timestamp)");
         return jdbcTemplate;
     }
 }

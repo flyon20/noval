@@ -7,8 +7,11 @@ import com.novelanalyzer.common.result.ResultCode;
 import com.novelanalyzer.config.AiProperties;
 import com.novelanalyzer.modules.analysis.model.AiInvokeResult;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
+import com.novelanalyzer.modules.config.vo.ProviderTierQueryModel;
+import com.novelanalyzer.modules.config.vo.ProviderTierVO;
 import com.novelanalyzer.modules.knowledge.dto.AgentEvalRunRequest;
 import com.novelanalyzer.modules.knowledge.vo.AgentEvalRunVO;
+import com.novelanalyzer.modules.knowledge.vo.AgentProviderProbeVO;
 import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
 import com.novelanalyzer.modules.knowledge.vo.RuntimeSkillVO;
 import org.slf4j.Logger;
@@ -25,9 +28,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 @Component
@@ -35,6 +38,11 @@ public class LangGraphWorkerClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(LangGraphWorkerClient.class);
     private static final String INTERNAL_API_KEY_HEADER = "X-Internal-Service-Token";
+
+    @FunctionalInterface
+    public interface KnowledgeProgressConsumer {
+        void accept(String phase, String message, Map<String, Object> details);
+    }
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -94,6 +102,38 @@ public class LangGraphWorkerClient {
         }
     }
 
+    public List<ProviderTierVO> resolveProviderTiers(List<ProviderTierQueryModel> models) {
+        if (models == null || models.isEmpty()) {
+            return List.of();
+        }
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("models", models);
+            HttpRequest request = buildRequest("/internal/knowledge/provider-tiers", payload);
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            ensureSuccess(response.statusCode(), response.body());
+            ProviderTierResponse body = objectMapper.readValue(response.body(), ProviderTierResponse.class);
+            return body.getModels() == null ? List.of() : body.getModels();
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            LOGGER.warn("langgraph worker provider tiers call failed: {}", ex.getMessage());
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker provider tiers failed");
+        }
+    }
+
+    public static class ProviderTierResponse {
+        private List<ProviderTierVO> models;
+
+        public List<ProviderTierVO> getModels() {
+            return models;
+        }
+
+        public void setModels(List<ProviderTierVO> models) {
+            this.models = models;
+        }
+    }
+
     public AgentEvalRunVO startKnowledgeEvalRun(AgentEvalRunRequest evalRunRequest) {
         try {
             Map<String, Object> payload = objectMapper.convertValue(
@@ -116,12 +156,35 @@ public class LangGraphWorkerClient {
     public KnowledgeChatResponseVO streamKnowledgeChat(Map<String, Object> requestPayload,
                                                         Consumer<String> onDelta,
                                                         BooleanSupplier cancelledSupplier) {
-        return streamKnowledgeChat(requestPayload, onDelta, null, cancelledSupplier);
+        return streamKnowledgeChat(requestPayload, onDelta, (KnowledgeProgressConsumer) null, cancelledSupplier);
+    }
+
+    public AgentProviderProbeVO probeAgentProvider(String profileKey, String profileVersion) {
+        try {
+            HttpRequest request = buildRequest(
+                "/internal/knowledge/agent/provider-probe",
+                Map.of(
+                    "profileKey", profileKey,
+                    "profileVersion", profileVersion
+                )
+            );
+            HttpResponse<String> response = httpClient.send(
+                request,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            ensureSuccess(response.statusCode(), response.body());
+            return objectMapper.readValue(response.body(), AgentProviderProbeVO.class);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            LOGGER.warn("langgraph worker provider probe failed: {}", ex.getClass().getSimpleName());
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "langgraph worker provider probe failed");
+        }
     }
 
     public KnowledgeChatResponseVO streamKnowledgeChat(Map<String, Object> requestPayload,
                                                         Consumer<String> onDelta,
-                                                        BiConsumer<String, String> onProgress,
+                                                        KnowledgeProgressConsumer onProgress,
                                                         BooleanSupplier cancelledSupplier) {
         try {
             HttpRequest request = buildRequest("/internal/knowledge/chat/stream", requestPayload);
@@ -282,7 +345,7 @@ public class LangGraphWorkerClient {
                                                           String rawData,
                                                           StringBuilder accumulatedContent,
                                                           Consumer<String> onDelta,
-                                                          BiConsumer<String, String> onProgress) throws Exception {
+                                                          KnowledgeProgressConsumer onProgress) throws Exception {
         if (rawData == null || rawData.isBlank()) {
             return null;
         }
@@ -291,9 +354,19 @@ public class LangGraphWorkerClient {
         if ("start".equalsIgnoreCase(effectiveEvent)) {
             return null;
         }
-        if ("progress".equalsIgnoreCase(effectiveEvent)) {
+        String normalizedEvent = effectiveEvent == null
+            ? ""
+            : effectiveEvent.trim().toLowerCase(Locale.ROOT);
+        if ("progress".equals(normalizedEvent) || isContextProgressEvent(normalizedEvent)) {
             if (onProgress != null) {
-                onProgress.accept(asString(payload.get("phase")), asString(payload.get("message")));
+                onProgress.accept(
+                    firstNonBlank(
+                        asString(payload.get("phase")),
+                        isContextProgressEvent(normalizedEvent) ? "context" : null
+                    ),
+                    asString(payload.get("message")),
+                    sanitizeKnowledgeProgressDetails(normalizedEvent, payload)
+                );
             }
             return null;
         }
@@ -322,6 +395,36 @@ public class LangGraphWorkerClient {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, firstNonBlank(asString(payload.get("message")), "langgraph worker returned error"));
         }
         return null;
+    }
+
+    private boolean isContextProgressEvent(String eventName) {
+        return "context_compacting".equals(eventName) || "context_compacted".equals(eventName);
+    }
+
+    private Map<String, Object> sanitizeKnowledgeProgressDetails(String eventName,
+                                                                 Map<String, Object> payload) {
+        if (!isContextProgressEvent(eventName)) {
+            return Map.of();
+        }
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("progressEvent", eventName);
+        copyNonNegativeLong(payload, details, "contextWindowTokens");
+        copyNonNegativeLong(payload, details, "thresholdTokens");
+        copyNonNegativeLong(payload, details, "beforeInputTokens");
+        copyNonNegativeLong(payload, details, "afterInputTokens");
+        copyNonNegativeLong(payload, details, "retainedTurnCount");
+        copyNonNegativeLong(payload, details, "summarizedMessageCount");
+        copyNonNegativeLong(payload, details, "generation");
+        return Map.copyOf(details);
+    }
+
+    private void copyNonNegativeLong(Map<String, Object> source,
+                                     Map<String, Object> target,
+                                     String key) {
+        Long value = parseLong(source.get(key), null);
+        if (value != null && value >= 0L) {
+            target.put(key, value);
+        }
     }
 
     private HttpRequest buildRequest(String path, Map<String, Object> requestPayload) throws Exception {

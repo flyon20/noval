@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "project-retrieval-golden-baseline/v1",
+  "baselineVersion": "v1",
+  "corpusVersion": "v1",
+  "runnerVersion": "scoped-bm25-v1",
+  "caseCount": 1200,
+  "metrics": {
+    "active_retrieval_case_count": 1200,
+    "structured_case_count": 2400,
+    "chapter_location_case_count": 1200,
+    "foreshadowing_case_count": 1200,
+    "multi_hop_path_case_count": 1200,
+    "stale_rejection_case_count": 1200,
+    "cross_user_isolation_case_count": 1200,
+    "generation_case_count": 1200,
+    "hit_rate_at_k": 1.0,
+    "mrr_at_k": 1.0,
+    "context_precision_at_k": 0.19999999999999576,
+    "context_recall_at_k": 1.0,
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "precision_at_5": 0.19999999999999576,
+    "ndcg_at_10": 1.0,
+    "structured_accuracy": 1.0,
+    "chapter_location_accuracy": 1.0,
+    "foreshadowing_coverage": 1.0,
+    "multi_hop_path_evidence": 1.0,
+    "stale_rejection_rate": 1.0,
+    "cross_user_isolation_rate": 1.0,
+    "old_generation_misretrieval_rate": 0.0
+  },
+  "confidenceIntervals": {
+    "recall_at_5": {
+      "sample_count": 1200,
+      "mean": 1.0,
+      "lower": 1.0,
+      "upper": 1.0
+    },
+    "chapter_location_accuracy": {
+      "sample_count": 1200,
+      "mean": 1.0,
+      "lower": 1.0,
+      "upper": 1.0
+    },
+    "structured_accuracy": {
+      "sample_count": 1200,
+      "mean": 1.0,
+      "lower": 1.0,
+      "upper": 1.0
+    },
+    "foreshadowing_coverage": {
+      "sample_count": 1200,
+      "mean": 1.0,
+      "lower": 1.0,
+      "upper": 1.0
+    },
+    "multi_hop_path_evidence": {
+      "sample_count": 1200,
+      "mean": 1.0,
+      "lower": 1.0,
+      "upper": 1.0
+    },
+    "cross_user_isolation_rate": {
+      "sample_count": 1200,
+      "mean": 1.0,
+      "lower": 1.0,
+      "upper": 1.0
+    }
+  }
+}
