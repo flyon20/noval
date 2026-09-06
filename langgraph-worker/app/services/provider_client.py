@@ -1274,6 +1274,8 @@ class OpenAICompatibleProviderClient:
                 payload["max_output_tokens"] = max_tokens
             if require_json:
                 payload["text"] = {"format": {"type": "json_object"}}
+                # Responses validates JSON instructions in input separately from instructions.
+                response_input.append({"role": "developer", "content": "Return a valid JSON object."})
             response_tools = self._build_responses_tools(tools or [])
             if response_tools:
                 payload["tools"] = response_tools

@@ -2147,6 +2147,9 @@ class NovelResearchAgent:
     def _should_run_market_evidence_analysis(self, state: ResearchState) -> bool:
         if state.get("response") is not None:
             return False
+        source_policy = dict(state.get("source_policy") or {})
+        if source_policy.get("trendGateFailed") or self._required_evidence_contract_missing(source_policy):
+            return False
         decision = self._intent_decision_for_state(state)
         if decision is None or decision.primaryIntent is not Intent.market_scan:
             return False
@@ -7498,7 +7501,7 @@ class NovelResearchAgent:
                 sources = await self._lookup_rank_sources_for_trend(request, state, category=category)
             policy = self._build_trend_source_policy(request, sources, state=state, category=category)
             sources = self._project_current_rank_snapshot_sources(sources, policy)
-            sources = sources[:min(requested_limit, quota + (1 if index < remainder else 0))]
+            sources = sources[:requested_limit]
             policy = self._build_trend_source_policy(request, sources, state=state, category=category)
             sources = sources + other_sources
             contract = self.evidence_arbiter.evaluate(
@@ -7507,6 +7510,21 @@ class NovelResearchAgent:
                 source_policy=policy,
                 required_evidence=self._required_evidence_for_state(state) or None,
             )
+            # Validate the retrieved snapshot before applying the answer's citation budget.
+            category_limit = quota + (1 if index < remainder else 0)
+            selected_ranks = [
+                source for source in contract.selectedSources if (source.sourceType or "").upper() == "RANK"
+            ]
+            selected_other = [
+                source for source in contract.selectedSources if (source.sourceType or "").upper() != "RANK"
+            ]
+            contract = contract.model_copy(update={
+                "selectedSources": selected_ranks[:category_limit] + selected_other,
+            })
+            policy["selectedRankCount"] = min(len(selected_ranks), category_limit)
+            if selected_ranks and category_limit == 0:
+                policy["trendGateFailed"] = True
+                policy["trendGateReason"] = "rank_evidence_budget_exhausted"
             policy["evidenceContract"] = contract.model_dump(mode="json", exclude_none=True)
             category_policies[category] = policy
             contracts.append(contract)
@@ -10692,7 +10710,8 @@ class NovelResearchAgent:
             snapshot["providerCapabilities"] = dict(capabilities)
         return snapshot
 
-    def _model_name(self, request: KnowledgeChatRequest) -> str:
+    @staticmethod
+    def _selected_model_name(request: KnowledgeChatRequest) -> str | None:
         for key in ("modelName", "model"):
             raw = request.limits.get(key)
             if raw is None:
@@ -10700,17 +10719,23 @@ class NovelResearchAgent:
             value = str(raw).strip()
             if value:
                 return value
+        return None
+
+    def _model_name(self, request: KnowledgeChatRequest) -> str:
+        selected = self._selected_model_name(request)
+        if selected:
+            return selected
         if self._reasoning_mode(request) == "deep":
             return settings.deep_model
         return settings.default_model
 
     def _intent_model_name(self, request: KnowledgeChatRequest) -> str:
         value = str(request.limits.get("intentModelName") or "").strip()
-        return value or settings.intent_model or settings.default_model
+        return self._selected_model_name(request) or value or settings.intent_model or settings.default_model
 
     def _review_model_name(self, request: KnowledgeChatRequest) -> str:
         value = str(request.limits.get("reviewModelName") or "").strip()
-        return value or settings.review_model or settings.default_model
+        return self._selected_model_name(request) or value or settings.review_model or settings.default_model
 
     def _postprocess_answer_for_mode(
         self,
