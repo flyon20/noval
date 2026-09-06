@@ -8,6 +8,26 @@ from app.services.runtime.intent_agent import IntentAgent
 
 
 class IntentAgentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_market_question_cannot_be_overridden_by_stale_llm_scope(self) -> None:
+        async def fallback(_request: KnowledgeChatRequest, _decision: IntentDecision) -> IntentDecision:
+            return IntentDecision(
+                primaryIntent=Intent.mixed_creation_research,
+                confidence=0.99,
+                entities={"channel": "女频", "category": "都市脑洞"},
+                toolNeeds=ToolNeeds(needsRankData=True, needsCreativeGeneration=True),
+            )
+
+        agent = IntentAgent(llm_fallback=fallback, llm_fallback_enabled=True, model_first_enabled=True)
+        decision = await agent.decide(KnowledgeChatRequest(
+            question="当前男频都市脑洞和都市日常的榜单趋势如何？",
+            contextSummary="最近意图：outline_building 最近用户目标：完善女频大纲",
+        ))
+
+        self.assertEqual(Intent.market_scan, decision.primaryIntent)
+        self.assertEqual("男频", decision.entities.get("channel"))
+        self.assertEqual(["都市脑洞", "都市日常"], decision.entities.get("categories"))
+        self.assertFalse(decision.toolNeeds.needsCreativeGeneration)
+
     async def test_scan_opening_and_outline_routes_to_mixed_creation_research(self) -> None:
         agent = IntentAgent()
 
@@ -125,7 +145,7 @@ class IntentAgentTest(unittest.IsolatedAsyncioTestCase):
         )
 
         request = KnowledgeChatRequest(
-            question="看看最近男频都市脑洞新书榜",
+            question="结合刚才的方向，看看最近男频都市脑洞新书榜",
             mode="research",
             conversationId="conversation-outline-1",
             contextSummary=(
@@ -136,18 +156,48 @@ class IntentAgentTest(unittest.IsolatedAsyncioTestCase):
         decision = await agent.decide(request)
 
         self.assertEqual([], calls)
-        self.assertEqual(Intent.market_scan, decision.primaryIntent)
-        self.assertEqual([], decision.subIntents)
+        self.assertEqual(Intent.mixed_creation_research, decision.primaryIntent)
+        self.assertEqual(
+            [Intent.market_scan, Intent.outline_building],
+            decision.subIntents,
+        )
         self.assertTrue(decision.toolNeeds.needsRankData)
-        self.assertFalse(decision.toolNeeds.needsCreativeGeneration)
-        self.assertNotIn("supervisor:active_goal_inherited", decision.routingNotes)
+        self.assertTrue(decision.toolNeeds.needsCreativeGeneration)
+        self.assertTrue(decision.toolNeeds.needsOutlineMemory)
+        self.assertEqual("supporting_research", decision.entities.get("conversationTaskMode"))
+        self.assertEqual("outline_building", decision.entities.get("activeGoalIntent"))
+        self.assertIn("supervisor:active_goal_inherited", decision.routingNotes)
 
         envelope = agent.to_envelope(decision, request=request)
 
         self.assertEqual("context_followup", envelope.conversationMode)
-        self.assertEqual("rules", envelope.classificationSource)
+        self.assertEqual("supervised_rules", envelope.classificationSource)
         self.assertIn("market_scan", envelope.operations)
-        self.assertNotIn("outline_building", envelope.operations)
+        self.assertIn("outline_building", envelope.operations)
+
+    async def test_independent_market_question_does_not_inherit_old_creation_goal(self) -> None:
+        question = "当前男频都市脑洞和都市日常的榜单趋势，还有题材主要是那些？"
+        summaries = (
+            "最近意图：chapter_outline\n最近用户目标：完善章节细纲",
+            "最近意图：market_scan\n最近用户目标：" + question,
+            "最近意图：market_scan 最近用户目标：" + question + " 上一轮结论：可以研究开篇结构。",
+        )
+        for summary in summaries:
+            with self.subTest(summary=summary):
+                decision = await IntentAgent().decide(KnowledgeChatRequest(
+                    question=question, contextSummary=summary,
+                ))
+                self.assertEqual(Intent.market_scan, decision.primaryIntent)
+                self.assertFalse(decision.toolNeeds.needsCreativeGeneration)
+                self.assertNotIn("supervisor:active_goal_inherited", decision.routingNotes)
+
+    async def test_market_followup_does_not_read_creation_goal_from_previous_answer(self) -> None:
+        decision = await IntentAgent().decide(KnowledgeChatRequest(
+            question="结合刚才的方向，看看男频都市脑洞新书榜",
+            contextSummary="最近意图：market_scan 最近用户目标：研究榜单题材 上一轮结论：这些作品的开篇有差异。",
+        ))
+        self.assertEqual(Intent.market_scan, decision.primaryIntent)
+        self.assertFalse(decision.toolNeeds.needsCreativeGeneration)
 
     async def test_explicit_standalone_market_request_does_not_inherit_outline_goal(self) -> None:
         agent = IntentAgent()

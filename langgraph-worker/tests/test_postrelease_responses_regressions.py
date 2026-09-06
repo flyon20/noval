@@ -6,7 +6,7 @@ import pytest
 
 import app.services.harness
 from app.config import settings
-from app.models.knowledge import KnowledgeChatRequest, KnowledgeSource, RankLookupResult
+from app.models.knowledge import KnowledgeChatRequest, KnowledgeChatResponse, KnowledgeSource, RankLookupResult
 from app.services.intents.domain_intents import Intent, IntentDecision
 from app.services.novel_research_agent import NovelResearchAgent
 from app.services.provider_client import OpenAICompatibleProviderClient, ProviderProfile
@@ -46,6 +46,119 @@ def test_stage_defaults_remain_available_without_a_selected_model(monkeypatch):
     assert agent._review_model_name(request) == "legacy-review"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["intent", "market_analysis", "review"])
+@pytest.mark.parametrize("mode,effort,model,wire_effort", [
+    ("deep", "xhigh", "gpt-5.6-sol", "xhigh"),
+    ("fast", "high", "gpt-5.6-sol", "high"),
+    ("deep", "max", "deepseek-v4-pro", "max"),
+    ("deep", "high", "gpt-5", "high"),
+    ("fast", "none", "gpt-5.6-sol", "none"),
+])
+async def test_internal_stages_preserve_selected_reasoning_on_responses(
+    monkeypatch, stage, mode, effort, model, wire_effort,
+):
+    calls = []
+
+    class Provider:
+        async def invoke(self, **kwargs):
+            calls.append(kwargs)
+            return {
+                "model_name": kwargs["model"], "token_used": 12,
+                "content": json.dumps({
+                    "primaryIntent": "market_scan", "confidence": 0.99,
+                    "status": "passed", "revisionRequired": False,
+                }),
+            }
+
+    agent = NovelResearchAgent(provider_client=Provider())
+    request = KnowledgeChatRequest(
+        question="synthetic reasoning inheritance", reasoningMode=mode, reasoningEffort=effort,
+        conversationId="synthetic-conversation", traceId="synthetic-run", userId=7,
+        limits={"modelKey": "selected-profile", "modelName": model},
+    )
+    state = {"request": request}
+    if stage == "intent":
+        await agent._provider_domain_intent_fallback_with_trace(
+            request, IntentDecision(primaryIntent=Intent.market_scan, confidence=0.9),
+        )
+    elif stage == "market_analysis":
+        await agent._run_market_evidence_model([{"role": "user", "content": "synthetic evidence"}], request, state)
+    else:
+        monkeypatch.setattr(settings, "agent_answer_review_enabled", True)
+        state["response"] = KnowledgeChatResponse(status="answered", answer="Synthetic answer.", resultJson={})
+        await agent._review_answer_node(state)
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["reasoning_mode"] == mode
+    assert call["reasoning_effort"] == effort
+    assert call["request_family"] == stage
+    payload = OpenAICompatibleProviderClient()._build_payload(
+        messages=call["messages"], model=call["model"], temperature=call["temperature"],
+        max_tokens=call["max_tokens"], require_json=call.get("require_json", False), stream=False,
+        reasoning_mode=call["reasoning_mode"], reasoning_effort=call["reasoning_effort"],
+        wire_api="responses",
+    )
+    assert payload["reasoning"]["effort"] == wire_effort
+    assert "messages" not in payload
+    if effort not in {"none", "minimal"}:
+        assert call["max_tokens"] >= agent._automatic_final_output_tokens(request, "evidence")
+
+
+@pytest.mark.parametrize("host", ["gateway.example", "api.openai.com"])
+def test_responses_json_instruction_keeps_followup_input_append_only(host):
+    provider = OpenAICompatibleProviderClient()
+    profile = ProviderProfile(
+        profile_key="selected-profile", profile_version="v1", model="gpt-5.6-sol",
+        protocol="responses", endpoint=f"https://{host}/v1",
+    )
+    messages = [
+        {"role": "system", "content": "Stable JSON instructions."},
+        {"role": "user", "content": "Synthetic first question."},
+    ]
+
+    def build(items):
+        return provider._build_payload(
+            messages=items, model=profile.model, temperature=0, max_tokens=256,
+            require_json=True, stream=False, reasoning_mode="deep", reasoning_effort="xhigh",
+            cache_affinity="synthetic-conversation", wire_api="responses", provider_profile=profile,
+        )
+
+    first = build(messages)
+    second = build([*messages,
+        {"role": "assistant", "content": '{"ok": true}'},
+        {"role": "user", "content": "Synthetic next question."},
+    ])
+    assert second["prompt_cache_key"] == first["prompt_cache_key"]
+    assert second["input"][:len(first["input"])] == first["input"]
+    first_snapshot = provider._cache_continuity_snapshot(first, "responses", request_family="intent")
+    second_snapshot = provider._cache_continuity_snapshot(second, "responses", request_family="intent")
+    assert first_snapshot["surfaceGeneration"] == second_snapshot["surfaceGeneration"]
+    assert first_snapshot["inputFingerprint"] == second_snapshot["prefixChainFingerprints"][len(first["input"]) - 1]
+
+
+@pytest.mark.asyncio
+async def test_provider_wrapper_inherits_request_reasoning_without_stage_overrides():
+    calls = []
+
+    class Provider:
+        async def invoke(self, **kwargs):
+            calls.append(kwargs)
+            return {"model_name": kwargs["model"], "content": "synthetic answer", "token_used": 1}
+
+    agent = NovelResearchAgent(provider_client=Provider())
+    request = KnowledgeChatRequest(
+        question="synthetic", reasoningMode="deep", reasoningEffort="xhigh",
+        limits={"modelName": "gpt-5.6-sol"},
+    )
+    await agent._provider_invoke(
+        messages=[{"role": "user", "content": "synthetic"}], model="gpt-5.6-sol", request=request,
+    )
+    assert calls[0]["reasoning_mode"] == "deep"
+    assert calls[0]["reasoning_effort"] == "xhigh"
+
+
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("host", ["gateway.example", "api.openai.com"])
 def test_responses_json_mode_has_an_input_instruction(stream, host):
@@ -73,7 +186,7 @@ def test_responses_json_mode_has_an_input_instruction(stream, host):
     if host == "gateway.example":
         assert "prompt_cache_options" not in payload
         assert payload["instructions"] == messages[0]["content"]
-        assert payload["input"][0] == messages[1]
+        assert payload["input"][1] == messages[1]
 
 
 def rank_sources(category, count):

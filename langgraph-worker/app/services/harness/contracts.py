@@ -6,9 +6,9 @@ import re
 from collections.abc import Iterable, Mapping
 from datetime import date
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from .execution_path import ExecutionPath
 
@@ -676,6 +676,142 @@ class EvidenceCommit(FrozenContract):
         }
 
 
+class HarnessIntelligencePolicy(FrozenContract):
+    harnessEvidenceRepairEnabled: StrictBool = False
+    harnessAnswerValidationEnabled: StrictBool = False
+    harnessTaskCheckpointEnabled: StrictBool = False
+    harnessStageSkillsEnabled: StrictBool = False
+
+    @classmethod
+    def from_runtime_config(cls, config: Mapping[str, Any]) -> HarnessIntelligencePolicy:
+        return cls.model_validate({key: config[key] for key in cls.model_fields if key in config})
+
+
+class ToolObservationSummary(FrozenContract):
+    schemaVersion: Literal["tool-observation-v1"] = "tool-observation-v1"
+    toolCallId: str = Field(min_length=1, max_length=256)
+    taskId: str | None = Field(default=None, max_length=128)
+    status: Literal["succeeded", "empty", "failed", "denied", "unknown", "cancelled"]
+    reasonCode: Literal[
+        "evidence_available", "empty_result", "reused_result", "no_progress",
+        "permission_denied", "invalid_arguments", "budget_exhausted", "tool_failed",
+        "outcome_unknown", "cancelled",
+    ] = "evidence_available"
+    coverage: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
+    evidenceRefs: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
+    resultRef: str | None = Field(default=None, max_length=256)
+    truncated: bool = False
+
+    @field_validator("coverage", "evidenceRefs", mode="before")
+    @classmethod
+    def bounded_references(cls, value: Any) -> tuple[str, ...]:
+        return _stable_unique_strings(value)
+
+
+class ToolProgressAttempt(FrozenContract):
+    schemaVersion: Literal["tool-progress-v1"] = "tool-progress-v1"
+    requestKey: str = Field(pattern=r"^progress_request_[0-9a-f]{24}$")
+    attemptId: str = Field(pattern=r"^[0-9a-f]{24}$")
+    ordinal: int = Field(ge=1, le=3, strict=True)
+
+
+class RepairProposal(FrozenContract):
+    schemaVersion: Literal["evidence-repair-v1"] = "evidence-repair-v1"
+    intentEnvelopeHash: str = Field(min_length=1, max_length=128)
+    scope: CapabilityScope
+    workId: int | None = Field(default=None, ge=1)
+    planRevision: int = Field(ge=1, le=1)
+    missingRequirementIds: tuple[str, ...] = Field(min_length=1, max_length=12)
+    action: Literal["read_missing", "refine_query", "rank_refresh"]
+    targetRefs: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
+    reasonCode: Literal["missing_evidence", "empty_result", "missing_chapters", "stale_rank"]
+
+    @field_validator("missingRequirementIds", "targetRefs", mode="before")
+    @classmethod
+    def bounded_references(cls, value: Any) -> tuple[str, ...]:
+        return _stable_unique_strings(value)
+
+    @property
+    def proposalId(self) -> str:
+        return f"repair-{_model_fingerprint(self).removeprefix('sha256:')[:16]}"
+
+    def trace_summary(self) -> dict[str, Any]:
+        return {
+            "proposalId": self.proposalId, "planRevision": self.planRevision,
+            "action": self.action, "reasonCode": self.reasonCode,
+            "missingRequirementCount": len(self.missingRequirementIds),
+        }
+
+
+class AnswerValidationIssue(FrozenContract):
+    issueId: str = Field(min_length=1, max_length=128, pattern=r"^[a-z0-9_.:-]+$")
+    severity: Literal["error", "warning"] = "error"
+    repairKind: Literal["retrieve", "rewrite", "clarify", "stop"] = "rewrite"
+
+
+class AnswerValidationResult(FrozenContract):
+    schemaVersion: Literal["answer-validation-v1"] = "answer-validation-v1"
+    status: Literal["passed", "failed", "unknown", "not_run"] = "not_run"
+    issues: tuple[AnswerValidationIssue, ...] = Field(default_factory=tuple, max_length=32)
+    checkedAnswerHash: str | None = Field(default=None, max_length=128)
+    checkedEvidenceCommitId: str | None = Field(default=None, max_length=128)
+    checkedEvidenceHash: str | None = Field(default=None, max_length=128)
+    semanticStatus: Literal["unknown"] = "unknown"
+
+    @model_validator(mode="after")
+    def validate_status(self) -> AnswerValidationResult:
+        if self.status != "not_run" and not self.checkedAnswerHash:
+            raise ValueError("executed validation must bind the checked answer")
+        if self.status == "passed" and any(issue.severity == "error" for issue in self.issues):
+            raise ValueError("failed checks cannot be passed")
+        return self
+
+    def matches(self, answer_hash: str, evidence_commit_id: str | None) -> bool:
+        return self.checkedAnswerHash == answer_hash and self.checkedEvidenceCommitId == evidence_commit_id
+
+
+class TaskProgressCheckpoint(FrozenContract):
+    schemaVersion: Literal["task-progress-v1"] = "task-progress-v1"
+    runId: str = Field(min_length=1, max_length=128)
+    scope: CapabilityScope
+    requestFingerprint: str = Field(min_length=1, max_length=128)
+    intentEnvelopeHash: str = Field(min_length=1, max_length=128)
+    planRevision: int = Field(default=0, ge=0, le=1)
+    evidenceCommitId: str | None = Field(default=None, max_length=128)
+    evidenceFingerprint: str = Field(min_length=1, max_length=128)
+    goal: str = Field(min_length=1, max_length=200)
+    constraints: tuple[str, ...] = Field(default_factory=tuple, max_length=50)
+    completedTaskIds: tuple[str, ...] = Field(default_factory=tuple, max_length=50)
+    pendingTaskIds: tuple[str, ...] = Field(default_factory=tuple, max_length=50)
+    acceptedEvidenceRefs: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
+    rejectedEvidenceRefs: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
+    nextAction: Literal["retrieve", "compose", "validate", "stop"]
+
+    @field_validator(
+        "constraints", "completedTaskIds", "pendingTaskIds", "acceptedEvidenceRefs", "rejectedEvidenceRefs",
+        mode="before",
+    )
+    @classmethod
+    def bounded_references(cls, value: Any) -> tuple[str, ...]:
+        return _stable_unique_strings(value)
+
+    @model_validator(mode="after")
+    def validate_disjoint_sets(self) -> TaskProgressCheckpoint:
+        if set(self.completedTaskIds) & set(self.pendingTaskIds):
+            raise ValueError("task cannot be both completed and pending")
+        if set(self.acceptedEvidenceRefs) & set(self.rejectedEvidenceRefs):
+            raise ValueError("evidence cannot be both accepted and rejected")
+        return self
+
+    def trace_summary(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": self.schemaVersion, "fingerprint": _model_fingerprint(self),
+            "planRevision": self.planRevision, "completedTaskCount": len(self.completedTaskIds),
+            "pendingTaskCount": len(self.pendingTaskIds), "acceptedEvidenceCount": len(self.acceptedEvidenceRefs),
+            "rejectedEvidenceCount": len(self.rejectedEvidenceRefs), "nextAction": self.nextAction,
+        }
+
+
 class HarnessRunFingerprint(FrozenContract):
     modelName: str = Field(min_length=1, max_length=128)
     harnessVersion: str = Field(min_length=1, max_length=128)
@@ -690,6 +826,13 @@ class HarnessRunFingerprint(FrozenContract):
 
 
 __all__ = [
+    "AnswerValidationIssue",
+    "AnswerValidationResult",
+    "HarnessIntelligencePolicy",
+    "RepairProposal",
+    "TaskProgressCheckpoint",
+    "ToolObservationSummary",
+    "ToolProgressAttempt",
     "AuthorizationDecision",
     "CapabilityLimits",
     "CapabilityPlan",

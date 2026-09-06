@@ -1804,6 +1804,27 @@ class CurrentStructuredRankTrendKnowledgeClient(FakeKnowledgeClient):
         ]
 
 
+class MultiCategoryRankKnowledgeClient(CurrentStructuredRankTrendKnowledgeClient):
+    missing_category: str | None = None
+
+    async def lookup_rank(self, **kwargs) -> list[RankLookupResult]:
+        results = await super().lookup_rank(**kwargs)
+        category = kwargs.get("category")
+        if category == self.missing_category:
+            return []
+        if category == "都市日常":
+            return [result.model_copy(update={
+                "rankId": result.rankId + 10000,
+                "bookId": result.bookId + 10000,
+                "snapshotId": 9401,
+                "category": "都市日常",
+                "boardName": "都市日常",
+                "boardCode": "urban-daily",
+                "sourceLabel": "男频新书榜 / 都市日常",
+            }) for result in results]
+        return results
+
+
 class HistoricalRangeRankKnowledgeClient(FakeKnowledgeClient):
     def __init__(self) -> None:
         super().__init__()
@@ -7346,7 +7367,7 @@ class NovelResearchAgentTest(unittest.IsolatedAsyncioTestCase):
     async def test_should_compile_contextual_market_side_research_with_active_outline_goal(self) -> None:
         agent = NovelResearchAgent(knowledge_client=FakeKnowledgeClient())
         request = KnowledgeChatRequest(
-            question="看看最近男频都市脑洞新书榜",
+            question="结合刚才的方向，看看最近男频都市脑洞新书榜",
             conversationId="conversation-outline-harness",
             contextSummary=(
                 "最近意图：outline_generation\n"
@@ -7370,20 +7391,23 @@ class NovelResearchAgentTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(provider_call)
-        self.assertEqual(Intent.market_scan, decision.primaryIntent)
-        self.assertEqual([], decision.subIntents)
+        self.assertEqual(Intent.mixed_creation_research, decision.primaryIntent)
+        self.assertEqual(
+            [Intent.market_scan, Intent.outline_building],
+            decision.subIntents,
+        )
         capability_ids = {
             capability.capabilityId
             for capability in capability_plan.capabilityRequests
         }
         self.assertIn("market.read", capability_ids)
-        self.assertNotIn("creation.outline", capability_ids)
+        self.assertIn("creation.outline", capability_ids)
         self.assertEqual(data_access_plan.fingerprint, capability_plan.dataAccessPlanHash)
         self.assertEqual((), capability_plan.dataAccessRequestIds)
         self.assertNotIn("governed-data-access", capability_plan.skillCandidateIds)
-        self.assertEqual("RETRIEVE", capability_plan.executionPath.value)
+        self.assertEqual("COMPLEX", capability_plan.executionPath.value)
         self.assertEqual(
-            [TaskType.market_scan],
+            [TaskType.market_scan, TaskType.outline_building],
             [task.type for task in task_graph.tasks],
         )
 
@@ -9347,7 +9371,7 @@ class NovelResearchAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("证据不足", response.answer)
         self.assertIn("index_book", response.actions)
 
-    async def test_should_return_insufficient_evidence_when_evidence_search_fails(self) -> None:
+    async def test_should_report_retrieval_failure_without_claiming_evidence_is_missing(self) -> None:
         client = FailingEvidenceKnowledgeClient()
         agent = NovelResearchAgent(knowledge_client=client)
         request = KnowledgeChatRequest(
@@ -9360,10 +9384,125 @@ class NovelResearchAgentTest(unittest.IsolatedAsyncioTestCase):
         response = await agent.run(request)
 
         self.assertEqual("error", response.status)
-        self.assertEqual("retrieval_failed", response.resultJson["answerStatus"])
         self.assertEqual([], response.sources)
-        self.assertIn("evidence_search_failed", response.actions)
+        self.assertNotIn("index_book", response.actions)
+        self.assertEqual("retrieval_failed", response.resultJson.get("answerStatus"))
+        self.assertIn("检索服务", response.answer)
+        self.assertNotIn("没有检索到", response.answer)
         self.assertEqual(101, response.resultJson["bookId"])
+
+    async def test_mixed_creation_failure_does_not_invent_an_unrequested_premise(self) -> None:
+        agent = NovelResearchAgent(knowledge_client=FakeKnowledgeClient(), provider_client=FailingAnswerProvider())
+        request = KnowledgeChatRequest(question="根据科幻榜单分析趋势，再给一些创作建议")
+        state = {"request": request, "context_bundle": agent.context_assembler.assemble(request), "memory_context": {}}
+
+        answer, fallback_used = await agent._compose_answer(request, [], "mixed_creation", state=state)
+
+        self.assertTrue(fallback_used)
+        self.assertIn("未能完成", answer)
+        for unrelated in ("诸天万界", "三端一体", "特效外包", "第一章"):
+            self.assertNotIn(unrelated, answer)
+        self.assertIn("provider_exception", state.get("degradation_reasons", []))
+
+    async def test_two_category_market_query_keeps_separately_verified_snapshots(self) -> None:
+        client = MultiCategoryRankKnowledgeClient()
+        agent = NovelResearchAgent(knowledge_client=client, provider_client=FakeAnswerProvider())
+        request = KnowledgeChatRequest(
+            question="当前男频都市脑洞和都市日常的榜单趋势如何？",
+            limits={"rankLimit": 3},
+        )
+
+        response = await agent.run(request)
+
+        self.assertEqual("answered", response.status, response.resultJson.get("sourcePolicy"))
+        self.assertEqual({"都市脑洞", "都市日常"}, {call["category"] for call in client.lookup_rank_calls})
+        self.assertEqual({"都市脑洞", "都市日常"}, {source.category for source in response.sources})
+        policy = response.resultJson.get("sourcePolicy") or {}
+        self.assertEqual(["都市脑洞", "都市日常"], policy.get("requestedCategories"))
+        self.assertEqual([], policy.get("missingCategories"))
+        self.assertEqual(2, len(policy.get("categoryPolicies") or {}))
+        self.assertFalse(policy.get("comparisonAvailable"))
+        self.assertIn("都市脑洞", response.answer)
+        self.assertIn("都市日常", response.answer)
+        self.assertNotIn("同一最新快照", response.answer)
+        self.assertTrue(any(run.get("plane") == "task_graph" for run in response.resultJson.get("toolRuns", [])))
+
+        analysis = agent._market_snapshot_analysis_payload(response.sources, requested_current_count=3)
+        self.assertEqual({"都市脑洞", "都市日常"}, set(analysis.get("categories", {})))
+        self.assertFalse(analysis["comparisonSupported"])
+        self.assertEqual(6, analysis["currentCount"])
+
+    async def test_two_category_market_query_reports_missing_category(self) -> None:
+        client = MultiCategoryRankKnowledgeClient()
+        client.missing_category = "都市日常"
+        agent = NovelResearchAgent(knowledge_client=client, provider_client=FakeAnswerProvider())
+
+        response = await agent.run(KnowledgeChatRequest(
+            question="当前男频都市脑洞和都市日常的榜单趋势如何？",
+            limits={"rankLimit": 3},
+        ))
+
+        self.assertEqual("insufficient_evidence", response.status)
+        self.assertIn("都市日常", response.answer)
+        policy = response.resultJson.get("sourcePolicy") or {}
+        self.assertEqual(["都市日常"], policy.get("missingCategories"))
+
+    async def test_two_category_rank_fact_does_not_return_only_the_first_board(self) -> None:
+        client = MultiCategoryRankKnowledgeClient()
+        agent = NovelResearchAgent(knowledge_client=client, provider_client=FakeAnswerProvider())
+
+        response = await agent.run(KnowledgeChatRequest(
+            question="当前男频都市脑洞和都市日常榜单第一分别是哪些书？",
+            limits={"rankLimit": 3},
+        ))
+
+        self.assertEqual("answered", response.status)
+        self.assertEqual({"都市脑洞", "都市日常"}, {source.category for source in response.sources})
+        self.assertIn("都市脑洞", response.answer)
+        self.assertIn("都市日常", response.answer)
+
+    async def test_two_category_market_query_shares_tool_budget(self) -> None:
+        client = MultiCategoryRankKnowledgeClient()
+        agent = NovelResearchAgent(knowledge_client=client, provider_client=FakeAnswerProvider())
+
+        with run_budget_scope(RunBudget(mode="fast", max_total_tokens=128_000,
+                                       max_tool_calls=1, max_delegations=1)):
+            response = await agent.run(KnowledgeChatRequest(
+                question="当前男频都市脑洞和都市日常的榜单趋势如何？",
+                limits={"rankLimit": 3},
+            ))
+
+        self.assertLessEqual(len(client.lookup_rank_calls), 1)
+        self.assertNotEqual("answered", response.status)
+        self.assertIn("都市日常", response.resultJson.get("sourcePolicy", {}).get("missingCategories", []))
+
+    async def test_two_category_market_query_reports_second_board_timeout(self) -> None:
+        class TimeoutClient(MultiCategoryRankKnowledgeClient):
+            async def lookup_rank(self, **kwargs):
+                if kwargs.get("category") == "都市日常":
+                    raise TimeoutError("synthetic timeout")
+                return await super().lookup_rank(**kwargs)
+
+        agent = NovelResearchAgent(knowledge_client=TimeoutClient(), provider_client=FakeAnswerProvider())
+        response = await agent.run(KnowledgeChatRequest(
+            question="当前男频都市脑洞和都市日常的榜单趋势如何？",
+            limits={"rankLimit": 3},
+        ))
+
+        self.assertNotEqual("answered", response.status)
+        self.assertIn("都市日常", response.answer)
+        self.assertEqual("failed", response.resultJson.get("retrievalDiagnostics", {}).get("status"))
+
+    async def test_two_category_query_rejects_wrong_category_evidence(self) -> None:
+        agent = NovelResearchAgent(
+            knowledge_client=CurrentStructuredRankTrendKnowledgeClient(), provider_client=FakeAnswerProvider(),
+        )
+        response = await agent.run(KnowledgeChatRequest(
+            question="当前男频都市脑洞和都市日常的榜单趋势如何？", limits={"rankLimit": 3},
+        ))
+
+        self.assertNotEqual("answered", response.status)
+        self.assertIn("都市日常", response.resultJson.get("sourcePolicy", {}).get("missingCategories", []))
 
     async def test_should_refuse_out_of_scope_question_with_ai_guardrail(self) -> None:
         client = FakeKnowledgeClient()

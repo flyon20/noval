@@ -19,7 +19,7 @@ from app.services.harness.cancellation import (
     cancellation_scope,
     current_cancellation_token,
 )
-from app.services.harness.contracts import EvidenceCommit
+from app.services.harness.contracts import EvidenceCommit, HarnessIntelligencePolicy
 from app.services.harness.context_compaction import (
     ContextCompactionResult,
     ContextCompactor,
@@ -30,7 +30,7 @@ from app.services.harness.data_access_planner import DataAccessPlanner
 from app.services.harness.execution_path import ExecutionPathRouter
 from app.services.harness.provider_dispatch_scope import ProviderCapabilities, provider_dispatch_scope
 from app.services.harness.retrieval_planner import ProjectRetrievalPlanner
-from app.services.harness.tool_ledger import run_tool_ledger_scope
+from app.services.harness.tool_ledger import current_run_tool_ledger, run_tool_ledger_scope
 from app.services.harness.validators import PromptInjectionValidator
 from app.services.intents import IntentRouter
 from app.services.runtime import AgentSupervisor, ContextAssembler, IntentAgent, MemoryAgent, MemoryExtractor
@@ -263,6 +263,10 @@ class WebnovelHarness:
             )
         else:
             runtime_config = dict(checkpoint[1].get("runtime_config") or {})
+        policy = HarnessIntelligencePolicy.from_runtime_config(runtime_config)
+        ledger = current_run_tool_ledger()
+        if ledger is not None:
+            ledger.progress_control_enabled = policy.harnessEvidenceRepairEnabled
         raw_profiles = runtime_config.get("providerProfiles")
         if raw_profiles is None:
             raw_profiles = []

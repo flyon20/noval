@@ -312,6 +312,9 @@ describe('AdminAgentGovernanceView', () => {
     await wrapper.find('[data-test="save-runtime-maxParallelSpecialists"]').trigger('click');
     await wrapper.get('input[aria-label="专家工具调用"]').setValue(true);
     await wrapper.find('[data-test="save-runtime-specialistMcpEnabled"]').trigger('click');
+    expect((wrapper.get('input[aria-label="受限证据修复"]').element as HTMLInputElement).checked).toBe(false);
+    await wrapper.get('input[aria-label="终稿规则复核"]').setValue(true);
+    await wrapper.get('[data-test="save-runtime-harnessAnswerValidationEnabled"]').trigger('click');
     await wrapper.find('[data-test="expert-enabled-market_scan"]').setValue(false);
     await wrapper.find('[data-test="expert-category-market_scan"]').setValue('Delegated');
     await wrapper.find('[data-test="save-expert-market_scan"]').trigger('click');
@@ -319,6 +322,7 @@ describe('AdminAgentGovernanceView', () => {
 
     expect(knowledgeApi.updateAgentRuntimeConfig).toHaveBeenCalledWith('maxParallelSpecialists', { value: '1' });
     expect(knowledgeApi.updateAgentRuntimeConfig).toHaveBeenCalledWith('specialistMcpEnabled', { value: 'true' });
+    expect(knowledgeApi.updateAgentRuntimeConfig).toHaveBeenCalledWith('harnessAnswerValidationEnabled', { value: 'true' });
     expect((wrapper.get('input[aria-label="专家工具调用"]').element as HTMLInputElement).checked).toBe(true);
     expect(knowledgeApi.updateAgentExpert).toHaveBeenCalledWith('market_scan', expect.objectContaining({
       enabled: false,

@@ -49,7 +49,7 @@ function getIcon(name: string) {
   left: 12px;
   right: 12px;
   height: var(--bottom-nav-height);
-  padding: 0.35rem 0.4rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
+  padding: 0.25rem 0.4rem;
   border: 1px solid color-mix(in srgb, var(--color-border-strong) 82%, rgba(255, 255, 255, 0.12));
   border-radius: 1.6rem;
   background:
@@ -67,8 +67,8 @@ function getIcon(name: string) {
 .app-bottom-nav__indicator {
   position: absolute;
   z-index: 0;
-  top: 0.35rem;
-  bottom: calc(0.35rem + env(safe-area-inset-bottom, 0px));
+  top: 0.25rem;
+  bottom: 0.25rem;
   left: 0.4rem;
   width: calc((100% - 0.8rem) / 5);
   border: 1px solid color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
@@ -120,13 +120,13 @@ function getIcon(name: string) {
 }
 
 .app-bottom-nav__link.is-primary {
-  transform: translateY(-7px);
+  transform: none;
 }
 
 .app-bottom-nav__link.is-primary .app-bottom-nav__icon {
-  flex: 0 0 46px;
-  width: 46px;
-  height: 46px;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
   aspect-ratio: 1;
   border-radius: 999px;
   color: white;

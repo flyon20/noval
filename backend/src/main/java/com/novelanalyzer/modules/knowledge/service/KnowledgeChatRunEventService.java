@@ -36,7 +36,7 @@ public class KnowledgeChatRunEventService {
     );
     private static final Set<String> SEMANTIC_CHECKPOINT_EVENT_TYPES = Set.of(
         "MODEL_PREPARED", "MODEL_COMMITTED", "MODEL_UNKNOWN",
-        "TOOL_PREPARED", "TOOL_COMMITTED", "TOOL_UNKNOWN", "TOOL_INVALIDATED"
+        "TOOL_PREPARED", "TOOL_COMMITTED", "TOOL_UNKNOWN", "TOOL_INVALIDATED", "TOOL_PROGRESS", "HARNESS_REPAIR"
     );
 
     private final JdbcTemplate jdbcTemplate;
@@ -136,7 +136,7 @@ public class KnowledgeChatRunEventService {
                 select event_id, run_id, sequence_no, event_type, event_idempotency_key,
                        case when event_type in (
                            'MODEL_PREPARED', 'MODEL_COMMITTED', 'MODEL_UNKNOWN',
-                           'TOOL_PREPARED', 'TOOL_COMMITTED', 'TOOL_UNKNOWN', 'TOOL_INVALIDATED'
+                           'TOOL_PREPARED', 'TOOL_COMMITTED', 'TOOL_UNKNOWN', 'TOOL_INVALIDATED', 'TOOL_PROGRESS', 'HARNESS_REPAIR'
                        ) then '{"internal":true}' else payload end as payload,
                        created_at
                 from ai_chat_run_event
@@ -168,6 +168,7 @@ public class KnowledgeChatRunEventService {
         if (!SEMANTIC_CHECKPOINT_EVENT_TYPES.contains(normalizedEventType)) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "unsupported semantic checkpoint event type");
         }
+        validateHarnessCheckpoint(normalizedUserId, normalizedRunId, normalizedEventType, payload);
         KnowledgeChatRunEventVO event = appendOwnedTransactional(
             normalizedUserId,
             normalizedRunId,
@@ -212,7 +213,7 @@ public class KnowledgeChatRunEventService {
                 where run_id = ? and sequence_no > ?
                   and event_type in (
                       'MODEL_PREPARED', 'MODEL_COMMITTED', 'MODEL_UNKNOWN',
-                      'TOOL_PREPARED', 'TOOL_COMMITTED', 'TOOL_UNKNOWN', 'TOOL_INVALIDATED'
+                      'TOOL_PREPARED', 'TOOL_COMMITTED', 'TOOL_UNKNOWN', 'TOOL_INVALIDATED', 'TOOL_PROGRESS', 'HARNESS_REPAIR'
                   )
                 order by sequence_no asc
                 limit ?
@@ -222,6 +223,30 @@ public class KnowledgeChatRunEventService {
             safeAfterSequence,
             safeLimit
         );
+    }
+
+    private void validateHarnessCheckpoint(Long userId, String runId, String eventType, Object payload) {
+        if (!Set.of("TOOL_PROGRESS", "HARNESS_REPAIR").contains(eventType)) return;
+        if (!(payload instanceof Map<?, ?> values)
+            || !runId.equals(String.valueOf(values.get("runId")))
+            || !userId.toString().equals(String.valueOf(values.get("userId")))
+            || !(values.get("semanticKey") instanceof String semanticKey)
+            || semanticKey.isBlank() || semanticKey.length() > 128) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "invalid harness checkpoint identity");
+        }
+        if ("HARNESS_REPAIR".equals(eventType)) {
+            if (!"harness-repair-slot-v1".equals(values.get("schemaVersion")) || !Boolean.TRUE.equals(values.get("used"))) {
+                throw new BusinessException(ResultCode.BAD_REQUEST, "invalid harness repair checkpoint");
+            }
+            return;
+        }
+        if (!(values.get("progress") instanceof Map<?, ?> progress)
+            || !"tool-progress-v1".equals(progress.get("schemaVersion"))
+            || !String.valueOf(progress.get("requestKey")).matches("progress_request_[0-9a-f]{24}")
+            || !String.valueOf(progress.get("attemptId")).matches("[0-9a-f]{24}")
+            || !(progress.get("ordinal") instanceof Integer ordinal) || ordinal < 1 || ordinal > 3) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "invalid tool progress checkpoint");
+        }
     }
 
     private KnowledgeChatRunEventVO appendOwnedTransactional(Long userId,

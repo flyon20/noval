@@ -302,6 +302,19 @@ class IntentRouterTest(unittest.TestCase):
         self.assertIn(Intent.opening_strategy, decision.subIntents)
         self.assertNotIn(Intent.inspiration_expand, decision.subIntents)
 
+    def test_explicit_market_scope_wins_over_old_scope(self) -> None:
+        decision = classify(
+            "番茄男频都市日常榜单趋势如何？",
+            context_summary="此前讨论起点女频玄幻榜单",
+        )
+        self.assertEqual("番茄", decision.entities.get("platform"))
+        self.assertEqual("男频", decision.entities.get("channel"))
+        self.assertEqual("都市日常", decision.entities.get("category"))
+
+    def test_market_question_preserves_both_explicit_categories(self) -> None:
+        decision = classify("当前男频都市脑洞和都市日常的榜单趋势如何？")
+        self.assertEqual(["都市脑洞", "都市日常"], decision.entities.get("categories"))
+
     def test_multintent_male_urban_board_without_platform_routes_to_mixed(self) -> None:
         decision = classify("鍏堢湅鐢烽閮藉競鑴戞礊鏂颁功姒淭op10锛屽啀甯垜寮€涓€鏈悓棰樻潗鏂颁功")
 

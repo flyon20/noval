@@ -33,6 +33,32 @@ def _envelope(*operations: str, entities: dict | None = None) -> IntentEnvelope:
     )
 
 
+def test_default_market_plan_keeps_each_explicit_category_separate() -> None:
+    envelope = _envelope("market_scan", entities={
+        "category": "都市脑洞", "categories": ["都市脑洞", "都市日常"],
+    })
+
+    plan = DataAccessPlanner().plan(envelope, semantic_query="compare the requested categories")
+
+    assert len(plan.requests) == 2
+    assert len({request.requestId for request in plan.requests}) == 2
+    assert [
+        item.value for request in plan.requests for item in request.filters if item.field == "category"
+    ] == ["都市脑洞", "都市日常"]
+
+
+def test_multi_category_plan_reports_overflow_without_exceeding_request_budget() -> None:
+    envelope = _envelope("market_scan", "market_research", entities={
+        "categories": [f"category-{index}" for index in range(8)],
+    })
+
+    plan = DataAccessPlanner().plan(envelope, semantic_query="compare all categories")
+
+    assert len(plan.requests) == 12
+    assert plan.rejectedProposalCount == 4
+    assert "data_access_request_limit_exceeded" in plan.reasonCodes
+
+
 def test_llm_semantic_proposal_is_bounded_and_compiles_to_existing_tools() -> None:
     question = "Why is this topic absent from the recent male-new list; compare the latest six snapshots."
     envelope = _envelope(

@@ -28,6 +28,7 @@ class AgentRunContext:
     actions: list[str] = field(default_factory=list)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     harness_system_prefix: str = ""
+    targeted_evidence_enabled: bool = False
 
 
 @dataclass(slots=True)
@@ -93,6 +94,8 @@ class BaseSpecialistAgent:
         )
 
     def _default_evidence_refs(self, context: AgentRunContext) -> tuple[str, ...]:
+        if context.targeted_evidence_enabled:
+            return tuple(f"source:{index}" for index, _source in self._targeted_sources(context)) or ("user_request",)
         if not context.sources:
             return ("user_request",)
         refs: list[str] = []
@@ -297,7 +300,8 @@ class BaseSpecialistAgent:
         max_prompt_chars: int | None = None,
     ) -> list[dict[str, str]]:
         evidence: list[dict[str, Any]] = []
-        for index, source in enumerate(context.sources[:6], start=1):
+        selected_sources = self._targeted_sources(context) if context.targeted_evidence_enabled else list(enumerate(context.sources[:6], start=1))
+        for index, source in selected_sources:
             evidence.append({
                 "citation": index,
                 "bookName": source.bookName or source.title or "source",
@@ -305,6 +309,16 @@ class BaseSpecialistAgent:
                 "sourceType": source.sourceType or source.analysisType,
                 "preview": source.preview or "",
             })
+            if context.targeted_evidence_enabled:
+                material = source.material or source.preview or ""
+                evidence[-1].update({
+                    "evidenceRef": f"source:{index}", "projectId": source.projectId, "workId": source.workId,
+                    "chapterId": source.chapterId, "chapterVersion": source.chapterVersion,
+                    "generationId": source.generationId, "contentHash": source.contentHash,
+                    "contentKind": "excerpt" if source.material else "preview",
+                    "preview": material[:2000], "truncated": len(material) > 2000,
+                    "semanticStatus": "unknown",
+                })
         specialist_contract = json.dumps(
             {
                 "agent": self.agent_name,
@@ -369,6 +383,26 @@ class BaseSpecialistAgent:
         if total_budget is not None:
             self._fit_messages_to_prompt_budget(messages, total_budget)
         return messages
+
+    def _targeted_sources(self, context: AgentRunContext) -> list[tuple[int, KnowledgeSource]]:
+        question = context.request.question.casefold()
+        ranked = sorted(enumerate(context.sources, start=1), key=lambda item: (
+            -int(bool(item[1].bookName and item[1].bookName.casefold() in question)),
+            -int(bool(item[1].material)),
+            -int(bool(item[1].rankNo is not None and "market" in self.agent_name)),
+            item[0],
+        ))
+        selected: list[tuple[int, KnowledgeSource]] = []
+        groups: set[tuple[Any, ...]] = set()
+        for index, source in ranked:
+            group = (source.projectId, source.workId, source.bookId, source.bookName)
+            if group not in groups:
+                groups.add(group)
+                selected.append((index, source))
+            if len(selected) == 6:
+                return selected
+        chosen = {index for index, _source in selected}
+        return (selected + [item for item in ranked if item[0] not in chosen])[:6]
 
     @classmethod
     def _fit_messages_to_prompt_budget(

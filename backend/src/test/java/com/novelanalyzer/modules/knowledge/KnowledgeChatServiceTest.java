@@ -10,6 +10,7 @@ import com.novelanalyzer.modules.knowledge.dto.KnowledgeChatRequest;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeChatService;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeIndexJobExecutor;
 import com.novelanalyzer.modules.knowledge.vo.KnowledgeChatResponseVO;
+import com.novelanalyzer.modules.system.service.AgentResourcePressureService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -114,8 +115,12 @@ class KnowledgeChatServiceTest {
     @MockBean
     private QdrantClient qdrantClient;
 
+    @MockBean
+    private AgentResourcePressureService resourcePressureService;
+
     @BeforeEach
     void prepareState() {
+        when(resourcePressureService.shouldRejectDeepRun()).thenReturn(false);
         jdbcTemplate.update("UPDATE sys_user SET phone = ? WHERE id = 1", ADMIN_PHONE);
         try {
             RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();

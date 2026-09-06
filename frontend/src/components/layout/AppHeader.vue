@@ -136,6 +136,7 @@ onBeforeUnmount(() => {
 .app-header {
   --app-header-mobile-height: 56px;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -156,6 +157,7 @@ onBeforeUnmount(() => {
 
 .app-header__identity {
   display: grid;
+  min-width: 0;
   gap: 0.2rem;
 }
 
@@ -175,6 +177,10 @@ onBeforeUnmount(() => {
 }
 
 .app-header__user {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-text-muted);
   font-size: 0.92rem;
 }
@@ -210,6 +216,10 @@ onBeforeUnmount(() => {
 
 .app-header__desktop-only {
   display: contents;
+}
+
+.app-header__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 .app-header__mobile-actions {

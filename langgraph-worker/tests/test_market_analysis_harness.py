@@ -528,6 +528,7 @@ class MarketAnalysisHarnessTest(unittest.IsolatedAsyncioTestCase):
             question="男频都市脑洞新书榜最近热门题材",
             mode="research",
             reasoningMode="deep",
+            reasoningEffort="high",
             contextSummary="用户项目是五毛特效订单召唤诸天人物打工。",
         )
 
@@ -538,7 +539,8 @@ class MarketAnalysisHarnessTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("answered_with_evidence", done["resultJson"]["answerStatus"])
         self.assertEqual(2, len(provider.invoke_calls))
         self.assertEqual(settings.intent_model, provider.invoke_calls[0]["model"])
-        self.assertEqual("fast", provider.invoke_calls[0]["reasoning_mode"])
+        self.assertTrue(all(call["reasoning_mode"] == "deep" for call in provider.invoke_calls))
+        self.assertTrue(all(call["reasoning_effort"] == "high" for call in provider.invoke_calls))
         self.assertEqual(100, client.lookup_rank_calls[0]["limit"])
         self.assertEqual("time_window", client.lookup_rank_calls[0]["freshness"])
         self.assertTrue(client.lookup_rank_calls[0]["allow_historical"])

@@ -2020,5 +2020,11 @@ watch(
   .rank-page__snapshot {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .rank-page__scroll-top {
+    right: 0.75rem;
+    bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 1rem);
+    min-height: 44px;
+  }
 }
 </style>

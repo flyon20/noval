@@ -105,6 +105,10 @@ public class KnowledgeAgentGovernanceService {
         vo.setEnableEvidenceCache(readBoolean("enableEvidenceCache"));
         vo.setEnableSpecialistCache(readBoolean("enableSpecialistCache"));
         vo.setSpecialistMcpEnabled(readBoolean("specialistMcpEnabled"));
+        vo.setHarnessEvidenceRepairEnabled(readBoolean("harnessEvidenceRepairEnabled"));
+        vo.setHarnessAnswerValidationEnabled(readBoolean("harnessAnswerValidationEnabled"));
+        vo.setHarnessTaskCheckpointEnabled(readBoolean("harnessTaskCheckpointEnabled"));
+        vo.setHarnessStageSkillsEnabled(readBoolean("harnessStageSkillsEnabled"));
         vo.setMaxPromptCharsPerExpert(readInt("maxPromptCharsPerExpert"));
         vo.setMaxSkillPromptChars(readInt("maxSkillPromptChars"));
         vo.setMaxEvidenceItems(readInt("maxEvidenceItems"));
@@ -1187,6 +1191,10 @@ public class KnowledgeAgentGovernanceService {
         add(settings, "enableEvidenceCache", "ai.agent.runtime.cache.evidence.enabled", "true", RuntimeValueType.BOOLEAN, 0, 0, "Enable EvidencePack cache");
         add(settings, "enableSpecialistCache", "ai.agent.runtime.cache.specialist.enabled", "false", RuntimeValueType.BOOLEAN, 0, 0, "Enable specialist report cache");
         add(settings, "specialistMcpEnabled", "ai.agent.runtime.specialist-mcp.enabled", "false", RuntimeValueType.BOOLEAN, 0, 0, "Allow eligible delegated specialists to call MCP tools");
+        add(settings, "harnessEvidenceRepairEnabled", "ai.agent.runtime.harness.evidence-repair.enabled", "false", RuntimeValueType.BOOLEAN, 0, 0, "Bounded evidence repair and tool progress control");
+        add(settings, "harnessAnswerValidationEnabled", "ai.agent.runtime.harness.answer-validation.enabled", "false", RuntimeValueType.BOOLEAN, 0, 0, "Deterministic answer validation without enabling model review");
+        add(settings, "harnessTaskCheckpointEnabled", "ai.agent.runtime.harness.task-checkpoint.enabled", "false", RuntimeValueType.BOOLEAN, 0, 0, "Derived task progress context");
+        add(settings, "harnessStageSkillsEnabled", "ai.agent.runtime.harness.stage-skills.enabled", "false", RuntimeValueType.BOOLEAN, 0, 0, "Stage Skill projection and targeted specialist evidence");
         add(settings, "maxPromptCharsPerExpert", "ai.agent.runtime.max-prompt-chars-per-expert", "0", RuntimeValueType.INTEGER, 0, 1000000, "Per-expert prompt ceiling; zero selects model-aware automatic sizing");
         add(settings, "maxSkillPromptChars", "ai.agent.runtime.max-skill-prompt-chars", "0", RuntimeValueType.INTEGER, 0, 1000000, "Dedicated Skill prompt character cap; zero disables the dedicated cap");
         add(settings, "maxEvidenceItems", "ai.agent.runtime.max-evidence-items", "30", RuntimeValueType.INTEGER, 1, 200, "Maximum evidence items exposed to answer synthesis");

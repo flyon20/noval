@@ -3,6 +3,7 @@ package com.novelanalyzer.modules.knowledge;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
+import com.novelanalyzer.common.context.TraceIdHolder;
 import com.novelanalyzer.config.KnowledgeProperties;
 import com.novelanalyzer.modules.knowledge.dto.KnowledgeChatRequest;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeChatApplicationService;
@@ -42,6 +43,7 @@ class KnowledgeChatApplicationServiceTest {
     @AfterEach
     void clearAuth() {
         AuthUserHolder.clear();
+        TraceIdHolder.clear();
     }
 
     @Test
@@ -53,7 +55,10 @@ class KnowledgeChatApplicationServiceTest {
                 "run-stream-rejected", true, null, "compat-worker", 1L
             ));
         when(chatService.streamChatForDurableCommit(any(), any(), any(BooleanSupplier.class)))
-            .thenThrow(new TaskRejectedException("stream executor saturated"));
+            .thenAnswer(invocation -> {
+                assertThat(TraceIdHolder.get()).isEqualTo("run-stream-rejected");
+                throw new TaskRejectedException("stream executor saturated");
+            });
         KnowledgeChatApplicationService service = new KnowledgeChatApplicationService(
             chatService,
             persistenceService,
@@ -64,9 +69,11 @@ class KnowledgeChatApplicationServiceTest {
         request.setQuestion("stream rejection");
         request.setConversationId("conv-stream-rejected");
         request.setRequestId("request-stream-rejected");
+        TraceIdHolder.set("http-stream-rejected");
 
         assertThatThrownBy(() -> service.streamChat(request))
             .isInstanceOf(TaskRejectedException.class);
+        assertThat(TraceIdHolder.get()).isEqualTo("http-stream-rejected");
 
         verify(persistenceService).completeFailedRun(
             eq("run-stream-rejected"),
@@ -89,7 +96,10 @@ class KnowledgeChatApplicationServiceTest {
         raw.setStatus("answered");
         raw.setAnswer("answer");
         raw.setResultJson(Map.of("traceId", "trace-postprocess"));
-        when(chatService.chatForDurableCommit(any(), any(BooleanSupplier.class))).thenReturn(raw);
+        when(chatService.chatForDurableCommit(any(), any(BooleanSupplier.class))).thenAnswer(invocation -> {
+            assertThat(TraceIdHolder.get()).isEqualTo("run-blocking-postprocess");
+            return raw;
+        });
         when(persistenceService.completeAnsweredRun(
             any(), any(), eq(1L), any(), any(), any(), anyInt()
         )).thenReturn(true);
@@ -111,8 +121,10 @@ class KnowledgeChatApplicationServiceTest {
         );
         ReflectionTestUtils.setField(service, "recoveryService", recoveryService);
         AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+        TraceIdHolder.set("http-blocking-postprocess");
 
         KnowledgeChatResponseVO response = service.chat(request("blocking postprocess"));
+        assertThat(TraceIdHolder.get()).isEqualTo("http-blocking-postprocess");
 
         assertThat(response.getResultJson())
             .containsEntry("postProcessingStatus", "completed")
@@ -148,6 +160,7 @@ class KnowledgeChatApplicationServiceTest {
         when(chatService.streamChatForDurableCommit(
             any(), any(), any(BooleanSupplier.class)
         )).thenAnswer(invocation -> {
+            assertThat(TraceIdHolder.get()).isEqualTo("run-stream-durable");
             KnowledgeChatService.StreamLifecycleListener listener = invocation.getArgument(1);
             listener.onDelta(" ");
             listener.onDelta("\ntext");
@@ -168,6 +181,7 @@ class KnowledgeChatApplicationServiceTest {
         KnowledgeChatRequest request = request("stream durable");
 
         service.streamChat(request);
+        assertThat(TraceIdHolder.get()).isNull();
 
         verify(persistenceService, times(2)).appendFencedEventAndSnapshot(
             eq("run-stream-durable"),
@@ -417,6 +431,34 @@ class KnowledgeChatApplicationServiceTest {
         );
         assertThat(payload.getAllValues().get(0)).containsEntry("delta", "a");
         assertThat(payload.getAllValues().get(1)).containsEntry("delta", "ab");
+    }
+
+    @Test
+    void shouldRestoreMissingTraceWhenBlockingWorkerFails() {
+        KnowledgeChatService chatService = mock(KnowledgeChatService.class);
+        KnowledgeChatPersistenceService persistenceService = mock(KnowledgeChatPersistenceService.class);
+        when(persistenceService.beginBlockingRun(any(), any(), any(), any()))
+            .thenReturn(new KnowledgeChatPersistenceService.BlockingRunStart(
+                "run-blocking-failed", true, null, "compat-worker", 1L
+            ));
+        when(chatService.chatForDurableCommit(any(), any(BooleanSupplier.class)))
+            .thenAnswer(invocation -> {
+                assertThat(TraceIdHolder.get()).isEqualTo("run-blocking-failed");
+                throw new IllegalStateException("worker unavailable");
+            });
+        KnowledgeChatApplicationService service = new KnowledgeChatApplicationService(
+            chatService, persistenceService, new ObjectMapper()
+        );
+        AuthUserHolder.set(AuthUser.of(7L, "writer", Set.of("USER")));
+
+        assertThatThrownBy(() -> service.chat(request("blocking failure")))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessage("worker unavailable");
+
+        assertThat(TraceIdHolder.get()).isNull();
+        verify(persistenceService).completeFailedRun(
+            "run-blocking-failed", "compat-worker", 1L, "worker unavailable"
+        );
     }
 
     private KnowledgeChatRequest request(String question) {

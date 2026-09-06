@@ -646,6 +646,30 @@ describe('KnowledgeChatView', () => {
     expect(wrapper.text()).toContain('记忆层 3');
     expect(wrapper.text()).toContain('Trace trace-context-1');
 
+    const contextTrigger = wrapper.get('[data-test="knowledge-context-trigger"]');
+    const contextPopover = wrapper.get('[data-test="knowledge-context-popover"]');
+    document.body.appendChild(wrapper.element);
+    try {
+      expect(contextTrigger.attributes('aria-expanded')).toBe('false');
+      expect(contextPopover.attributes('aria-hidden')).toBe('true');
+      await contextTrigger.trigger('click');
+      expect(contextTrigger.attributes('aria-expanded')).toBe('true');
+      expect(contextPopover.attributes('aria-hidden')).toBe('false');
+      await contextPopover.trigger('pointerdown');
+      expect(contextTrigger.attributes('aria-expanded')).toBe('true');
+      await wrapper.get('.knowledge-chat__messages').trigger('pointerdown');
+      expect(contextTrigger.attributes('aria-expanded')).toBe('false');
+      await contextTrigger.trigger('click');
+      (contextPopover.element as HTMLElement).focus();
+      await contextPopover.trigger('keydown', { key: 'Escape' });
+      await flushPromises();
+      expect(contextTrigger.attributes('aria-expanded')).toBe('false');
+      expect(contextPopover.attributes('tabindex')).toBe('-1');
+      expect(document.activeElement).toBe(contextTrigger.element);
+    } finally {
+      wrapper.element.remove();
+    }
+
     const saved = JSON.parse(window.localStorage.getItem('noval:knowledge-chat:draft:v1') || '{}');
     expect(saved.messages.at(-1).contextBudget.remainingRatio).toBeCloseTo(0.998766);
   });
@@ -1401,6 +1425,56 @@ describe('KnowledgeChatView', () => {
       reasoningEffort: 'xhigh',
       reasoningMode: 'deep',
     });
+  });
+
+  test('preserves the conversation, history and xhigh selection across durable followups', async () => {
+    mockModelOptions([GPT56_MODEL_OPTION]);
+    let runSequence = 0;
+    vi.mocked(knowledgeApi.startChatRun).mockImplementation(async (payload) => ({
+      data: {
+        code: 200,
+        message: 'success',
+        data: {
+          runId: `run-continuity-${++runSequence}`,
+          conversationId: payload.conversationId,
+          question: payload.question,
+          status: 'ANSWERED',
+          answer: 'Synthetic prior answer.',
+          resultJson: '{}',
+        },
+      },
+    }) as never);
+
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper
+      .find('[data-test="knowledge-reasoning-effort"] .el-segmented__group label:nth-of-type(5) input')
+      .setValue(true);
+    for (const question of ['Synthetic first question.', 'Synthetic followup question.']) {
+      await wrapper.find('[data-test="knowledge-question-input"] textarea').setValue(question);
+      await wrapper.find('[data-test="knowledge-send-button"]').trigger('click');
+      await flushPromises();
+      await flushPromises();
+    }
+
+    expect(knowledgeApi.streamChat).not.toHaveBeenCalled();
+    const calls = vi.mocked(knowledgeApi.startChatRun).mock.calls;
+    expect(calls).toHaveLength(2);
+    const first = calls[0][0];
+    const second = calls[1][0];
+    expect(first.conversationId).toEqual(expect.any(String));
+    expect(first.conversationId).toBeTruthy();
+    for (const payload of [first, second]) {
+      expect(payload).toMatchObject({
+        conversationId: first.conversationId,
+        modelKey: 'gpt-5.6-sol', reasoningMode: 'deep', reasoningEffort: 'xhigh',
+      });
+    }
+    expect(second.history).toEqual(expect.arrayContaining([
+      { role: 'user', content: 'Synthetic first question.' },
+      { role: 'assistant', content: 'Synthetic prior answer.' },
+    ]));
+    expect(second.history?.filter((message) => message.role === 'user' && message.content === second.question)).toHaveLength(1);
   });
 
   test('renders a thinking switch for providers that only expose an on/off contract', async () => {

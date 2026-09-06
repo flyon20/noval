@@ -526,6 +526,10 @@ export interface AgentRuntimeConfig {
   enableEvidenceCache?: boolean;
   enableSpecialistCache?: boolean;
   specialistMcpEnabled?: boolean;
+  harnessEvidenceRepairEnabled?: boolean;
+  harnessAnswerValidationEnabled?: boolean;
+  harnessTaskCheckpointEnabled?: boolean;
+  harnessStageSkillsEnabled?: boolean;
   maxPromptCharsPerExpert?: number;
   maxSkillPromptChars?: number;
   maxEvidenceItems?: number;

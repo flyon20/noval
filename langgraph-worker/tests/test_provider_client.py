@@ -1111,12 +1111,12 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
             "call_id": "call_old",
             "name": "project_search",
             "arguments": '{"query":"old clue"}',
-        }, payload["input"][1])
+        }, payload["input"][2])
         self.assertEqual({
             "type": "function_call_output",
             "call_id": "call_old",
             "output": "chapter 12",
-        }, payload["input"][2])
+        }, payload["input"][3])
         self.assertEqual("draft ready", result["content"])
         self.assertEqual("private reasoning", result["reasoning_content"])
         self.assertEqual([{"id": "call_new", "name": "project_search", "arguments": {"query": "next clue"}}], result["tool_calls"])
@@ -1715,7 +1715,7 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
         gpt_profile = ProviderProfile(
             profile_key="selected-gpt",
             profile_version="v1",
-            endpoint="https://api.openai.com/v1",
+            endpoint="https://gpt-gateway.example/v1",
             model="gpt-5.6-sol",
             protocol="responses",
         )
@@ -1729,7 +1729,7 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
         gpt_chat_profile = ProviderProfile(
             profile_key="selected-gpt-chat",
             profile_version="v1",
-            endpoint="https://api.openai.com/v1",
+            endpoint="https://gpt-gateway.example/v1",
             model="gpt-5.6-sol",
             protocol="chat_completions",
         )
@@ -1787,12 +1787,9 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("gpt-5.6-sol", gpt_payload["model"])
         self.assertEqual("stable-affinity", gpt_payload["prompt_cache_key"])
-        self.assertEqual({"mode": "implicit", "ttl": "30m"}, gpt_payload["prompt_cache_options"])
-        self.assertNotIn("instructions", gpt_payload)
-        self.assertEqual(
-            {"mode": "explicit"},
-            gpt_payload["input"][0]["content"][0]["prompt_cache_breakpoint"],
-        )
+        self.assertNotIn("prompt_cache_options", gpt_payload)
+        self.assertEqual("stable instructions", gpt_payload["instructions"])
+        self.assertNotIn("prompt_cache_breakpoint", json.dumps(gpt_payload))
         self.assertNotIn("user", gpt_payload)
         self.assertEqual("deepseek-v4-pro", deepseek_payload["model"])
         self.assertNotIn("prompt_cache_key", deepseek_payload)
@@ -1803,19 +1800,35 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("prompt_cache_key", unknown_payload)
         self.assertNotIn("user", unknown_payload)
 
-        gpt_snapshot = client._cache_continuity_snapshot(
-            gpt_payload,
-            "responses",
-            provider_profile=gpt_profile,
-        )
+        gpt_snapshot = client._cache_continuity_snapshot(gpt_payload, "responses")
         deepseek_snapshot = client._cache_continuity_snapshot(deepseek_payload, "responses")
         unknown_snapshot = client._cache_continuity_snapshot(unknown_payload, "responses")
         self.assertEqual("prompt_cache_key", gpt_snapshot["cacheIdentityMode"])
         self.assertEqual("provider_user", deepseek_snapshot["cacheIdentityMode"])
         self.assertEqual("none", unknown_snapshot["cacheIdentityMode"])
-        self.assertEqual("openai_gpt_5_6", gpt_snapshot["promptCacheStrategy"])
+        self.assertEqual("openai_legacy", gpt_snapshot["promptCacheStrategy"])
         self.assertEqual("deepseek_automatic", deepseek_snapshot["promptCacheStrategy"])
         self.assertEqual("none", unknown_snapshot["promptCacheStrategy"])
+
+    def test_gpt_cache_auto_detection_requires_a_known_official_endpoint(self) -> None:
+        client = OpenAICompatibleProviderClient()
+        for endpoint, modern in (
+            ("https://api.openai.com/v1", True),
+            ("https://api.openai.com.gateway.example/v1", False),
+            ("https://gateway.example/v1", False),
+        ):
+            with self.subTest(endpoint=endpoint), self._responses_settings(cache_key_models="gpt-*"):
+                profile = ProviderProfile(profile_key="selected", endpoint=endpoint,
+                                          model="gpt-5.6-sol", protocol="responses")
+                payload = client._build_payload(
+                    [{"role": "system", "content": "stable"}, {"role": "user", "content": "question"}],
+                    "deepseek-alias", None, 32, False, True,
+                    wire_api="responses", provider_profile=profile, cache_affinity="stable-affinity",
+                )
+                self.assertEqual(modern, "prompt_cache_options" in payload)
+                self.assertEqual(modern, "prompt_cache_breakpoint" in json.dumps(payload))
+                self.assertEqual("stable-affinity", payload["prompt_cache_key"])
+                self.assertNotIn("messages", payload)
 
     def test_responses_prompt_cache_capability_compiles_gpt56_legacy_deepseek_and_none(self) -> None:
         client = OpenAICompatibleProviderClient()

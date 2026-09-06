@@ -16,6 +16,27 @@ describe('AdminAgentTraceView', () => {
     vi.resetAllMocks();
   });
 
+  test.each(['failed', 'unknown', 'not_run'])('does not show revised as validated for %s', async (status) => {
+    vi.mocked(knowledgeApi.listAgentTraces).mockResolvedValue({ data: { data: {
+      page: 1, pageSize: 20, total: 1, hasNext: false, items: [{ id: 1, traceId: 'validation-trace' }],
+    } } } as never);
+    vi.mocked(knowledgeApi.getAgentTrace).mockResolvedValue({ data: { data: {
+      id: 1, traceId: 'validation-trace', resultJson: JSON.stringify({ harnessIntelligence: {
+        revised: true, validation: { status }, repairUsed: true, noProgressCount: 1,
+        goal: 'PRIVATE_GOAL', prompt: 'PRIVATE_PROMPT', taskProgress: { pendingTaskCount: 2 },
+      } }),
+    } } } as never);
+    const wrapper = mount(AdminAgentTraceView, { global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    await wrapper.get('[data-test="trace-row"]').trigger('click');
+    await flushPromises();
+    const section = wrapper.get('[data-test="harness-intelligence"]');
+    expect(section.text()).toContain('已修订');
+    expect(section.text()).not.toContain('规则通过');
+    expect(section.text()).not.toContain('PRIVATE_');
+    wrapper.unmount();
+  });
+
   test('renders trace list first and opens Chinese detail after row click', async () => {
     vi.mocked(knowledgeApi.listAgentTraces).mockResolvedValue({
       data: {

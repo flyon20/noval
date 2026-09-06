@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
 from app.models.agent_task import RunToolIdentity, ToolRun
+from app.services.harness.contracts import ToolProgressAttempt
 from app.services.harness.budget import BudgetExceededError, RunBudget, current_run_budget
 from app.services.harness.cancellation import (
     CancellationToken,
@@ -75,6 +76,9 @@ class _RunToolLedgerState:
     call_fingerprints: dict[str, str] = field(default_factory=dict)
     tool_generations: dict[str, int] = field(default_factory=dict)
     write_sequence: int = 0
+    progress_control_enabled: bool = False
+    progress_attempts: dict[str, dict[str, int]] = field(default_factory=dict)
+    evidence_repair_used: bool = False
 
 
 class RunToolLedger:
@@ -124,6 +128,32 @@ class RunToolLedger:
             checkpoint_writer=self._checkpoint_writer,
             _state=self._state,
         )
+
+    @property
+    def progress_control_enabled(self) -> bool:
+        return self._state.progress_control_enabled
+
+    @progress_control_enabled.setter
+    def progress_control_enabled(self, enabled: bool) -> None:
+        self._state.progress_control_enabled = enabled is True
+
+    @property
+    def evidence_repair_used(self) -> bool:
+        return self._state.evidence_repair_used
+
+    async def claim_evidence_repair(self) -> bool:
+        async with self._state.lock:
+            cancellation_checkpoint(self._cancellation_token or current_cancellation_token())
+            if self._state.evidence_repair_used:
+                return False
+            semantic_key = "repair_" + self._digest(self.identity.dedupe_scope_key)
+            await self._write_checkpoint("HARNESS_REPAIR", semantic_key, {
+                "schemaVersion": "harness-repair-slot-v1", "semanticKey": semantic_key,
+                "runId": self.identity.runId, "userId": self.identity.userId,
+                "projectId": self.identity.projectId, "used": True,
+            })
+            self._state.evidence_repair_used = True
+            return True
 
     def for_project_scope(self, project_id: Any, *, route: Any | None = None) -> "RunToolLedger":
         identity = RunToolIdentity(
@@ -189,6 +219,7 @@ class RunToolLedger:
         identity_arguments: Mapping[str, Any] | None = None,
         secret_input_keys: set[str] | tuple[str, ...] | list[str] | None = None,
         secret_output_keys: set[str] | tuple[str, ...] | list[str] | None = None,
+        track_progress: bool = False,
     ) -> ToolRun:
         if route is not None:
             routed = self.for_route(route)
@@ -206,6 +237,7 @@ class RunToolLedger:
                     identity_arguments=identity_arguments,
                     secret_input_keys=secret_input_keys,
                     secret_output_keys=secret_output_keys,
+                    track_progress=track_progress,
                 )
         normalized_access = self._normalize_access(access)
         normalized_tool_name = self._normalize_tool_name(name)
@@ -284,6 +316,20 @@ class RunToolLedger:
                 reusable,
             )
             tool_generation = self._state.tool_generations.get(normalized_tool_name, 0)
+            if track_progress:
+                cancellation_checkpoint(active_cancellation_token)
+                ordinal = await self._record_progress_attempt(
+                    canonical_fingerprint, normalized_call_id, tool_generation, call_scope_key,
+                )
+                if ordinal >= 3:
+                    denied = self._conflict_run(
+                        name=name, arguments=raw_arguments, call_id=normalized_call_id,
+                        idempotency_id=idempotency_id, access=normalized_access,
+                        error_type="ToolNoProgress", message="unchanged request has made no progress; use existing evidence or stop",
+                        secret_input_keys=secret_input_keys,
+                    ).model_copy(update={"status": "denied"})
+                    self._state.history.append(denied)
+                    return denied.model_copy(deep=True)
             semantic_key = self._semantic_key(
                 normalized_tool_name,
                 normalized_call_id,
@@ -505,6 +551,12 @@ class RunToolLedger:
             "callFingerprints": dict(self._state.call_fingerprints),
             "toolGenerations": dict(self._state.tool_generations),
             "writeSequence": self._state.write_sequence,
+            "evidenceRepairUsed": self._state.evidence_repair_used,
+            "progressAttempts": [
+                ToolProgressAttempt(requestKey=request_key, attemptId=attempt_id, ordinal=ordinal).model_dump()
+                for request_key, attempts in self._state.progress_attempts.items()
+                for attempt_id, ordinal in attempts.items()
+            ],
         }
 
     def merge_checkpoint(self, snapshot: dict[str, Any] | None) -> None:
@@ -524,6 +576,12 @@ class RunToolLedger:
             raise ValueError(
                 f"tool ledger checkpoint scope mismatch: expected={expected_scope}, actual={actual_scope}"
             )
+        for payload in snapshot.get("progressAttempts") or []:
+            self._merge_progress_attempt(payload)
+        repair_used = snapshot.get("evidenceRepairUsed", False)
+        if type(repair_used) is not bool:
+            raise ValueError("invalid evidence repair slot")
+        self._state.evidence_repair_used |= repair_used
         for item in snapshot.get("completed") or []:
             if not isinstance(item, dict) or not item.get("reuseKey") or not isinstance(item.get("run"), dict):
                 continue
@@ -558,7 +616,7 @@ class RunToolLedger:
         for event in sorted(events, key=lambda item: self._safe_int(item.get("sequenceNo"))):
             event_type = str(event.get("eventType") or "").strip().upper()
             if event_type not in {
-                "TOOL_PREPARED", "TOOL_COMMITTED", "TOOL_UNKNOWN", "TOOL_INVALIDATED"
+                "TOOL_PREPARED", "TOOL_COMMITTED", "TOOL_UNKNOWN", "TOOL_INVALIDATED", "TOOL_PROGRESS", "HARNESS_REPAIR"
             }:
                 continue
             payload = event.get("payload")
@@ -566,6 +624,17 @@ class RunToolLedger:
                 continue
             semantic_key = str(payload.get("semanticKey") or "").strip()
             if not semantic_key or not self._semantic_scope_matches(payload):
+                continue
+            if event_type == "HARNESS_REPAIR":
+                if payload.get("schemaVersion") != "harness-repair-slot-v1" or payload.get("used") is not True:
+                    raise ValueError("invalid evidence repair checkpoint")
+                self._state.evidence_repair_used = True
+                continue
+            if event_type == "TOOL_PROGRESS":
+                if (str(payload.get("projectId") or "").strip() or None) != self.identity.projectId:
+                    continue
+                self._merge_progress_attempt(payload.get("progress"))
+                self._restore_semantic_fingerprints(payload)
                 continue
             if event_type == "TOOL_INVALIDATED":
                 generations = payload.get("generations")
@@ -630,6 +699,42 @@ class RunToolLedger:
                 self._safe_int(terminal_payload.get("writeSequence")),
             )
         return recovered_unknowns
+
+    async def _record_progress_attempt(
+        self, fingerprint: str, call_id: str, generation: int, call_scope_key: str | None,
+    ) -> int:
+        request_key = f"progress_request_{self._digest({'fingerprint': fingerprint, 'generation': generation})}"
+        attempt_id = self._digest(call_id)
+        attempts = self._state.progress_attempts.get(request_key, {})
+        if attempt_id in attempts:
+            return attempts[attempt_id]
+        ordinal = max(attempts.values(), default=0) + 1
+        if ordinal > 3:
+            return 3
+        if request_key not in self._state.progress_attempts and len(self._state.progress_attempts) >= 128:
+            raise RuntimeError("tool progress capacity exhausted")
+        progress = ToolProgressAttempt(requestKey=request_key, attemptId=attempt_id, ordinal=ordinal)
+        semantic_key = f"progress_{self._digest(progress.model_dump())}"
+        await self._write_checkpoint("TOOL_PROGRESS", semantic_key, {
+            "semanticKey": semantic_key, "runId": self.identity.runId,
+            "userId": self.identity.userId, "projectId": self.identity.projectId,
+            "fingerprint": fingerprint, "callScopeKey": call_scope_key,
+            "progress": progress.model_dump(),
+        })
+        self._merge_progress_attempt(progress.model_dump())
+        return ordinal
+
+    def _merge_progress_attempt(self, payload: Any) -> None:
+        progress = ToolProgressAttempt.model_validate(payload)
+        if progress.requestKey not in self._state.progress_attempts and len(self._state.progress_attempts) >= 128:
+            raise ValueError("tool progress capacity exceeded")
+        attempts = self._state.progress_attempts.setdefault(progress.requestKey, {})
+        existing = attempts.get(progress.attemptId)
+        if existing is not None and existing != progress.ordinal:
+            raise ValueError("tool progress replay conflict")
+        if existing is None and len(attempts) >= 3:
+            raise ValueError("too many attempts for one request")
+        attempts[progress.attemptId] = progress.ordinal
 
     async def _execute_and_record(
         self,

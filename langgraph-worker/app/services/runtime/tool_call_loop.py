@@ -14,6 +14,7 @@ from app.services.harness.agent_kernel import (
 from app.services.mcp.tool_registry import McpToolRegistry
 from app.services.harness.cancellation import cancellation_checkpoint
 from app.services.harness.tool_ledger import RunToolLedger, current_run_tool_ledger
+from app.services.harness.contracts import ToolObservationSummary
 from app.services.harness.trust import serialize_untrusted_content
 
 
@@ -165,7 +166,8 @@ class ToolCallLoop:
         arguments = dict(call.arguments)
         safe_arguments = self._safe_arguments(name, arguments, tool_ledger)
         same_tool_counts[name] = same_tool_counts.get(name, 0) + 1
-        if same_tool_counts[name] > self.max_same_tool_calls:
+        progress_enabled = tool_ledger is not None and tool_ledger.progress_control_enabled
+        if not progress_enabled and same_tool_counts[name] > self.max_same_tool_calls:
             run = self._run("denied", name, safe_arguments, error="same tool call limit exceeded")
         elif not self.registry.is_allowed(name, route=route, supervisor_permissions=supervisor_permissions):
             run = self._run("denied", name, safe_arguments, error="tool not allowed")
@@ -222,14 +224,44 @@ class ToolCallLoop:
                     route=route,
                     secret_input_keys=secret_input_keys,
                     secret_output_keys=secret_output_keys,
+                    track_progress=progress_enabled,
                 )
                 run = self._ledger_run(ledger_run.model_dump(mode="json", exclude_none=True))
+        content = self._content_for_tool_message(run)
+        if progress_enabled:
+            summary = self._observation_summary(call.id, run, content)
+            run["observation"] = summary.model_dump(mode="json")
+            content = AgentKernel._dump_arguments({"observation": run["observation"]}) + "\n" + content
         return KernelToolObservation(
             tool_call_id=call.id,
             name=name,
             status=str(run.get("status") or "failed"),
-            content=self._content_for_tool_message(run),
+            content=content,
             raw=run,
+        )
+
+    @staticmethod
+    def _observation_summary(call_id: str, run: dict[str, Any], content: str) -> ToolObservationSummary:
+        status = str(run.get("status") or "failed")
+        reason = {
+            "ToolNoProgress": "no_progress", "BudgetExceededError": "budget_exhausted",
+            "ToolBudgetExceeded": "budget_exhausted", "ToolOutcomeUnknown": "outcome_unknown",
+        }.get(str(run.get("errorType") or ""))
+        if reason is None:
+            reason = {
+                "succeeded": "reused_result" if run.get("reused") else "evidence_available",
+                "denied": "permission_denied", "cancelled": "cancelled", "unknown": "outcome_unknown",
+            }.get(status, "tool_failed")
+        output = run.get("output") or {}
+        if status == "succeeded" and output.get("items") == []:
+            status = "empty"
+            if not run.get("reused"):
+                reason = "empty_result"
+        return ToolObservationSummary(
+            toolCallId=call_id,
+            status=status if status in {"succeeded", "empty", "denied", "unknown", "cancelled"} else "failed",
+            reasonCode=reason,
+            truncated='"truncated":true' in content,
         )
 
     def _tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:

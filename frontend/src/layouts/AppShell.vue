@@ -166,6 +166,26 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.app-shell.is-knowledge-chat {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+.app-shell.is-knowledge-chat .app-shell__surface {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell__content.is-knowledge-chat {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .app-shell__surface :deep(.rank-page__hero),
 .app-shell__surface :deep(.rank-page__panel),
 .app-shell__surface :deep(.rank-page__hero-badge),

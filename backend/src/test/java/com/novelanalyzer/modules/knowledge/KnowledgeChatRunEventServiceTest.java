@@ -322,6 +322,31 @@ class KnowledgeChatRunEventServiceTest {
     }
 
     @Test
+    void shouldPersistPrivateOwnedHarnessRepairAndProgress() {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        applyPhase18Schema(jdbcTemplate);
+        insertRun(jdbcTemplate, "run-progress", 7L);
+        KnowledgeChatRunEventService service = service(jdbcTemplate);
+        Map<String, Object> progress = Map.of(
+            "semanticKey", "progress_1", "runId", "run-progress", "userId", "7",
+            "progress", Map.of("schemaVersion", "tool-progress-v1", "requestKey", "progress_request_" + "a".repeat(24),
+                "attemptId", "b".repeat(24), "ordinal", 2)
+        );
+        KnowledgeChatRunEventVO first = service.appendSemanticCheckpoint(7L, "run-progress", "TOOL_PROGRESS", "progress-1", progress);
+        assertThat(service.appendSemanticCheckpoint(7L, "run-progress", "TOOL_PROGRESS", "progress-1", progress).getEventId())
+            .isEqualTo(first.getEventId());
+        service.appendSemanticCheckpoint(7L, "run-progress", "HARNESS_REPAIR", "repair-1", Map.of(
+            "schemaVersion", "harness-repair-slot-v1", "semanticKey", "repair_1", "runId", "run-progress", "userId", "7", "used", true));
+        assertThat(service.listSemanticCheckpoints(7L, "run-progress", 0L, 10)).hasSize(2);
+        assertThatThrownBy(() -> service.listSemanticCheckpoints(8L, "run-progress", 0L, 10)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.appendSemanticCheckpoint(7L, "run-progress", "TOOL_PROGRESS", "bad", Map.of()))
+            .isInstanceOf(BusinessException.class);
+        authenticate(7L);
+        assertThat(service.listEvents("run-progress", 0L, 10)).extracting(KnowledgeChatRunEventVO::getPayload)
+            .containsOnly("{\"internal\":true}");
+    }
+
+    @Test
     void shouldRejectForeignOrUnsupportedSemanticCheckpoints() {
         JdbcTemplate jdbcTemplate = jdbcTemplate();
         applyPhase18Schema(jdbcTemplate);

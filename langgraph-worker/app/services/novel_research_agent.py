@@ -51,7 +51,11 @@ from app.services.harness.contracts import (
     DataAccessPlan,
     DomainStatus,
     IntentEnvelope,
+    EvidenceCommit,
+    HarnessIntelligencePolicy,
+    RepairProposal,
 )
+from app.services.harness.intelligence import build_task_checkpoint, current_task_checkpoint, validate_answer
 from app.services.harness.execution_path import ExecutionPath
 from app.services.harness.trace_sanitizer import sanitize_trace_for_persistence
 from app.services.harness.budget import BudgetExceededError, RunBudget, current_run_budget
@@ -171,6 +175,12 @@ class ResearchState(TypedDict, total=False):
     tool_ledger_checkpoint: dict[str, Any]
     request_fingerprint: str
     prompt_context_trace: dict[str, Any]
+    task_progress_checkpoint: dict[str, Any]
+    evidence_repair: dict[str, Any]
+    repair_tool_plan: list[dict[str, Any]]
+    repair_pending: bool
+    skill_stage_catalog: list[dict[str, Any]]
+    skill_stage_state: dict[str, Any]
 
 
 class NovelResearchAgent:
@@ -1010,6 +1020,11 @@ class NovelResearchAgent:
     async def _provider_invoke(self, **kwargs: Any) -> dict[str, Any]:
         request = kwargs.get("request")
         cache_affinity = kwargs.get("cache_affinity")
+        reasoning_mode = kwargs.get("reasoning_mode")
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if isinstance(request, KnowledgeChatRequest):
+            reasoning_mode = self._reasoning_mode(request)
+            reasoning_effort = self._reasoning_effort(request)
         if not cache_affinity and isinstance(request, KnowledgeChatRequest):
             cache_affinity = self._cache_affinity_for_request(request)
         result = await self.agent_kernel.run(
@@ -1025,8 +1040,8 @@ class NovelResearchAgent:
                 model=str(kwargs.get("model") or settings.default_model),
                 temperature=kwargs.get("temperature", 0.2),
                 max_tokens=kwargs.get("max_tokens"),
-                reasoning_mode=kwargs.get("reasoning_mode"),
-                reasoning_effort=kwargs.get("reasoning_effort"),
+                reasoning_mode=reasoning_mode,
+                reasoning_effort=reasoning_effort,
                 require_json=bool(kwargs.get("require_json", False)),
                 timeout_millis=kwargs.get("timeout_millis"),
                 cache_affinity=cache_affinity,
@@ -1085,6 +1100,11 @@ class NovelResearchAgent:
             "durationMs": max(1, int((time.perf_counter() - started_at) * 1000)),
             "tokenUsed": max(0, int(token_used or 0)),
         }
+        if isinstance(request, KnowledgeChatRequest):
+            requested_effort = self._reasoning_effort(request)
+            if requested_effort is not None:
+                base_call["requestedReasoningEffort"] = requested_effort
+                base_call["thinkingEnabled"] = requested_effort not in {"minimal", "none", "off"}
         kernel_provider_calls = [
             dict(call)
             for call in list((provider_result or {}).get("kernelProviderCalls") or [])
@@ -1484,7 +1504,9 @@ class NovelResearchAgent:
         request: KnowledgeChatRequest,
         sources: list[KnowledgeSource],
     ) -> str:
-        notice = "本次模型未能完成可靠的市场分析和创作建议，暂不生成未经验证的判断或大纲。"
+        notice = (
+            "本次模型未能完成可靠的市场分析和创作建议，暂不生成未经验证的判断或大纲。"
+        )
         if not sources:
             return notice
         return f"{notice}\n\n{self._compose_rank_evidence_block(sources)}"
@@ -1522,7 +1544,11 @@ class NovelResearchAgent:
             budget = current_run_budget()
             if budget is not None:
                 budget.merge_snapshot(state.get("resource_budget"))
+            state = {**state, **self._stage_skills_for_node(state, node_name)}
             result = dict(await handler(state) or {})
+            for key in ("skill_stage_state", "skill_prompt", "skill_bom", "skill_mediation"):
+                if state.get("skill_stage_state") is not None and key not in result and key in state:
+                    result[key] = state[key]
             executed_nodes = list(state.get("executed_runtime_nodes") or [])
             if node_name not in executed_nodes:
                 executed_nodes.append(node_name)
@@ -1532,9 +1558,40 @@ class NovelResearchAgent:
             ledger = current_run_tool_ledger()
             if ledger is not None:
                 result["tool_ledger_checkpoint"] = ledger.checkpoint_snapshot()
+            merged_state = {**state, **result}
+            if self._intelligence_policy(merged_state).harnessTaskCheckpointEnabled and merged_state.get("intent_envelope"):
+                result["task_progress_checkpoint"] = build_task_checkpoint(merged_state).model_dump(mode="json")
             return result
 
         return wrapped
+
+    def _stage_skills_for_node(self, state: ResearchState, node_name: str) -> ResearchState:
+        if not self._intelligence_policy(state).harnessStageSkillsEnabled or not state.get("skill_stage_catalog"):
+            return {}
+        stages = {"review_answer": "review", "revise_answer": "review", "compose_answer": "compose", "route_experts": "compose"}
+        previous = dict(state.get("skill_stage_state") or {})
+        stage = stages.get(node_name, previous.get("stage") or "research")
+        if previous.get("stage") == stage:
+            return {}
+        projection = self.skill_mediator.project_stage(
+            state["skill_stage_catalog"], stage=stage,
+            loaded_ids=previous.get("loadedIds") or [], reload_count=int(previous.get("reloadCount") or 0),
+            initialized=bool(previous), preferred_skill_id=state["request"].preferredSkillId,
+        )
+        mediation = dict(state.get("skill_mediation") or {})
+        active_ids = set(projection["activatedIds"])
+        records = [{**record, "bodyInjected": record.get("skillId") in active_ids,
+                    "state": "ACTIVATED" if record.get("skillId") in active_ids else "ELIGIBLE"}
+                   if record.get("skillId") in {item["skillId"] for item in state["skill_stage_catalog"]} else record
+                   for record in mediation.get("records") or []]
+        mediation.update({"activatedSkillIds": projection["activatedIds"], "activatedCount": len(active_ids),
+                          "rejectedCount": max(0, int(mediation.get("candidateCount") or 0) - len(active_ids)),
+                          "records": records, "bom": {"skills": projection["pins"]}})
+        return {
+            "skill_prompt": projection["prompt"], "skill_bom": {"skills": projection["pins"]},
+            "skill_mediation": mediation,
+            "skill_stage_state": {key: value for key, value in projection.items() if key not in {"prompt", "pins"}},
+        }
 
     async def _assemble_context_node(self, state: ResearchState) -> ResearchState:
         if state.get("response") is not None:
@@ -1683,6 +1740,8 @@ class NovelResearchAgent:
         }
 
     async def _execute_tools_node(self, state: ResearchState) -> ResearchState:
+        if state.get("repair_pending") and self._intelligence_policy(state).harnessEvidenceRepairEnabled:
+            return await self._execute_read_repair(state)
         execution_path = dict(state.get("execution_path") or {})
         if (
             state.get("response") is not None
@@ -1715,7 +1774,13 @@ class NovelResearchAgent:
             "evidence_pack_summary": evidence_pack.summary(),
             "evidence_commit": evidence_commit,
             "supervisor": decision,
+            "repair_pending": False,
         }
+        repair_enabled = self._intelligence_policy(state).harnessEvidenceRepairEnabled
+        if repair_enabled and decision.get("status") == "answerable":
+            repair = await self._propose_read_repair({**state, **result})
+            if repair:
+                return {**result, **repair}
         if decision.get("status") == "needs_book_selection" and self._should_search_book_after_missing_evidence(state):
             return {
                 **result,
@@ -1726,7 +1791,17 @@ class NovelResearchAgent:
             market_refresh_count = int(retry_counts.get("market_refresh") or 0)
             # Supervisor repair accepts only EvidenceCommit.repairAllowed and at most once.
             repair_allowed = bool(evidence_commit.get("repairAllowed"))
-            if market_refresh_count < 1 and repair_allowed and self._should_retry_market_refresh(state):
+            ledger = current_run_tool_ledger()
+            shared_slot_available = not repair_enabled or (
+                ledger is not None and not ledger.evidence_repair_used
+                and not int(retry_counts.get("evidence_repair") or 0)
+            )
+            if market_refresh_count < 1 and repair_allowed and shared_slot_available and self._should_retry_market_refresh(state):
+                if repair_enabled:
+                    if not await ledger.claim_evidence_repair():
+                        return result
+                    retry_counts["evidence_repair"] = 1
+                    result["retry_counts"] = retry_counts
                 refresh_mode = self._rank_refresh_mode_for_request(state["request"])
                 refreshed = await self._refresh_rank_board_for_retry(
                     state,
@@ -1748,6 +1823,7 @@ class NovelResearchAgent:
                         **result,
                         "evidence_commit": sealed,
                         "sources": [],
+                        "repair_pending": repair_enabled,
                         "retry_counts": retry_counts,
                         "tool_runs": tool_runs + [{
                             "name": "supervisor_retry",
@@ -1761,6 +1837,84 @@ class NovelResearchAgent:
         if decision.get("status") in {"needs_clarification", "needs_book_selection"}:
             result["response"] = self._build_supervisor_block_response(state, decision)
         return result
+
+    @staticmethod
+    def _intelligence_policy(state: ResearchState) -> HarnessIntelligencePolicy:
+        return HarnessIntelligencePolicy.from_runtime_config(state.get("runtime_config") or {})
+
+    async def _propose_read_repair(self, state: ResearchState) -> ResearchState:
+        ledger = current_run_tool_ledger()
+        budget = current_run_budget()
+        retries = dict(state.get("retry_counts") or {})
+        if ledger is None or ledger.evidence_repair_used or retries.get("evidence_repair") or retries.get("market_refresh"):
+            return {}
+        if budget is None or budget.remaining[1] <= 0:
+            return {}
+        commit = EvidenceCommit.model_validate(state["evidence_commit"])
+        if set(commit.reasonCodes) & {"cross_project_evidence", "forged_citation", "stale_market_claim"}:
+            return {}
+        request = state["request"]
+        if request.projectId is None or request.workId is None or request.referenceWorks:
+            return {}
+        plans = [ToolPlan.model_validate(item) for item in state.get("task_tool_plan") or []]
+        plans = self._filter_task_graph_tool_plans(request, state, plans)
+        proposal = self.domain_tool_planner.propose_read_repair(
+            graph=TaskGraph.model_validate(state.get("task_graph")), plans=plans,
+            envelope=IntentEnvelope.model_validate(state.get("intent_envelope")),
+            capability_plan=CapabilityPlan.model_validate(state.get("capability_plan")),
+            scope=CapabilityScope(userId=request.userId, projectId=request.projectId, bookId=state.get("book_id")),
+            allowed_tools=self._allowed_tools_for_state(state, registry=self._tool_registry),
+            runs=list(state.get("tool_runs") or []),
+            work_id=request.workId,
+        )
+        if proposal is None or not await ledger.claim_evidence_repair():
+            return {}
+        repair, repair_plans = proposal
+        return {
+            "evidence_repair": repair.model_dump(mode="json"),
+            "repair_tool_plan": [plan.model_dump(mode="json") for plan in repair_plans],
+            "repair_pending": True, "retry_counts": {**retries, "evidence_repair": 1},
+        }
+
+    async def _execute_read_repair(self, state: ResearchState) -> ResearchState:
+        if not state.get("repair_tool_plan"):
+            working = {**state, "repair_pending": False}
+            return {**await self._execute_tools_node(working), "repair_pending": False}
+        proposal = RepairProposal.model_validate(state.get("evidence_repair"))
+        envelope = IntentEnvelope.model_validate(state.get("intent_envelope"))
+        request = state["request"]
+        scope = CapabilityScope(userId=request.userId, projectId=request.projectId, bookId=state.get("book_id"))
+        if proposal.intentEnvelopeHash != envelope.fingerprint or proposal.scope != scope or proposal.workId != request.workId:
+            raise ValueError("evidence repair identity mismatch")
+        ledger = current_run_tool_ledger()
+        if ledger is None or not ledger.evidence_repair_used:
+            raise ValueError("evidence repair slot is not committed")
+        plans = [ToolPlan.model_validate(item) for item in state["repair_tool_plan"]]
+        original = {plan.taskId: plan for plan in self._filter_task_graph_tool_plans(
+            request, state, [ToolPlan.model_validate(item) for item in state.get("task_tool_plan") or []],
+        )}
+        for plan in plans:
+            baseline = original.get(plan.taskId)
+            if baseline is None or plan.tools != ["project.retrieve"] or "project.retrieve" not in baseline.tools:
+                raise ValueError("evidence repair expanded tool scope")
+            if baseline.retrievalPlan is None or plan.retrievalPlan is None or (
+                baseline.retrievalPlan.model_dump(exclude={"query"}) != plan.retrievalPlan.model_dump(exclude={"query"})
+                or plan.retrievalPlan.query != " ".join(baseline.retrievalPlan.entities).strip()
+            ):
+                raise ValueError("evidence repair changed retrieval constraints")
+        runs = await self._task_tool_executor.execute(
+            TaskGraph.model_validate(state["task_graph"]), plans,
+            context=self._task_tool_context(request, state),
+            allowed_tools=self._allowed_tools_for_state(state, registry=self._tool_registry),
+            max_tool_calls=self._max_tool_calls_for_state(state, plans=plans),
+        )
+        working = dict(state)
+        self._merge_task_tool_runs(working, runs)
+        sources = list(state.get("sources") or []) + self._sources_from_tool_runs(runs)
+        source_policy = dict(state.get("source_policy") or {})
+        source_policy.pop("evidenceContract", None)
+        source_policy.pop("evidenceCommit", None)
+        return {"tool_runs": working["tool_runs"], "sources": sources, "source_policy": source_policy, "repair_pending": False}
 
     async def _refresh_rank_board_for_retry(
         self,
@@ -2129,6 +2283,8 @@ class NovelResearchAgent:
     def _route_after_runtime_supervisor(self, state: ResearchState) -> str:
         if state.get("response") is not None:
             return "finalize_trace"
+        if self._intelligence_policy(state).harnessEvidenceRepairEnabled:
+            return "execute_tools" if state.get("repair_pending") else "route_experts"
         supervisor = state.get("supervisor") or {}
         if (
             isinstance(supervisor, dict)
@@ -2337,8 +2493,9 @@ class NovelResearchAgent:
                 ],
                 model=self._intent_model_name(request),
                 temperature=0.1,
-                max_tokens=2400,
-                reasoning_mode="fast",
+                max_tokens=self._internal_output_tokens(request, fast_limit=2400),
+                reasoning_mode=self._reasoning_mode(request),
+                reasoning_effort=self._reasoning_effort(request),
                 timeout_millis=self._request_timeout_millis(request),
                 cache_affinity=self._cache_affinity_for_request(request),
                 request_family="market_analysis",
@@ -2396,11 +2553,8 @@ class NovelResearchAgent:
                 "retentionRate": None,
                 "rankChanges": [],
                 "topicGroups": [],
-                "snapshots": [
-                    {**snapshot, "category": category}
-                    for category, item in category_payloads.items()
-                    for snapshot in item["snapshots"]
-                ],
+                "snapshots": [{**snapshot, "category": category}
+                              for category, item in category_payloads.items() for snapshot in item["snapshots"]],
             }
         groups = self._rank_snapshot_groups(sources, group_by_date=group_by_date)
         current_group = groups[0] if groups else []
@@ -2548,7 +2702,7 @@ class NovelResearchAgent:
 
     async def _review_answer_node(self, state: ResearchState) -> ResearchState:
         if not settings.agent_answer_review_enabled:
-            return {}
+            return self._validate_answer_state(state)
         response = state.get("response")
         if response is None or response.status != "answered" or not (response.answer or "").strip():
             review = {
@@ -2566,10 +2720,11 @@ class NovelResearchAgent:
                 messages=self._build_answer_review_messages(request, response, state),
                 model=model_name,
                 temperature=0,
-                max_tokens=900,
+                max_tokens=self._internal_output_tokens(request, fast_limit=900),
                 require_json=True,
                 timeout_millis=self._request_timeout_millis(request),
-                reasoning_mode="fast",
+                reasoning_mode=self._reasoning_mode(request),
+                reasoning_effort=self._reasoning_effort(request),
                 request_family="review",
                 provider_profile=self._provider_profile_for_state(state, model_name),
                 request=request,
@@ -2590,7 +2745,7 @@ class NovelResearchAgent:
                 token_used=int(result.get("token_used") or 0),
                 provider_result=result,
                 requested_model=model_name,
-                requested_reasoning_mode="fast",
+                requested_reasoning_mode=self._reasoning_mode(request),
             )
             self._record_token_metric(state, "answer_reviewer", result)
         except Exception as exc:
@@ -2603,7 +2758,7 @@ class NovelResearchAgent:
                 error=exc,
                 fallback_reason="review_unavailable",
                 requested_model=model_name,
-                requested_reasoning_mode="fast",
+                requested_reasoning_mode=self._reasoning_mode(request),
             )
             review = {
                 "status": "review_failed",
@@ -2611,6 +2766,8 @@ class NovelResearchAgent:
                 "revisionRequired": False,
                 "revisionCount": 0,
             }
+        validation_state = self._validate_answer_state({**state, "answer_review": review})
+        review = validation_state.get("answer_review", review)
         state["answer_review"] = review
         response.resultJson["answerReview"] = dict(review)
         response.resultJson["providerCalls"] = list(state.get("provider_calls") or [])
@@ -2626,6 +2783,7 @@ class NovelResearchAgent:
         review = state.get("answer_review") if isinstance(state.get("answer_review"), dict) else {}
         if (
             settings.agent_answer_revision_enabled
+            and (not self._intelligence_policy(state).harnessAnswerValidationEnabled or settings.agent_answer_review_enabled)
             and bool(review.get("revisionRequired"))
             and int(review.get("revisionCount") or 0) < 1
         ):
@@ -2691,6 +2849,8 @@ class NovelResearchAgent:
                 "revisionRequired": False,
                 "revisionCount": 1,
             })
+        validation_state = self._validate_answer_state({**state, "answer_review": review, "response": response})
+        review = validation_state.get("answer_review", review)
         state["answer_review"] = review
         response.resultJson["answerReview"] = dict(review)
         response.resultJson["answerDeltas"] = list(state.get("answer_deltas") or [])
@@ -2703,6 +2863,22 @@ class NovelResearchAgent:
             "token_metrics": list(state.get("token_metrics") or []),
             "response": response,
         }
+
+    def _validate_answer_state(self, state: ResearchState, *, final_commit: dict[str, Any] | None = None) -> ResearchState:
+        if not self._intelligence_policy(state).harnessAnswerValidationEnabled:
+            return {}
+        response = state.get("response")
+        if response is None:
+            return {}
+        review = dict(state.get("answer_review") or {})
+        commit = EvidenceCommit.model_validate(final_commit or self._evidence_commit_for_state(state, sources=list(response.sources)))
+        deterministic = self._deterministic_answer_review_issues(request=state["request"], response=response, state=state)
+        validation = validate_answer(response, commit=commit, deterministic_issues=deterministic, prior_review=review)
+        review["validation"] = validation.model_dump(mode="json")
+        if validation.status == "failed" and int(review.get("revisionCount") or 0) < 1:
+            review = self._merge_deterministic_answer_review(review, request=state["request"], response=response, state=state)
+        response.resultJson["answerReview"] = review
+        return {"answer_review": review, "response": response}
 
     async def _extract_memory_candidates_node(self, state: ResearchState) -> ResearchState:
         request = state["request"]
@@ -2810,10 +2986,41 @@ class NovelResearchAgent:
         if isinstance(finalized.resultJson.get("evidenceCommit"), dict):
             finalized_state["evidence_commit"] = {
                 **dict(finalized_state.get("evidence_commit") or {}),
-                **dict(finalized.resultJson.get("evidenceCommit") or {}),
+                **{key: value for key, value in finalized.resultJson["evidenceCommit"].items()
+                   if key in EvidenceCommit.model_fields},
             }
+        finalized_state["sources"] = list(finalized.sources)
+        finalized_state.update(self._validate_answer_state(finalized_state, final_commit=finalized_state.get("evidence_commit")))
+        self._attach_intelligence_summary(finalized_state)
+        self._sync_stream_answer_deltas(finalized_state, finalized)
         self._sanitize_trace_projection(finalized.resultJson)
-        return {"response": finalized, "evidence_commit": finalized_state.get("evidence_commit")}
+        return {
+            "response": finalized, "evidence_commit": finalized_state.get("evidence_commit"),
+            **{key: finalized_state[key] for key in ("answer_review", "task_progress_checkpoint") if key in finalized_state},
+        }
+
+    def _attach_intelligence_summary(self, state: ResearchState) -> None:
+        policy = self._intelligence_policy(state)
+        if not any(policy.model_dump().values()):
+            return
+        review = state.get("answer_review") or {}
+        ledger = current_run_tool_ledger()
+        snapshot = ledger.checkpoint_snapshot() if ledger else state.get("tool_ledger_checkpoint") or {}
+        intelligence = {
+            "validation": dict(review.get("validation") or {"status": "not_run"}),
+            "revised": int(review.get("revisionCount") or 0) > 0,
+            "repairUsed": bool((state.get("retry_counts") or {}).get("evidence_repair")) or bool(snapshot.get("evidenceRepairUsed")),
+            "noProgressCount": sum(attempt.get("ordinal") == 3 for attempt in snapshot.get("progressAttempts") or []),
+            "skillReloadCount": int((state.get("skill_stage_state") or {}).get("reloadCount") or 0),
+            "skillStage": (state.get("skill_stage_state") or {}).get("stage"),
+        }
+        if policy.harnessTaskCheckpointEnabled and state.get("intent_envelope"):
+            checkpoint = build_task_checkpoint(state)
+            state["task_progress_checkpoint"] = checkpoint.model_dump(mode="json")
+            intelligence["taskProgress"] = checkpoint.trace_summary()
+        if state.get("evidence_repair"):
+            intelligence["repair"] = RepairProposal.model_validate(state["evidence_repair"]).trace_summary()
+        state["response"].resultJson["harnessIntelligence"] = intelligence
 
     def _sync_stream_answer_deltas(self, state: ResearchState, response: KnowledgeChatResponse) -> None:
         if not state.get("stream_answer"):
@@ -3073,6 +3280,12 @@ class NovelResearchAgent:
         selected_skill_pins = list(skill_mediation.bom.skills)
         governance_state["skill_mediation"] = skill_mediation.trace_summary()
         governance_state["skill_bom"] = {"skills": selected_skill_pins}
+        if HarnessIntelligencePolicy.from_runtime_config(runtime_config).harnessStageSkillsEnabled:
+            governance_state["skill_stage_catalog"] = [
+                {"skillId": activation.skill.skillId, "intents": [intent.value for intent in activation.skill.intents],
+                 "prompt": activation.prompt, "pin": activation.skill.trace_pin()}
+                for activation in skill_mediation.activations
+            ]
         if self._should_request_clarification(domain_decision) and not self._task_graph_has_project_knowledge(task_graph):
             clarification_response = self._build_clarification_response(request, domain_decision)
             clarification_state: ResearchState = {
@@ -3354,10 +3567,11 @@ class NovelResearchAgent:
                 messages=self._build_domain_intent_messages(request, rule_decision),
                 model=model_name,
                 temperature=0,
-                max_tokens=700,
+                max_tokens=self._internal_output_tokens(request, fast_limit=700),
                 require_json=True,
                 timeout_millis=self._request_timeout_millis(request),
-                reasoning_mode="fast",
+                reasoning_mode=self._reasoning_mode(request),
+                reasoning_effort=self._reasoning_effort(request),
                 request_family="intent",
                 request=request,
             )
@@ -3381,7 +3595,7 @@ class NovelResearchAgent:
                 token_used=int(result.get("token_used") or 0),
                 provider_result=result,
                 requested_model=model_name,
-                requested_reasoning_mode="fast",
+                requested_reasoning_mode=self._reasoning_mode(request),
             )
             return decision, trace_state["provider_calls"][-1]
         except Exception as exc:
@@ -3394,7 +3608,7 @@ class NovelResearchAgent:
                 error=exc,
                 fallback_reason="provider_exception",
                 requested_model=model_name,
-                requested_reasoning_mode="fast",
+                requested_reasoning_mode=self._reasoning_mode(request),
             )
             return None, trace_state["provider_calls"][-1]
 
@@ -6181,6 +6395,7 @@ class NovelResearchAgent:
             diagnostics=self._specialist_context_diagnostics(state),
             harness_system_prefix=self.context_assembler.harness_system_prefix(),
         )
+        context.targeted_evidence_enabled = self._intelligence_policy(state).harnessStageSkillsEnabled
         runtime_config = dict(state.get("runtime_config") or {})
         expert_profiles = list(state.get("expert_profiles") or [])
         if not runtime_config and not expert_profiles:
@@ -6426,6 +6641,7 @@ class NovelResearchAgent:
         state = {
             "source": governance.get("source", "default"),
             **runtime_config,
+            **HarnessIntelligencePolicy.from_runtime_config(runtime_config).model_dump(),
             "maxParallelSpecialists": self._runtime_max_parallel_specialists(runtime_config),
             "maxSkillPromptChars": self._runtime_max_skill_prompt_chars(runtime_config),
             "maxEvidenceItems": self._runtime_max_evidence_items(runtime_config),
@@ -6733,6 +6949,12 @@ class NovelResearchAgent:
             "capabilityPlan": state.get("capability_plan"),
             "authorizationBoundary": state.get("authorization_boundary"),
         }
+        if NovelResearchAgent._intelligence_policy(state).harnessTaskCheckpointEnabled:
+            checkpoint = current_task_checkpoint(state.get("task_progress_checkpoint"), state)
+            if checkpoint is None and state.get("intent_envelope"):
+                checkpoint = build_task_checkpoint(state)
+            if checkpoint is not None:
+                block["taskProgress"] = checkpoint.model_dump(mode="json")
         data_access_payload = state.get("data_access_plan")
         if isinstance(data_access_payload, dict):
             try:
@@ -7492,10 +7714,8 @@ class NovelResearchAgent:
         quota, remainder = divmod(max(0, evidence_limit - len(other_sources)), len(categories))
         requested_limit = (self._parse_trend_rank_lookup_for_request(request) or {}).get("limit", evidence_limit)
         for index, category in enumerate(categories):
-            sources = [
-                source for source in task_sources
-                if (source.sourceType or "").upper() == "RANK" and self._trend_category_matches(source, category)
-            ]
+            sources = [source for source in task_sources
+                       if (source.sourceType or "").upper() == "RANK" and self._trend_category_matches(source, category)]
             policy = self._build_trend_source_policy(request, sources, state=state, category=category)
             if policy.get("trendGateFailed"):
                 sources = await self._lookup_rank_sources_for_trend(request, state, category=category)
@@ -7648,6 +7868,7 @@ class NovelResearchAgent:
         else:
             used_repair = (
                 int(retry_counts.get("market_refresh") or 0) >= 1
+                or int(retry_counts.get("evidence_repair") or 0) >= 1
                 or bool((state.get("answer_quality") or {}).get("repaired"))
                 or bool(response_json.get("citationRepairUsed"))
             )
@@ -8757,11 +8978,7 @@ class NovelResearchAgent:
         )
 
     async def _lookup_rank_sources_for_trend(
-        self,
-        request: KnowledgeChatRequest,
-        state: ResearchState,
-        *,
-        category: str | None = None,
+        self, request: KnowledgeChatRequest, state: ResearchState, *, category: str | None = None,
     ) -> list[KnowledgeSource]:
         existing_sources = self._existing_rank_lookup_sources(state)
         if existing_sources is not None and category is None:
@@ -8878,10 +9095,8 @@ class NovelResearchAgent:
         if not lookup:
             context = self._format_context_for_sticky_extraction(conversation_context.summary or "")
             if self._looks_like_contextual_trend_followup(question) and any(
-                keyword in context for keyword in ("男频", "女频", "新书榜")
+                keyword in context for keyword in ("男频", "女频", "都市脑洞", "新书榜")
             ):
-                lookup = self._parse_trend_rank_lookup(f"{context}\n{question}")
-            elif self._looks_like_contextual_trend_followup(question) and IntentRouter.market_categories(context):
                 lookup = self._parse_trend_rank_lookup(f"{context}\n{question}")
         if not lookup:
             return None
@@ -8911,10 +9126,7 @@ class NovelResearchAgent:
         return lookup
 
     def _looks_like_contextual_trend_followup(self, question: str) -> bool:
-        categories = IntentRouter.market_categories(question)
-        return bool(categories) or any(
-            keyword in question for keyword in ("热门", "题材", "趋势", "最近", "榜单", "开书", "开文", "扫榜")
-        )
+        return any(keyword in question for keyword in ("热门", "题材", "趋势", "最近", "榜单", "开书", "开文", "扫榜"))
 
     def _parse_trend_rank_lookup(self, question: str) -> dict[str, Any] | None:
         normalized = (question or "").strip()
@@ -10661,6 +10873,14 @@ class NovelResearchAgent:
     def _reasoning_effort(request: KnowledgeChatRequest) -> str | None:
         # 用户在模型选择器里选的思考强度；空值表示交给 fast/deep 的族内默认。
         return normalize_requested_tier(getattr(request, "reasoningEffort", None))
+
+    def _internal_output_tokens(self, request: KnowledgeChatRequest, *, fast_limit: int) -> int:
+        effort = self._reasoning_effort(request)
+        thinking = effort not in {"minimal", "none", "off"} if effort else self._reasoning_mode(request) == "deep"
+        if not thinking:
+            return fast_limit
+        # Responses counts reasoning tokens against the same output cap as the JSON/text.
+        return max(fast_limit, self._automatic_final_output_tokens(request, "evidence"))
 
     @staticmethod
     def _provider_profile_for_state(state: ResearchState | None, model: str) -> dict[str, Any] | None:

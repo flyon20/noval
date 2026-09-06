@@ -54,6 +54,7 @@ const activeNames = ref([
   'agentHandoffs',
   'expertRouter',
   'finalAnswerBoundary',
+  'harnessIntelligence',
 ]);
 
 const hasPrev = computed(() => pageState.value.page > 1);
@@ -152,6 +153,25 @@ function nextPage() {
 function hasJsonSection(value?: string) {
   return Boolean(value && value.trim() && value.trim() !== 'null');
 }
+
+const intelligence = computed(() => {
+  const result = parseObject(selected.value?.resultJson);
+  const value = parseObject(result.harnessIntelligence);
+  if (!Object.keys(value).length) return null;
+  const validation = parseObject(value.validation);
+  const statuses: Record<string, string> = {
+    passed: '规则通过', failed: '规则未通过', unknown: '未判定', not_run: '未运行',
+  };
+  const count = (raw: unknown) => typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? raw : 0;
+  return {
+    validation: statuses[String(validation.status)] || '未判定',
+    revised: value.revised === true,
+    repairUsed: value.repairUsed === true,
+    noProgressCount: count(value.noProgressCount),
+    skillReloadCount: count(value.skillReloadCount),
+    pendingTaskCount: count(parseObject(value.taskProgress).pendingTaskCount),
+  };
+});
 
 function hasRuntimeGraph(value?: string) {
   if (!value) return false;
@@ -608,6 +628,17 @@ function healthTone(value?: string) {
         </section>
 
         <el-collapse v-model="activeNames" class="trace-sections">
+          <el-collapse-item v-if="intelligence" title="Harness 质量闭环" name="harnessIntelligence">
+            <dl data-test="harness-intelligence">
+              <dt>终稿规则验证</dt><dd data-test="harness-validation-status">{{ intelligence.validation }}</dd>
+              <dt>修订状态</dt><dd>{{ intelligence.revised ? '已修订' : '未修订' }}</dd>
+              <dt>语义验证</dt><dd>未判定</dd>
+              <dt>证据修复周期</dt><dd>{{ intelligence.repairUsed ? '已使用' : '未使用' }}</dd>
+              <dt>无进展停止</dt><dd>{{ intelligence.noProgressCount }}</dd>
+              <dt>Skill 补载次数</dt><dd>{{ intelligence.skillReloadCount }}</dd>
+              <dt>待验证任务</dt><dd>{{ intelligence.pendingTaskCount }}</dd>
+            </dl>
+          </el-collapse-item>
           <el-collapse-item
             v-if="hasRuntimeGraph(selected.resultJson)"
             title="LangGraph 运行图"
@@ -648,27 +679,29 @@ function healthTone(value?: string) {
                 <span>已激活 <strong>{{ skillMediation(selected).activatedCount ?? 0 }}</strong></span>
                 <span>已拒绝 <strong>{{ skillMediation(selected).rejectedCount ?? 0 }}</strong></span>
               </div>
-              <el-table v-if="skillMediationRecords(selected).length" :data="skillMediationRecords(selected)" size="small">
-                <el-table-column label="Skill" min-width="220">
-                  <template #default="{ row }">
-                    <strong>{{ row.skillId || '-' }}</strong>
-                    <small class="trace-skill-version">v{{ row.version || '-' }}</small>
-                  </template>
-                </el-table-column>
-                <el-table-column label="状态" width="100">
-                  <template #default="{ row }">
-                    <el-tag :type="skillStateType(row.state)" size="small">{{ skillStateLabel(row.state) }}</el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="原因" min-width="220">
-                  <template #default="{ row }">
-                    <span class="trace-skill-reasons">{{ skillReason(row) }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="正文" width="100">
-                  <template #default="{ row }">{{ row.bodyInjected ? '已注入' : '未注入' }}</template>
-                </el-table-column>
-              </el-table>
+              <div v-if="skillMediationRecords(selected).length" class="trace-table-wrap">
+                <el-table :data="skillMediationRecords(selected)" size="small" class="trace-table">
+                  <el-table-column label="Skill" min-width="220">
+                    <template #default="{ row }">
+                      <strong>{{ row.skillId || '-' }}</strong>
+                      <small class="trace-skill-version">v{{ row.version || '-' }}</small>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="100">
+                    <template #default="{ row }">
+                      <el-tag :type="skillStateType(row.state)" size="small">{{ skillStateLabel(row.state) }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="原因" min-width="220">
+                    <template #default="{ row }">
+                      <span class="trace-skill-reasons">{{ skillReason(row) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="正文" width="100">
+                    <template #default="{ row }">{{ row.bodyInjected ? '已注入' : '未注入' }}</template>
+                  </el-table-column>
+                </el-table>
+              </div>
               <p v-else class="trace-skill-empty">无技能激活记录</p>
               <h4 class="trace-section-subtitle">Runtime Skill-BOM</h4>
               <ul v-if="skillBomItems(selected).length" class="trace-skill-bom">
@@ -1286,6 +1319,18 @@ function healthTone(value?: string) {
   overflow-wrap: anywhere;
 }
 
+.trace-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.trace-table {
+  min-width: 40rem;
+}
+
 .trace-skill-bom {
   display: grid;
   gap: 0.4rem;
@@ -1331,6 +1376,8 @@ function healthTone(value?: string) {
 }
 
 .trace-project-knowledge__scope strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1364,6 +1411,7 @@ function healthTone(value?: string) {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  flex-wrap: wrap;
   padding: 0.48rem 0.6rem;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
@@ -1403,6 +1451,31 @@ function healthTone(value?: string) {
   }
 
   .trace-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .admin-agent-trace {
+    margin-inline: -0.875rem;
+    padding: 0.75rem;
+  }
+
+  .admin-agent-trace__list,
+  .admin-agent-trace__detail {
+    border-radius: 6px;
+  }
+
+  .trace-project-knowledge__scope {
+    grid-template-columns: minmax(4rem, auto) minmax(0, 1fr);
+  }
+
+  .trace-project-knowledge__scope strong {
+    white-space: normal;
+  }
+
+  .trace-health-summary__grid {
+    display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

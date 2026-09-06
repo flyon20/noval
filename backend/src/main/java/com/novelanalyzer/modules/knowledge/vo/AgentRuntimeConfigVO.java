@@ -18,11 +18,47 @@ public class AgentRuntimeConfigVO {
     private Boolean enableEvidenceCache;
     private Boolean enableSpecialistCache;
     private Boolean specialistMcpEnabled;
+    private Boolean harnessEvidenceRepairEnabled = false;
+    private Boolean harnessAnswerValidationEnabled = false;
+    private Boolean harnessTaskCheckpointEnabled = false;
+    private Boolean harnessStageSkillsEnabled = false;
     private Integer maxPromptCharsPerExpert;
     private Integer maxSkillPromptChars;
     private Integer maxEvidenceItems;
     private List<AgentProviderProfileVO> providerProfiles = new ArrayList<>();
     private AgentProviderRoutingPolicyVO providerRoutingPolicy;
+
+    public Boolean getHarnessEvidenceRepairEnabled() {
+        return harnessEvidenceRepairEnabled;
+    }
+
+    public void setHarnessEvidenceRepairEnabled(Boolean value) {
+        harnessEvidenceRepairEnabled = value;
+    }
+
+    public Boolean getHarnessAnswerValidationEnabled() {
+        return harnessAnswerValidationEnabled;
+    }
+
+    public void setHarnessAnswerValidationEnabled(Boolean value) {
+        harnessAnswerValidationEnabled = value;
+    }
+
+    public Boolean getHarnessTaskCheckpointEnabled() {
+        return harnessTaskCheckpointEnabled;
+    }
+
+    public void setHarnessTaskCheckpointEnabled(Boolean value) {
+        harnessTaskCheckpointEnabled = value;
+    }
+
+    public Boolean getHarnessStageSkillsEnabled() {
+        return harnessStageSkillsEnabled;
+    }
+
+    public void setHarnessStageSkillsEnabled(Boolean value) {
+        harnessStageSkillsEnabled = value;
+    }
 
     public String getReasoningModeDefault() {
         return reasoningModeDefault;

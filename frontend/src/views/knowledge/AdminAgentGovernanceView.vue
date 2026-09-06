@@ -44,6 +44,10 @@ const runtimeRows: RuntimeRow[] = [
   { key: 'enableEvidenceCache', label: '证据缓存', type: 'boolean' },
   { key: 'enableSpecialistCache', label: '专家缓存', type: 'boolean' },
   { key: 'specialistMcpEnabled', label: '专家工具调用', type: 'boolean' },
+  { key: 'harnessEvidenceRepairEnabled', label: '受限证据修复', type: 'boolean' },
+  { key: 'harnessAnswerValidationEnabled', label: '终稿规则复核', type: 'boolean' },
+  { key: 'harnessTaskCheckpointEnabled', label: '任务进度检查点', type: 'boolean' },
+  { key: 'harnessStageSkillsEnabled', label: '阶段技能与证据选择', type: 'boolean' },
   { key: 'maxPromptCharsPerExpert', label: '单专家提示字符上限', type: 'number' },
   { key: 'maxSkillPromptChars', label: '技能提示字符', type: 'number' },
   { key: 'maxEvidenceItems', label: '最大证据条数', type: 'number' },
@@ -139,6 +143,8 @@ function applyRuntimeConfig(config: AgentRuntimeConfig) {
     const value = config[row.key];
     if (value !== undefined && value !== null) {
       runtimeForm[row.key] = value as RuntimeValue;
+    } else if (row.key.startsWith('harness') && row.type === 'boolean') {
+      runtimeForm[row.key] = false;
     }
   }
 }
@@ -401,7 +407,8 @@ function isEvalRunRetryable(run: AgentEvalRun) {
       <header class="section-header">
         <h2>运行策略</h2>
       </header>
-      <el-table :data="runtimeRows" size="small" class="governance-table">
+      <div class="governance-table-wrap">
+        <el-table :data="runtimeRows" size="small" class="governance-table">
         <el-table-column prop="label" label="配置项" min-width="230" show-overflow-tooltip />
         <el-table-column label="生效范围" min-width="260" show-overflow-tooltip>
           <template #default="{ row }">
@@ -442,7 +449,7 @@ function isEvalRunRetryable(run: AgentEvalRun) {
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="120">
           <template #default="{ row }">
             <el-button
               size="small"
@@ -454,7 +461,8 @@ function isEvalRunRetryable(run: AgentEvalRun) {
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
     </section>
 
     <section class="governance-section">
@@ -551,7 +559,8 @@ function isEvalRunRetryable(run: AgentEvalRun) {
           运行套件
         </el-button>
       </div>
-      <el-table :data="evalRuns" size="small" class="governance-table">
+      <div class="governance-table-wrap">
+        <el-table :data="evalRuns" size="small" class="governance-table">
         <el-table-column prop="runKey" label="运行批次" min-width="190" show-overflow-tooltip />
         <el-table-column prop="suiteName" label="套件" min-width="140" show-overflow-tooltip />
         <el-table-column label="状态" width="110">
@@ -573,7 +582,7 @@ function isEvalRunRetryable(run: AgentEvalRun) {
         </el-table-column>
         <el-table-column prop="errorMessage" label="错误" min-width="180" show-overflow-tooltip />
         <el-table-column prop="metricsJson" label="指标" min-width="220" show-overflow-tooltip />
-        <el-table-column label="操作" width="260" fixed="right">
+        <el-table-column label="操作" width="260">
           <template #default="{ row }">
             <el-button
               size="small"
@@ -603,8 +612,10 @@ function isEvalRunRetryable(run: AgentEvalRun) {
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
-      <el-table
+        </el-table>
+      </div>
+      <div class="governance-table-wrap">
+        <el-table
         v-if="selectedEvalRunId"
         :data="evalCaseResults"
         size="small"
@@ -624,14 +635,16 @@ function isEvalRunRetryable(run: AgentEvalRun) {
         <el-table-column prop="traceId" label="Trace" min-width="150" show-overflow-tooltip />
         <el-table-column prop="durationMs" label="ms" width="80" />
         <el-table-column prop="failures" label="失败原因" min-width="240" show-overflow-tooltip />
-      </el-table>
+        </el-table>
+      </div>
     </section>
 
     <section class="governance-section">
       <header class="section-header">
         <h2>专家画像</h2>
       </header>
-      <el-table :data="experts" size="small" class="governance-table">
+      <div class="governance-table-wrap">
+        <el-table :data="experts" size="small" class="governance-table">
         <el-table-column label="启用" width="95">
           <template #default="{ row }">
             <input
@@ -726,7 +739,7 @@ function isEvalRunRetryable(run: AgentEvalRun) {
         <el-table-column label="提示词版本" width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.promptVersion === 'default' ? '默认' : row.promptVersion }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="120">
           <template #default="{ row }">
             <el-button
               size="small"
@@ -738,7 +751,8 @@ function isEvalRunRetryable(run: AgentEvalRun) {
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
     </section>
   </main>
 </template>
@@ -802,6 +816,15 @@ function isEvalRunRetryable(run: AgentEvalRun) {
 
 .governance-table {
   width: 100%;
+  min-width: 42rem;
+}
+
+.governance-table-wrap {
+  min-width: 0;
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .metric-grid {
@@ -939,6 +962,11 @@ function isEvalRunRetryable(run: AgentEvalRun) {
 }
 
 @media (max-width: 760px) {
+  .agent-governance {
+    margin-inline: -0.875rem;
+    padding: 0.75rem;
+  }
+
   .agent-governance__header {
     flex-direction: column;
   }
@@ -946,6 +974,19 @@ function isEvalRunRetryable(run: AgentEvalRun) {
   .metric-grid,
   .token-breakdown {
     grid-template-columns: 1fr;
+  }
+
+  .governance-section {
+    padding: 0.75rem;
+  }
+
+  .governance-input {
+    min-height: 44px;
+  }
+
+  .governance-checkbox {
+    width: 1.25rem;
+    height: 1.25rem;
   }
 }
 </style>

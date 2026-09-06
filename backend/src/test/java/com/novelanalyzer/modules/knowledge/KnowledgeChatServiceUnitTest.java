@@ -993,6 +993,8 @@ class KnowledgeChatServiceUnitTest {
 
         KnowledgeChatRequest firstRequest = new KnowledgeChatRequest();
         firstRequest.setQuestion("星河旧梦的设定是什么？");
+        firstRequest.setReasoningMode("deep");
+        firstRequest.setReasoningEffort("xhigh");
         KnowledgeChatResponseVO firstResponse = service.chat(firstRequest);
 
         String conversationId = (String) firstResponse.getResultJson().get("conversationId");
@@ -1001,12 +1003,25 @@ class KnowledgeChatServiceUnitTest {
         KnowledgeChatRequest secondRequest = new KnowledgeChatRequest();
         secondRequest.setQuestion("那它的卖点呢？");
         secondRequest.setConversationId(conversationId);
+        secondRequest.setReasoningMode("deep");
+        secondRequest.setReasoningEffort("xhigh");
+        KnowledgeChatRequest.ChatMessageDTO priorUser = new KnowledgeChatRequest.ChatMessageDTO();
+        priorUser.setRole("user");
+        priorUser.setContent(firstRequest.getQuestion());
+        KnowledgeChatRequest.ChatMessageDTO priorAssistant = new KnowledgeChatRequest.ChatMessageDTO();
+        priorAssistant.setRole("assistant");
+        priorAssistant.setContent(firstWorkerResponse.getAnswer());
+        secondRequest.setHistory(List.of(priorUser, priorAssistant));
         service.chat(secondRequest);
 
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(workerClient, org.mockito.Mockito.times(2)).runKnowledgeChat(payloadCaptor.capture());
         Map<String, Object> secondPayload = payloadCaptor.getAllValues().get(1);
         assertThat(secondPayload).containsEntry("conversationId", conversationId);
+        for (Map<String, Object> payload : payloadCaptor.getAllValues()) {
+            assertThat(payload).containsEntry("reasoningMode", "deep").containsEntry("reasoningEffort", "xhigh");
+        }
+        assertThat((List<?>) secondPayload.get("history")).hasSize(2);
         assertThat(secondPayload.get("contextSummary")).asString().contains("旧星门坐标");
     }
 

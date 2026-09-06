@@ -30,7 +30,7 @@ const snapshotDescription = computed(() => {
 });
 
 function syncViewportMode() {
-  isMobileViewport.value = window.innerWidth <= 760;
+  isMobileViewport.value = window.innerWidth <= 768;
 }
 
 onMounted(() => {

@@ -214,7 +214,7 @@ const snapshotOption = computed(() => {
 });
 
 function syncViewportMode() {
-  isMobileViewport.value = window.innerWidth <= 760;
+  isMobileViewport.value = window.innerWidth <= 768;
 }
 
 function resolveInitialSelection(preference: UserRankPreference | null) {
@@ -912,6 +912,11 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.trend-page__toolbar-copy {
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+
 .trend-page__toolbar-title {
   font-size: 1rem;
   font-weight: 700;
@@ -1110,6 +1115,10 @@ onBeforeUnmount(() => {
   .trend-page__model-select {
     width: 100%;
     min-width: 0;
+  }
+
+  .trend-page__toolbar-copy {
+    width: 100%;
   }
 
   .trend-page__result-support {

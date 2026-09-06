@@ -971,7 +971,7 @@ const processCompactionLabel = computed(() => {
   font-size: 0.78rem;
 }
 
-.knowledge-message__process-detail .knowledge-message__model-call {
+.knowledge-message__model-call {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;

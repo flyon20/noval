@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable, Literal
 
 from app.services.harness.contracts import SkillUseRecord, SkillUseState
 from app.services.skills.runtime_skill import RuntimeSkill
@@ -101,6 +101,39 @@ class SkillMediationResult:
 
 
 class SkillMediator:
+    @staticmethod
+    def project_stage(
+        catalog: list[dict[str, Any]], *, stage: Literal["research", "compose", "review"],
+        loaded_ids: list[str], reload_count: int, initialized: bool,
+        preferred_skill_id: str | None = None,
+    ) -> dict[str, Any]:
+        research_intents = {"market_scan", "book_breakdown", "followup_context"}
+        review_intents = {"revision_advice", "chapter_outline", "outline_building"}
+        selected = []
+        for activation in catalog:
+            intents = set(activation["intents"])
+            relevant = (
+                not intents or activation["skillId"] == preferred_skill_id
+                or stage == "compose"
+                or (stage == "research" and bool(intents & research_intents))
+                or (stage == "review" and bool(intents & review_intents))
+            )
+            if relevant:
+                selected.append(activation)
+        additions = {item["skillId"] for item in selected} - set(loaded_ids)
+        if initialized and additions:
+            if reload_count >= 1:
+                selected = [item for item in selected if item["skillId"] in loaded_ids]
+            else:
+                reload_count += 1
+        activated = [item["skillId"] for item in selected]
+        return {
+            "stage": stage, "loadedIds": sorted(set(loaded_ids) | set(activated)),
+            "reloadCount": reload_count, "activatedIds": activated,
+            "prompt": "\n\n".join(item["prompt"] for item in selected),
+            "pins": [dict(item["pin"]) for item in selected],
+        }
+
     def mediate(
         self,
         candidates: Iterable[tuple[RuntimeSkill, tuple[str, ...]]],

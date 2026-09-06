@@ -44,8 +44,11 @@ const {
 } = useKnowledgeChat();
 const { keyboardStyle } = useVisualViewportKeyboard();
 const messagesRef = ref<HTMLElement | null>(null);
+const contextBudgetRef = ref<HTMLElement | null>(null);
+const contextTriggerRef = ref<HTMLButtonElement | null>(null);
 const stickToBottom = ref(true);
 const showScrollToBottom = ref(false);
+const contextDetailsOpen = ref(false);
 const skillShortcuts = ref<SkillShortcut[]>([]);
 const numberFormatter = new Intl.NumberFormat('zh-CN');
 
@@ -93,6 +96,35 @@ function providerLabel(providerType: string) {
 function toggleReasoning(active: boolean | string | number) {
   const tiers = reasoningTiers.value;
   selectReasoningEffort(active ? tiers[tiers.length - 1] : tiers[0]);
+}
+
+function toggleContextDetails() {
+  contextDetailsOpen.value = !contextDetailsOpen.value;
+}
+
+function closeContextDetails(restoreFocus = false) {
+  contextDetailsOpen.value = false;
+  if (restoreFocus) {
+    void nextTick(() => contextTriggerRef.value?.focus());
+  }
+}
+
+function handleContextPointerDown(event: PointerEvent) {
+  if (!contextDetailsOpen.value) {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof Node) || !contextBudgetRef.value?.contains(target)) {
+    closeContextDetails();
+  }
+}
+
+function handleContextKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !contextDetailsOpen.value) {
+    return;
+  }
+  event.preventDefault();
+  closeContextDetails(true);
 }
 
 const contextBudget = computed(() => state.contextBudget);
@@ -271,6 +303,8 @@ onMounted(async () => {
   window.addEventListener(KNOWLEDGE_PROJECT_CHANGE_EVENT, handleProjectChange);
   window.addEventListener(KNOWLEDGE_CONVERSATION_SELECT_EVENT, handleConversationSelect);
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  document.addEventListener('pointerdown', handleContextPointerDown);
+  document.addEventListener('keydown', handleContextKeydown);
   await Promise.all([loadProjects(), loadSkillShortcuts(), loadModelOptions()]);
   await scrollMessagesToBottom({ force: true });
 });
@@ -279,6 +313,8 @@ onBeforeUnmount(() => {
   window.removeEventListener(KNOWLEDGE_PROJECT_CHANGE_EVENT, handleProjectChange);
   window.removeEventListener(KNOWLEDGE_CONVERSATION_SELECT_EVENT, handleConversationSelect);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  document.removeEventListener('pointerdown', handleContextPointerDown);
+  document.removeEventListener('keydown', handleContextKeydown);
   dispose();
 });
 
@@ -301,11 +337,14 @@ watch(
       <div class="knowledge-chat__toolbar-actions">
         <div
           v-if="contextBudget"
+          ref="contextBudgetRef"
           class="knowledge-chat__context-budget"
+          :class="{ 'is-open': contextDetailsOpen }"
           data-test="knowledge-context-budget"
         >
           <button
             type="button"
+            ref="contextTriggerRef"
             class="knowledge-chat__context-trigger"
             :class="[
               contextPressureClass,
@@ -313,8 +352,10 @@ watch(
             ]"
             :aria-label="contextAriaLabel"
             :title="contextAriaLabel"
-            aria-describedby="knowledge-context-popover"
+            :aria-expanded="contextDetailsOpen"
+            aria-controls="knowledge-context-popover"
             data-test="knowledge-context-trigger"
+            @click="toggleContextDetails"
           >
             <svg class="knowledge-chat__context-ring" viewBox="0 0 36 36" aria-hidden="true">
               <circle class="knowledge-chat__context-ring-track" cx="18" cy="18" r="15.5" pathLength="100" />
@@ -335,7 +376,10 @@ watch(
           <div
             id="knowledge-context-popover"
             class="knowledge-chat__context-popover"
-            role="tooltip"
+            role="region"
+            aria-label="上下文容量"
+            :aria-hidden="!contextDetailsOpen"
+            :tabindex="contextDetailsOpen ? 0 : -1"
             data-test="knowledge-context-popover"
           >
             <header>
@@ -645,7 +689,8 @@ watch(
 <style scoped lang="scss">
 .knowledge-chat {
   --keyboard-offset: 0px;
-  height: calc(100dvh - 4rem);
+  height: auto;
+  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   max-width: 100%;
@@ -671,6 +716,8 @@ watch(
 
 .knowledge-chat__toolbar {
   grid-area: toolbar;
+  position: relative;
+  z-index: 5;
   width: min(100%, 880px);
   justify-self: center;
   display: flex;
@@ -825,7 +872,7 @@ watch(
 }
 
 .knowledge-chat__context-budget {
-  position: relative;
+  position: static;
   flex: 0 0 auto;
 }
 
@@ -905,8 +952,11 @@ watch(
   position: absolute;
   z-index: 30;
   top: calc(100% + 0.55rem);
-  right: 0;
-  width: min(340px, calc(100vw - 3rem));
+  right: 1rem;
+  width: min(340px, calc(100% - 2rem));
+  max-height: min(300px, calc(100dvh - 14rem - var(--keyboard-offset)));
+  overflow: auto;
+  overscroll-behavior: contain;
   display: grid;
   gap: 0.65rem;
   padding: 0.8rem;
@@ -933,10 +983,10 @@ watch(
   }
 }
 
-.knowledge-chat__context-budget:hover .knowledge-chat__context-popover,
-.knowledge-chat__context-budget:focus-within .knowledge-chat__context-popover {
+.knowledge-chat__context-budget.is-open .knowledge-chat__context-popover {
   opacity: 1;
   visibility: visible;
+  pointer-events: auto;
   transform: translateY(0);
 }
 
@@ -1325,16 +1375,7 @@ watch(
     left: auto;
     right: 0.75rem;
     width: min(300px, calc(100% - 1.5rem));
-    max-height: min(
-      220px,
-      calc(
-        100dvh
-        - 56px
-        - var(--bottom-nav-height)
-        - env(safe-area-inset-bottom, 0px)
-        - 4rem
-      )
-    );
+    max-height: min(220px, calc(100dvh - var(--bottom-nav-height) - 4rem - var(--keyboard-offset)));
     gap: 0.5rem;
     padding: 0.65rem;
     overflow-x: hidden;

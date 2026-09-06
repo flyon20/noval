@@ -691,6 +691,20 @@ class KnowledgeAgentGovernanceServiceTest {
     }
 
     @Test
+    void shouldKeepHarnessIntelligenceDefaultOffAndValidateUpdates() {
+        KnowledgeAgentGovernanceService service = newService();
+        for (String key : List.of("harnessEvidenceRepairEnabled", "harnessAnswerValidationEnabled",
+            "harnessTaskCheckpointEnabled", "harnessStageSkillsEnabled")) {
+            assertThat(new ObjectMapper().valueToTree(service.runtimeConfig()).path(key).asText()).isEqualTo("false");
+            AgentRuntimeConfigUpdateRequest request = new AgentRuntimeConfigUpdateRequest();
+            request.setValue("true");
+            assertThat(new ObjectMapper().valueToTree(service.updateRuntimeConfig(key, request)).path(key).asText()).isEqualTo("true");
+            request.setValue("unbounded");
+            assertThatThrownBy(() -> service.updateRuntimeConfig(key, request)).isInstanceOf(BusinessException.class);
+        }
+    }
+
+    @Test
     void shouldListDefaultExpertProfiles() {
         KnowledgeAgentGovernanceService service = newService();
 
