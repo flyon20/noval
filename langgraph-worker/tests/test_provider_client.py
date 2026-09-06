@@ -1715,7 +1715,7 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
         gpt_profile = ProviderProfile(
             profile_key="selected-gpt",
             profile_version="v1",
-            endpoint="https://gpt-gateway.example/v1",
+            endpoint="https://api.openai.com/v1",
             model="gpt-5.6-sol",
             protocol="responses",
         )
@@ -1729,7 +1729,7 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
         gpt_chat_profile = ProviderProfile(
             profile_key="selected-gpt-chat",
             profile_version="v1",
-            endpoint="https://gpt-gateway.example/v1",
+            endpoint="https://api.openai.com/v1",
             model="gpt-5.6-sol",
             protocol="chat_completions",
         )
@@ -1803,7 +1803,11 @@ class ProviderResponsesApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("prompt_cache_key", unknown_payload)
         self.assertNotIn("user", unknown_payload)
 
-        gpt_snapshot = client._cache_continuity_snapshot(gpt_payload, "responses")
+        gpt_snapshot = client._cache_continuity_snapshot(
+            gpt_payload,
+            "responses",
+            provider_profile=gpt_profile,
+        )
         deepseek_snapshot = client._cache_continuity_snapshot(deepseek_payload, "responses")
         unknown_snapshot = client._cache_continuity_snapshot(unknown_payload, "responses")
         self.assertEqual("prompt_cache_key", gpt_snapshot["cacheIdentityMode"])

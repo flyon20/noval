@@ -17,6 +17,7 @@ const STATUS_LABELS: Record<string, string> = {
   disabled: '已停用',
   draft: '草稿',
   empty: '无数据',
+  error: '处理失败',
   failed: '失败',
   fallback_used: '已使用降级路径',
   insufficient_evidence: '证据不足',
@@ -34,6 +35,7 @@ const STATUS_LABELS: Record<string, string> = {
   published: '已发布',
   queued: '排队中',
   rejected: '已拒绝',
+  retrieval_failed: '检索服务异常',
   rolled_back: '已回滚',
   running: '运行中',
   skipped: '已跳过',
@@ -99,6 +101,7 @@ const INTENT_LABELS: Record<string, string> = {
 const DEGRADATION_REASON_LABELS: Record<string, string> = {
   answer_quality_gate_failed: '回答质量校验未通过，已使用保底结果',
   evidence_commit_rejected: '证据入库被拒绝，本轮结论未落库',
+  evidence_search_failed: '检索服务未能完成查询',
   insufficient_evidence: '可用证据不足',
   provider_exception: '模型服务暂时异常',
   rank_snapshot_metadata_incomplete_after_refresh: '榜单快照信息不完整',

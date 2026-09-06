@@ -27,7 +27,7 @@ from app.models.knowledge import (
     RankLookupResult,
     RankResearchPack,
 )
-from app.models.evidence_contract import EvidenceStatus
+from app.models.evidence_contract import EvidenceContract, EvidenceStatus
 from app.services.agents import (
     ExpertRegistry,
     create_context,
@@ -1484,25 +1484,10 @@ class NovelResearchAgent:
         request: KnowledgeChatRequest,
         sources: list[KnowledgeSource],
     ) -> str:
-        evidence = self._compose_rank_evidence_block(sources)
-        return (
-            f"{evidence}\n\n"
-            "## 市场判断\n"
-            "这个方向可以做，但核心卖点不能停在榜单表层。底层职业提供现实压力，都市脑洞负责异常感，"
-            "诸天万界外包特效负责高概念反差，三端一体负责持续升级。\n\n"
-            "## 金手指\n"
-            "- 创作者端：主角用现实特效工单拆镜头、控预算、验收素材。\n"
-            "- 万界生产端：修仙、机甲、妖族等外包劳务只看到被包装成副本/秘境的任务。\n"
-            "- 交付反馈端：成片热度、甲方复购和观众反馈转化为权限、预算和可调用工种。\n\n"
-            "## 大纲\n"
-            "- 第一章：主角作为底层特效外包工被欠薪压到崩溃，接到第一张诸天万界特效单。\n"
-            "- 第二章：万界外包团队误以为在秘境打工，完成一个低成本但真实震撼的特效镜头。\n"
-            "- 第三章：交付视频引爆甲方和同行质疑，主角发现三端一体系统能把质疑转成新订单。\n"
-            "- 十章方向：小单试水、源文件审查、同行拆台、万界劳务纠纷、甲方复购和第一次公开出圈逐层升级。\n\n"
-            "## 风险\n"
-            "开局要少解释系统，多用欠薪、赶工、交付和观众反应展示规则；榜单只能提供趋势证据，"
-            "真正差异化要落在特效外包行业细节和万界劳务误读。"
-        )
+        notice = "本次模型未能完成可靠的市场分析和创作建议，暂不生成未经验证的判断或大纲。"
+        if not sources:
+            return notice
+        return f"{notice}\n\n{self._compose_rank_evidence_block(sources)}"
 
     def _build_creative_messages(
         self,
@@ -2367,6 +2352,8 @@ class NovelResearchAgent:
         return payload
 
     def _market_analysis_rank_sources(self, state: ResearchState) -> list[KnowledgeSource]:
+        if len((state.get("source_policy") or {}).get("requestedCategories") or []) > 1:
+            return self._rank_sources_from(list(state.get("sources") or []))
         tool_sources = self._existing_rank_lookup_sources(state)
         if tool_sources is not None:
             return self._rank_sources_from(tool_sources)
@@ -2383,6 +2370,35 @@ class NovelResearchAgent:
             1,
             min(int(requested_current_count or settings.agent_market_topn_default), RANK_ANALYSIS_MAX_ITEMS),
         )
+        categories = list(dict.fromkeys(source.category for source in sources if source.category))
+        if len(categories) > 1:
+            category_payloads = {
+                category: self._market_snapshot_analysis_payload(
+                    [source for source in sources if source.category == category],
+                    requested_current_count=requested_count,
+                    group_by_date=group_by_date,
+                )
+                for category in categories
+            }
+            return {
+                "categories": category_payloads,
+                "snapshotCount": sum(item["snapshotCount"] for item in category_payloads.values()),
+                "requestedCurrentCount": requested_count * len(categories),
+                "currentCount": sum(item["currentCount"] for item in category_payloads.values()),
+                "coverageGap": sum(item["coverageGap"] for item in category_payloads.values()),
+                "currentCoverageComplete": all(item["currentCoverageComplete"] for item in category_payloads.values()),
+                "previousCount": 0,
+                "comparisonSupported": False,
+                "comparisonScope": "within_each_category_only",
+                "retentionRate": None,
+                "rankChanges": [],
+                "topicGroups": [],
+                "snapshots": [
+                    {**snapshot, "category": category}
+                    for category, item in category_payloads.items()
+                    for snapshot in item["snapshots"]
+                ],
+            }
         groups = self._rank_snapshot_groups(sources, group_by_date=group_by_date)
         current_group = groups[0] if groups else []
         current_coverage_complete = len(current_group) >= requested_count
@@ -6875,6 +6891,8 @@ class NovelResearchAgent:
 
     async def _structured_rank_lookup_node(self, state: ResearchState) -> ResearchState:
         request = state["request"]
+        if len(IntentRouter.market_categories(request.question or "")) > 1:
+            return {}
         lookup = self._parse_exact_rank_lookup(request.question or "")
         if not lookup:
             return {}
@@ -6939,7 +6957,8 @@ class NovelResearchAgent:
             channel_code = "male-new" if "新书榜" in normalized else "male"
         elif "女频" in normalized:
             channel_code = "female-new" if "新书榜" in normalized else "female"
-        category = "都市脑洞" if "都市脑洞" in normalized else None
+        categories = IntentRouter.market_categories(normalized)
+        category = categories[0] if categories else None
         return {
             "platform": "fanqie",
             "channel_code": channel_code,
@@ -7180,6 +7199,9 @@ class NovelResearchAgent:
                     "tool_runs": list(state.get("tool_runs") or []),
                     "response": project_scope_response,
                 }
+            categories = IntentRouter.market_categories(request.question or "")
+            if len(categories) > 1 and self._should_search_rank_evidence(request, state):
+                return await self._multi_category_rank_evidence(state, categories, task_tool_sources)
             coverage = self._capability_evidence_coverage(request, state, task_tool_sources)
             if coverage.get("coverageSatisfied"):
                 return self._completed_task_graph_evidence_result(
@@ -7418,10 +7440,11 @@ class NovelResearchAgent:
                     "reasonTags": ["tool_budget_exceeded"],
                 },
             }
-        except Exception:
+        except Exception as exc:
             preserved_sources = self._dedupe_knowledge_sources(
                 task_tool_sources + pack_sources + structured_rank_sources
             )
+            self._mark_degraded_answer(state, "evidence_search_failed")
             actions = self._dedupe(
                 list(state.get("actions", []))
                 + (["evidence_search_degraded"] if preserved_sources else ["evidence_search_failed"])
@@ -7431,7 +7454,11 @@ class NovelResearchAgent:
                 "actions": actions,
                 "tool_runs": list(state.get("tool_runs") or []),
                 "source_policy": source_policy,
+                "answer_degraded": True,
+                "degradation_reasons": list(state.get("degradation_reasons") or []),
                 "retrieval_diagnostics": {
+                    "status": "degraded" if preserved_sources else "failed",
+                    "errorType": type(exc).__name__,
                     "inputCount": len(task_tool_sources + pack_sources + structured_rank_sources),
                     "dedupedCount": len(preserved_sources),
                     "selectedCount": len(preserved_sources),
@@ -7441,6 +7468,99 @@ class NovelResearchAgent:
                     ],
                 },
             }
+
+    async def _multi_category_rank_evidence(
+        self,
+        state: ResearchState,
+        categories: list[str],
+        task_sources: list[KnowledgeSource],
+    ) -> ResearchState:
+        request = state["request"]
+        category_policies: dict[str, dict[str, Any]] = {}
+        contracts: list[EvidenceContract] = []
+        selected_sources: list[KnowledgeSource] = []
+        missing_categories: list[str] = []
+        other_sources = [source for source in task_sources if (source.sourceType or "").upper() != "RANK"]
+        evidence_limit = min(
+            RANK_ANALYSIS_MAX_ITEMS,
+            self._runtime_max_evidence_items(state.get("runtime_config")) or RANK_ANALYSIS_MAX_ITEMS,
+        )
+        other_sources = other_sources[:evidence_limit]
+        quota, remainder = divmod(max(0, evidence_limit - len(other_sources)), len(categories))
+        requested_limit = (self._parse_trend_rank_lookup_for_request(request) or {}).get("limit", evidence_limit)
+        for index, category in enumerate(categories):
+            sources = [
+                source for source in task_sources
+                if (source.sourceType or "").upper() == "RANK" and self._trend_category_matches(source, category)
+            ]
+            policy = self._build_trend_source_policy(request, sources, state=state, category=category)
+            if policy.get("trendGateFailed"):
+                sources = await self._lookup_rank_sources_for_trend(request, state, category=category)
+            policy = self._build_trend_source_policy(request, sources, state=state, category=category)
+            sources = self._project_current_rank_snapshot_sources(sources, policy)
+            sources = sources[:min(requested_limit, quota + (1 if index < remainder else 0))]
+            policy = self._build_trend_source_policy(request, sources, state=state, category=category)
+            sources = sources + other_sources
+            contract = self.evidence_arbiter.evaluate(
+                intent=str(state.get("domain_intent") or self._projected_intent_for_state(state) or "market_scan"),
+                sources=sources,
+                source_policy=policy,
+                required_evidence=self._required_evidence_for_state(state) or None,
+            )
+            policy["evidenceContract"] = contract.model_dump(mode="json", exclude_none=True)
+            category_policies[category] = policy
+            contracts.append(contract)
+            if policy.get("trendGateFailed") or contract.status not in {
+                EvidenceStatus.verified_latest, EvidenceStatus.degraded_directional,
+            }:
+                missing_categories.append(category)
+            selected_sources.extend(contract.selectedSources)
+
+        # Each board is validated independently; different boards are not history snapshots.
+        selected_sources = self._dedupe_knowledge_sources(selected_sources)
+        combined_status = (
+            EvidenceStatus.missing if missing_categories else
+            EvidenceStatus.degraded_directional if any(
+                contract.status == EvidenceStatus.degraded_directional for contract in contracts
+            ) else EvidenceStatus.verified_latest
+        )
+        combined_contract = EvidenceContract(
+            status=combined_status,
+            selectedSources=selected_sources,
+            referenceSignals=[signal for contract in contracts for signal in contract.referenceSignals],
+            warnings=[warning for contract in contracts for warning in contract.warnings],
+            requiredActions=self._dedupe([action for contract in contracts for action in contract.requiredActions]),
+            factualBoundary="independently verified snapshot for each requested category",
+            inferenceBoundary="different categories are not chronological comparison snapshots",
+        )
+        policy = {
+            **dict(state.get("source_policy") or {}),
+            "requestedCategories": categories,
+            "categoryPolicies": category_policies,
+            "missingCategories": missing_categories,
+            "trendGateFailed": bool(missing_categories),
+            "trendGateReason": "missing_requested_category_evidence" if missing_categories else "satisfied",
+            "comparisonAvailable": all(item.get("comparisonAvailable") for item in category_policies.values()),
+            "structuredRankCount": sum(item.get("structuredRankCount", 0) for item in category_policies.values()),
+            "evidenceContract": combined_contract.model_dump(mode="json", exclude_none=True),
+        }
+        policy, _ = self._attach_evidence_commit(state, policy, selected_sources)
+        failed = any(
+            run.get("name") == "rank.lookup" and run.get("status") == "failed"
+            and run.get("reason") in {"tool_timeout", "exception"}
+            for run in state.get("tool_runs", []) if isinstance(run, dict)
+        )
+        return {
+            "sources": selected_sources,
+            "source_policy": policy,
+            "tool_runs": list(state.get("tool_runs") or []),
+            "actions": list(state.get("actions") or []),
+            "retrieval_diagnostics": {
+                "status": "failed" if failed else "completed",
+                "selectedCount": len(selected_sources),
+                "reasonTags": ["category_scoped_rank_queries"],
+            },
+        }
 
     def _project_scope_response(self, state: ResearchState) -> KnowledgeChatResponse | None:
         if not self._is_project_knowledge_state(state):
@@ -7826,8 +7946,11 @@ class NovelResearchAgent:
         structured_rank_sources: list[KnowledgeSource],
         *,
         state: ResearchState | None = None,
+        category: str | None = None,
     ) -> dict[str, Any]:
         lookup = self._parse_trend_rank_lookup_for_request(request) or {}
+        if category is not None:
+            lookup = {**lookup, "category": category, "board_code": None}
         requested_policy = dict((state or {}).get("source_policy") or {})
         allow_historical = bool(requested_policy.get("allowHistorical"))
         historical_range = self._historical_snapshot_range(requested_policy)
@@ -8615,9 +8738,15 @@ class NovelResearchAgent:
             material=analysis.content or analysis.summary or analysis.preview,
         )
 
-    async def _lookup_rank_sources_for_trend(self, request: KnowledgeChatRequest, state: ResearchState) -> list[KnowledgeSource]:
+    async def _lookup_rank_sources_for_trend(
+        self,
+        request: KnowledgeChatRequest,
+        state: ResearchState,
+        *,
+        category: str | None = None,
+    ) -> list[KnowledgeSource]:
         existing_sources = self._existing_rank_lookup_sources(state)
-        if existing_sources is not None:
+        if existing_sources is not None and category is None:
             return existing_sources
         lookup_fn = getattr(self.knowledge_client, "lookup_rank", None)
         if not callable(lookup_fn):
@@ -8631,6 +8760,8 @@ class NovelResearchAgent:
             )
             return []
         lookup = self._parse_trend_rank_lookup_for_request(request)
+        if lookup and category is not None:
+            lookup = {**lookup, "category": category, "board_code": None}
         if not lookup:
             self._append_tool_run(
                 state,
@@ -8729,8 +8860,10 @@ class NovelResearchAgent:
         if not lookup:
             context = self._format_context_for_sticky_extraction(conversation_context.summary or "")
             if self._looks_like_contextual_trend_followup(question) and any(
-                keyword in context for keyword in ("男频", "女频", "都市脑洞", "新书榜")
+                keyword in context for keyword in ("男频", "女频", "新书榜")
             ):
+                lookup = self._parse_trend_rank_lookup(f"{context}\n{question}")
+            elif self._looks_like_contextual_trend_followup(question) and IntentRouter.market_categories(context):
                 lookup = self._parse_trend_rank_lookup(f"{context}\n{question}")
         if not lookup:
             return None
@@ -8753,12 +8886,17 @@ class NovelResearchAgent:
                 lookup["channel_code"] = "male-new" if self._prefers_new_rank_channel(combined) else "male"
             elif "女频" in combined:
                 lookup["channel_code"] = "female-new" if self._prefers_new_rank_channel(combined) else "female"
-        if not lookup.get("category") and "都市脑洞" in combined:
-            lookup["category"] = "都市脑洞"
+        if not lookup.get("category"):
+            categories = IntentRouter.market_categories(combined)
+            if categories:
+                lookup["category"] = categories[0]
         return lookup
 
     def _looks_like_contextual_trend_followup(self, question: str) -> bool:
-        return any(keyword in question for keyword in ("热门", "题材", "趋势", "最近", "榜单", "开书", "开文", "扫榜"))
+        categories = IntentRouter.market_categories(question)
+        return bool(categories) or any(
+            keyword in question for keyword in ("热门", "题材", "趋势", "最近", "榜单", "开书", "开文", "扫榜")
+        )
 
     def _parse_trend_rank_lookup(self, question: str) -> dict[str, Any] | None:
         normalized = (question or "").strip()
@@ -8766,14 +8904,15 @@ class NovelResearchAgent:
             return None
         if not any(keyword in normalized for keyword in ("热门", "题材", "趋势", "最近", "榜单", "开书", "开文")):
             return None
-        if not any(keyword in normalized for keyword in ("男频", "女频", "都市脑洞", "新书榜")):
+        categories = IntentRouter.market_categories(normalized)
+        if not categories and not any(keyword in normalized for keyword in ("男频", "女频", "新书榜")):
             return None
         channel_code = None
         if "男频" in normalized:
             channel_code = "male-new" if self._prefers_new_rank_channel(normalized) else "male"
         elif "女频" in normalized:
             channel_code = "female-new" if self._prefers_new_rank_channel(normalized) else "female"
-        category = "都市脑洞" if "都市脑洞" in normalized else None
+        category = categories[0] if categories else None
         return {
             "platform": "fanqie",
             "channel_code": channel_code,
@@ -8992,7 +9131,32 @@ class NovelResearchAgent:
     async def _answer_writer_node(self, state: ResearchState) -> ResearchState:
         sources = state.get("sources", [])
         source_policy = dict(state.get("source_policy") or {})
+        retrieval_diagnostics = dict(state.get("retrieval_diagnostics") or {})
+        retrieval_failed = (
+            retrieval_diagnostics.get("status") == "failed"
+            or "evidence_search_failed" in retrieval_diagnostics.get("reasonTags", [])
+        )
         conceptual_market_answer = self._allows_conceptual_market_answer(state)
+        if not sources and retrieval_failed and not conceptual_market_answer:
+            self._mark_degraded_answer(state, "evidence_search_failed")
+            response = KnowledgeChatResponse(
+                status="error",
+                answer="检索服务未能完成本次查询，暂时无法核实所需材料。这不代表知识库没有相关内容。",
+                actions=self._dedupe(list(state.get("actions", [])) + ["evidence_search_failed"]),
+                resultJson={
+                    "status": "error",
+                    "answerStatus": "retrieval_failed",
+                    "answerBoundary": "system_failure",
+                    "intent": state.get("intent"),
+                    "bookId": state.get("book_id"),
+                    "bookName": state.get("book_name"),
+                    "degraded": True,
+                    "degradationReasons": list(state.get("degradation_reasons") or []),
+                },
+            )
+            self._attach_domain_intent_metadata(response, state)
+            self._attach_memory_metadata(response, state["request"])
+            return {"response": response}
         if source_policy.get("trendGateFailed") and not conceptual_market_answer:
             answer_status = (
                 "needs_required_evidence"
@@ -9002,6 +9166,9 @@ class NovelResearchAgent:
             response = KnowledgeChatResponse(
                 status="insufficient_evidence",
                 answer=(
+                    "证据不足：尚未完成" + "、".join(source_policy["missingCategories"])
+                    + "分类的榜单证据核实，无法完成本次分类对比。"
+                    if source_policy.get("missingCategories") else
                     "证据不足：当前没有命中最新结构化榜单前排数据。"
                     "旧向量或低排名材料不会用于最近趋势结论，请先刷新榜单后再分析。"
                 ),
@@ -11720,6 +11887,14 @@ class NovelResearchAgent:
         lead = self._rank_lead_sentence(sources)
         if not lead:
             return answer
+        category_names = list(dict.fromkeys(source.category for source in sources if source.category))
+        multiple_categories = len(category_names) > 1
+        if multiple_categories and any(marker in (answer or "") for marker in ("同一最新快照", "留存率", "排名升降")):
+            return self._compose_rank_first_trend_answer(
+                sources,
+                requested_count=self._rank_answer_requested_count(request, state, sources),
+                market_analysis=None,
+            )
         request_level = self._market_request_level_for_state(state)
         if request_level in {
             MarketRequestLevel.ANALYSIS.value,
@@ -11878,6 +12053,8 @@ class NovelResearchAgent:
         market_analysis: dict[str, Any] | None = None,
     ) -> str:
         ranked_sources = self._rank_sources_for_answer(sources)[:RANK_ANALYSIS_MAX_ITEMS]
+        categories = list(dict.fromkeys(source.category for _index, source in ranked_sources if source.category))
+        multiple_categories = len(categories) > 1
         book_lines: list[str] = []
         for citation_index, source in ranked_sources:
             rank_no = source.rankNo or citation_index
@@ -11885,14 +12062,20 @@ class NovelResearchAgent:
             book_name = source.bookName or "未命名作品"
             preview = self._short_text(source.preview or "", 100)
             suffix = f"：{preview}" if preview else ""
-            book_lines.append(f"{rank_no}. 《{book_name}》{author}{suffix}[{citation_index}]")
+            rank_label = f"{source.category}第{rank_no}名" if multiple_categories else str(rank_no)
+            book_lines.append(f"{rank_label}. 《{book_name}》{author}{suffix}[{citation_index}]")
         if not book_lines:
             book_lines.append("- 当前没有可展开的榜单作品明细。")
         snapshot_times = [source.snapshotTime for _index, source in ranked_sources if source.snapshotTime]
         coverage = len(ranked_sources)
         expected = max(1, int(requested_count or max(settings.agent_market_topn_default, coverage)))
         snapshot_note = f"，快照时间 {max(snapshot_times)}" if snapshot_times else ""
-        if coverage < expected:
+        if multiple_categories:
+            coverage_line = "\n".join(
+                f"- {category}：当前取得 {sum(source.category == category for _index, source in ranked_sources)}/{expected} 条请求范围内的记录，按该分类独立核验快照。"
+                for category in categories
+            )
+        elif coverage < expected:
             coverage_line = (
                 f"- 当前仅取得同一最新快照 {coverage}/{expected} 条当前结构化榜单记录{snapshot_note}；"
                 "结果未覆盖完整请求范围，不能把缺失位置当成没有作品。[1]"
@@ -11903,7 +12086,9 @@ class NovelResearchAgent:
             )
         analysis = market_analysis or {}
         scope_lines = [coverage_line, "- 榜单名次是当前快照事实，不等同于阅读量或长期热度。[1]"]
-        if analysis:
+        if multiple_categories:
+            scope_lines.append("- 不同分类的榜单不是前后两个历史快照，不能据此计算留存率、排名升降或长期趋势。")
+        elif analysis:
             if analysis.get("comparisonSupported"):
                 previous_count = self._int_or_zero(analysis.get("previousCount"))
                 retention_rate = analysis.get("retentionRate")

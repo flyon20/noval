@@ -136,24 +136,18 @@ class IntentAgentTest(unittest.IsolatedAsyncioTestCase):
         decision = await agent.decide(request)
 
         self.assertEqual([], calls)
-        self.assertEqual(Intent.mixed_creation_research, decision.primaryIntent)
-        self.assertEqual(
-            [Intent.market_scan, Intent.outline_building],
-            decision.subIntents,
-        )
+        self.assertEqual(Intent.market_scan, decision.primaryIntent)
+        self.assertEqual([], decision.subIntents)
         self.assertTrue(decision.toolNeeds.needsRankData)
-        self.assertTrue(decision.toolNeeds.needsCreativeGeneration)
-        self.assertTrue(decision.toolNeeds.needsOutlineMemory)
-        self.assertEqual("supporting_research", decision.entities.get("conversationTaskMode"))
-        self.assertEqual("outline_building", decision.entities.get("activeGoalIntent"))
-        self.assertIn("supervisor:active_goal_inherited", decision.routingNotes)
+        self.assertFalse(decision.toolNeeds.needsCreativeGeneration)
+        self.assertNotIn("supervisor:active_goal_inherited", decision.routingNotes)
 
         envelope = agent.to_envelope(decision, request=request)
 
         self.assertEqual("context_followup", envelope.conversationMode)
-        self.assertEqual("supervised_rules", envelope.classificationSource)
+        self.assertEqual("rules", envelope.classificationSource)
         self.assertIn("market_scan", envelope.operations)
-        self.assertIn("outline_building", envelope.operations)
+        self.assertNotIn("outline_building", envelope.operations)
 
     async def test_explicit_standalone_market_request_does_not_inherit_outline_goal(self) -> None:
         agent = IntentAgent()

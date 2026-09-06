@@ -687,18 +687,17 @@ class IntentRouter:
             entities["marketRequestLevel"] = market_request_level.value
         if market_question_type is not None:
             entities["marketQuestionType"] = market_question_type.value
-        if "番茄" in text:
-            entities["platform"] = "番茄"
-        if "起点" in text:
-            entities["platform"] = "起点"
-        if "男频" in text:
-            entities["channel"] = "男频"
-        if "女频" in text:
-            entities["channel"] = "女频"
-        for category in ("都市脑洞", "玄幻", "现言", "古言", "悬疑", "科幻", "仙侠", "娱乐圈", "年代文"):
-            if category in text:
-                entities["category"] = category
-                break
+        for field, options in (("platform", ("番茄", "起点")), ("channel", ("男频", "女频"))):
+            scope_text = question if any(option in question for option in options) else text
+            matches = [option for option in options if option in scope_text]
+            if matches:
+                entities[field] = min(matches, key=scope_text.index)
+        explicit_categories = self.market_categories(question)
+        categories = explicit_categories or self.market_categories(text)
+        if categories:
+            entities["category"] = categories[0]
+        if len(explicit_categories) > 1:
+            entities["categories"] = explicit_categories
         board_match = re.search(r"([A-Za-z0-9_-]{2,})榜", question)
         if board_match:
             entities["boardCode"] = board_match.group(1)
@@ -897,6 +896,13 @@ class IntentRouter:
             "top",
             "快照",
         ))
+
+    @staticmethod
+    def market_categories(text: str) -> list[str]:
+        categories = (
+            "都市脑洞", "都市日常", "玄幻", "现言", "古言", "悬疑", "科幻", "仙侠", "娱乐圈", "年代文",
+        )
+        return sorted((category for category in categories if category in text), key=text.index)
 
     def _conversation_market_text(
         self,

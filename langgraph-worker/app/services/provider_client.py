@@ -840,7 +840,13 @@ class OpenAICompatibleProviderClient:
         if not prompt_cache_key_enabled:
             return None
         version = self._GPT_MODEL_VERSION.match(selected_model)
-        if version is not None:
+        # A compatible gateway may expose this model without the new cache API.
+        # Explicit profile capabilities above remain authoritative for such routes.
+        official_endpoint = (
+            provider_profile is not None
+            and urlsplit(provider_profile.endpoint).hostname == "api.openai.com"
+        )
+        if version is not None and official_endpoint:
             major = int(version.group(1))
             minor = int(version.group(2) or 0)
             if major > 5 or (major == 5 and minor >= 6):

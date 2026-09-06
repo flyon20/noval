@@ -269,6 +269,10 @@ class DataAccessPlanner:
                 source = DataProposalSource.DETERMINISTIC_DEFAULT
                 reasons.append("deterministic_data_access_default")
 
+        if len(requests) > 12:
+            rejected += len(requests) - 12
+            requests = requests[:12]
+            reasons.append("data_access_request_limit_exceeded")
         if rejected:
             reasons.append("data_access_proposals_rejected")
         requires_project_scope = any(
@@ -491,26 +495,33 @@ class DataAccessPlanner:
         requests: list[DataAccessRequest] = []
         for dataset in datasets:
             defaults = _DATASET_DEFAULTS[dataset]
-            try:
-                requests.append(DataAccessRequest(
-                    datasetCapability=dataset,
-                    purpose=self._purpose(intent, dataset, defaults.purpose),
-                    semanticQuery=semantic_query,
-                    entities=self._entities(intent.entities),
-                    temporalScope=self._temporal_scope(intent.entities, dataset),
-                    retrievalChannels=defaults.channels,
-                    evidenceTypes=defaults.evidence,
-                    filters=self._filters_for_dataset(dataset, self._filters(intent.entities)) or (),
-                    limit=defaults.max_limit,
-                    required=True,
-                    reasonCodes=(
-                        "planner:deterministic_default",
-                        f"dataset:{dataset.value}",
-                        f"purpose:{self._purpose(intent, dataset, defaults.purpose).value}",
-                    ),
-                ))
-            except ValidationError:
-                continue
+            scopes = [intent.entities]
+            categories = intent.entities.get("categories")
+            if dataset in {DatasetCapability.MARKET_RANK, DatasetCapability.MARKET_HISTORY} and isinstance(categories, (list, tuple)):
+                names = list(dict.fromkeys(value.strip() for value in categories if isinstance(value, str) and value.strip()))
+                if len(names) > 1:
+                    scopes = [{**intent.entities, "category": name} for name in names]
+            for entities in scopes:
+                try:
+                    requests.append(DataAccessRequest(
+                        datasetCapability=dataset,
+                        purpose=self._purpose(intent, dataset, defaults.purpose),
+                        semanticQuery=semantic_query,
+                        entities=self._entities(entities),
+                        temporalScope=self._temporal_scope(entities, dataset),
+                        retrievalChannels=defaults.channels,
+                        evidenceTypes=defaults.evidence,
+                        filters=self._filters_for_dataset(dataset, self._filters(entities)) or (),
+                        limit=defaults.max_limit,
+                        required=True,
+                        reasonCodes=(
+                            "planner:deterministic_default",
+                            f"dataset:{dataset.value}",
+                            f"purpose:{self._purpose(intent, dataset, defaults.purpose).value}",
+                        ),
+                    ))
+                except ValidationError:
+                    continue
         return requests
 
     @staticmethod

@@ -7370,23 +7370,20 @@ class NovelResearchAgentTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(provider_call)
-        self.assertEqual(Intent.mixed_creation_research, decision.primaryIntent)
-        self.assertEqual(
-            [Intent.market_scan, Intent.outline_building],
-            decision.subIntents,
-        )
+        self.assertEqual(Intent.market_scan, decision.primaryIntent)
+        self.assertEqual([], decision.subIntents)
         capability_ids = {
             capability.capabilityId
             for capability in capability_plan.capabilityRequests
         }
         self.assertIn("market.read", capability_ids)
-        self.assertIn("creation.outline", capability_ids)
+        self.assertNotIn("creation.outline", capability_ids)
         self.assertEqual(data_access_plan.fingerprint, capability_plan.dataAccessPlanHash)
         self.assertEqual((), capability_plan.dataAccessRequestIds)
         self.assertNotIn("governed-data-access", capability_plan.skillCandidateIds)
-        self.assertEqual("COMPLEX", capability_plan.executionPath.value)
+        self.assertEqual("RETRIEVE", capability_plan.executionPath.value)
         self.assertEqual(
-            [TaskType.market_scan, TaskType.outline_building],
+            [TaskType.market_scan],
             [task.type for task in task_graph.tasks],
         )
 
@@ -9362,9 +9359,10 @@ class NovelResearchAgentTest(unittest.IsolatedAsyncioTestCase):
 
         response = await agent.run(request)
 
-        self.assertEqual("insufficient_evidence", response.status)
+        self.assertEqual("error", response.status)
+        self.assertEqual("retrieval_failed", response.resultJson["answerStatus"])
         self.assertEqual([], response.sources)
-        self.assertIn("index_book", response.actions)
+        self.assertIn("evidence_search_failed", response.actions)
         self.assertEqual(101, response.resultJson["bookId"])
 
     async def test_should_refuse_out_of_scope_question_with_ai_guardrail(self) -> None:

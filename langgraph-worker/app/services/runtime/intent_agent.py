@@ -106,6 +106,7 @@ class IntentSupervisor:
         if (
             decision.primaryIntent is Intent.market_scan
             and active_goal_intent is not None
+            and self._continues_creation_goal(question)
             and "rule:standalone-market-only" not in routing_notes
         ):
             inherited_sub_intents = [Intent.market_scan, active_goal_intent]
@@ -192,15 +193,19 @@ class IntentSupervisor:
             "current goal",
             "previous goal",
         )
-        for raw_line in summary.replace("\r\n", "\n").splitlines():
-            line = raw_line.strip()
-            for label in labels:
-                if not line.lower().startswith(label.lower()):
-                    continue
-                value = re.sub(rf"^{re.escape(label)}\s*[:：]\s*", "", line, flags=re.IGNORECASE).strip()
-                if value:
-                    values.append(value.lower())
+        boundaries = (*labels, "上一轮结论", "最近回答", "previous answer")
+        label_pattern = "|".join(re.escape(label) for label in boundaries)
+        # Summaries may flatten goal and answer slots onto one line.
+        for match in re.finditer(
+            rf"(?P<label>{label_pattern})\s*[:：]\s*(?P<value>.*?)(?=(?:{label_pattern})\s*[:：]|\n|$)",
+            summary.replace("\r\n", "\n"),
+            flags=re.IGNORECASE,
+        ):
+            if match.group("label").lower() not in labels:
                 break
+            value = match.group("value").strip().lower()
+            if value:
+                values.append(value)
         for value in values:
             intent = self._creation_intent_from_context_value(value)
             if intent is not None:
@@ -215,12 +220,22 @@ class IntentSupervisor:
             (Intent.character_design, ("character_design", "人设", "角色设计", "人物设计")),
             (Intent.worldbuilding, ("worldbuilding", "世界观", "设定体系", "势力设计")),
             (Intent.revision_advice, ("revision_advice", "改稿", "修订", "润色", "重写")),
-            (Intent.inspiration_expand, ("inspiration_expand", "脑洞", "灵感", "题材发散")),
+            (Intent.inspiration_expand, ("inspiration_expand", "扩展脑洞", "脑洞扩展", "灵感扩展", "题材发散")),
         )
         for intent, markers in mappings:
             if any(marker in value for marker in markers):
                 return intent
         return None
+
+    @staticmethod
+    def _continues_creation_goal(question: str) -> bool:
+        return bool(re.search(
+            r"(?:结合|围绕|针对|用于).{0,12}(?:大纲|设定|故事|创作|项目|方向)"
+            r"|(?:这个|上述|刚才的|我的)(?:方向|设定|大纲|故事|项目)"
+            r"|\b(?:for|given|continue)\s+(?:my|this|that|our|the previous)\s+(?:story|outline|premise|project)\b",
+            question,
+            flags=re.IGNORECASE,
+        ))
 
     def _looks_like_chapter_outline_followup(self, question: str) -> bool:
         if not any(marker in question for marker in ("这本", "本书", "该书", "这个")):
@@ -321,6 +336,19 @@ class IntentAgent:
             routing_notes.append("supervisor:market_taxonomy_preserved")
             decision = rule_decision.model_copy(update={
                 "routingNotes": list(dict.fromkeys(routing_notes)),
+            })
+        elif (
+            fallback_decision is not None
+            and rule_decision.primaryIntent is Intent.market_scan
+            and fallback_decision.primaryIntent is not Intent.market_scan
+            and float(rule_decision.confidence or 0.0) >= 0.82
+            and not self.supervisor._continues_creation_goal(request.question or "")
+            and any(marker in (request.question or "") for marker in ("榜", "趋势", "排名"))
+        ):
+            decision = rule_decision.model_copy(update={
+                "routingNotes": list(dict.fromkeys([
+                    *rule_decision.routingNotes, "supervisor:explicit_market_scope_preserved",
+                ])),
             })
         return self.supervisor.repair(decision, request)
 

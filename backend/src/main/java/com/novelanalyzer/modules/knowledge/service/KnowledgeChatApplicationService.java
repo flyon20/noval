@@ -105,6 +105,8 @@ public class KnowledgeChatApplicationService {
             return readResponse(start.existingResponseJson());
         }
         CompatibilityLeaseMonitor leaseMonitor = startCompatibilityHeartbeat(start);
+        String previousTraceId = TraceIdHolder.get();
+        TraceIdHolder.set(start.runId());
         try {
             KnowledgeChatResponseVO response = chatService.chatForDurableCommit(
                 request, leaseMonitor.leaseLost()::get
@@ -121,6 +123,7 @@ public class KnowledgeChatApplicationService {
             }
             throw ex;
         } finally {
+            restoreTraceId(previousTraceId);
             cancelMonitor(leaseMonitor);
         }
     }
@@ -143,6 +146,9 @@ public class KnowledgeChatApplicationService {
             start, leaseMonitor.leaseLost(), user
         );
         ScheduledFuture<?> deltaFlush = startCompatibilityDeltaFlush(deltaBuffer);
+        String previousTraceId = TraceIdHolder.get();
+        // KnowledgeChatService captures this identity before scheduling its SSE worker.
+        TraceIdHolder.set(start.runId());
         try {
             return chatService.streamChatForDurableCommit(
                 request,
@@ -206,6 +212,16 @@ public class KnowledgeChatApplicationService {
                 cancelMonitor(leaseMonitor);
             }
             throw ex;
+        } finally {
+            restoreTraceId(previousTraceId);
+        }
+    }
+
+    private static void restoreTraceId(String previousTraceId) {
+        if (previousTraceId == null) {
+            TraceIdHolder.clear();
+        } else {
+            TraceIdHolder.set(previousTraceId);
         }
     }
 
