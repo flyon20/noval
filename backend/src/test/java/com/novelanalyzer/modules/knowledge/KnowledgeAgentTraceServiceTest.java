@@ -1,5 +1,6 @@
 package com.novelanalyzer.modules.knowledge;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.novelanalyzer.common.context.AuthUser;
 import com.novelanalyzer.common.context.AuthUserHolder;
 import com.novelanalyzer.common.exception.BusinessException;
@@ -116,8 +117,72 @@ class KnowledgeAgentTraceServiceTest {
         assertThat(detail.getRetrievalDiagnostics()).contains("trend_quota_selection");
         assertThat(detail.getSourcePolicy()).contains("latest");
         assertThat(detail.getSupervisorDecision()).contains("answerable");
-        assertThat(detail.getMemoryCandidates()).contains("likes fast starts");
+        assertThat(detail.getMemoryCandidates()).contains("project").doesNotContain("likes fast starts");
+        assertThat(detail.getResultJson()).doesNotContain("likes fast starts");
         assertThat(detail.getSnapshotTime()).isEqualTo("2026-06-22T00:00:00");
+    }
+
+    @Test
+    void shouldExposeTruthfulSkillMediationWithoutSkillBodiesAndPreferBomForGoldenDraft() {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        KnowledgeAgentTraceService service = new KnowledgeAgentTraceService(jdbcTemplate);
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setStatus("answered");
+        response.setResultJson(Map.ofEntries(
+            Map.entry("taskGraph", Map.of("tasks", List.of(Map.of("type", "outline_building")))),
+            Map.entry("toolRuns", List.of()),
+            Map.entry("selectedSkills", List.of("legacy-should-not-win")),
+            Map.entry("skillMediation", Map.ofEntries(
+                Map.entry("candidateCount", 2),
+                Map.entry("eligibleCount", 2),
+                Map.entry("activatedCount", 1),
+                Map.entry("rejectedCount", 1),
+                Map.entry("eligibleSkillIds", List.of("webnovel-outline-building", "webnovel-market-scan")),
+                Map.entry("activatedSkillIds", List.of("webnovel-outline-building")),
+                Map.entry("records", List.of(
+                    Map.ofEntries(
+                        Map.entry("skillId", "webnovel-outline-building"),
+                        Map.entry("version", "1.2.0"),
+                        Map.entry("state", "ACTIVATED"),
+                        Map.entry("candidateReasons", List.of("intent:outline_building")),
+                        Map.entry("rejectionReasons", List.of()),
+                        Map.entry("bodyInjected", true),
+                        Map.entry("instructions", "PRIVATE_ACTIVATED_SKILL_BODY")
+                    ),
+                    Map.ofEntries(
+                        Map.entry("skillId", "webnovel-market-scan"),
+                        Map.entry("version", "2.0.0"),
+                        Map.entry("state", "REJECTED"),
+                        Map.entry("candidateReasons", List.of("task:market_scan")),
+                        Map.entry("rejectionReasons", List.of("budget")),
+                        Map.entry("bodyInjected", false),
+                        Map.entry("instructions", Map.of("summary", "PRIVATE_REJECTED_SKILL_BODY"))
+                    )
+                ))
+            )),
+            Map.entry("skillBom", Map.of("skills", List.of(Map.ofEntries(
+                Map.entry("skillId", "webnovel-outline-building"),
+                Map.entry("version", "1.2.0"),
+                Map.entry("contentHash", "a".repeat(64)),
+                Map.entry("status", "ACTIVE"),
+                Map.entry("source", "backend")
+            )))),
+            Map.entry("trace", Map.of("traceId", "trace-skill-mediation"))
+        ));
+
+        service.persistFromChat(7L, 11L, "conv-skill-mediation", "build an outline", response);
+
+        AuthUserHolder.set(AuthUser.of(1L, "admin", Set.of("ADMIN")));
+        KnowledgeAgentTraceVO detail = service.detailForAdmin(service.listForAdmin().get(0).getId());
+        GoldenCandidateDraftVO draft = service.createGoldenCandidateDraft(detail.getId());
+
+        assertThat(detail.getSkillMediation())
+            .contains("candidateCount", "eligibleCount", "activatedCount", "rejectedCount")
+            .contains("webnovel-outline-building", "webnovel-market-scan", "ACTIVATED", "REJECTED", "budget", "bodyInjected")
+            .doesNotContain("PRIVATE_ACTIVATED_SKILL_BODY", "PRIVATE_REJECTED_SKILL_BODY", "instructions");
+        assertThat(detail.getSkillBom()).contains("webnovel-outline-building", "1.2.0").doesNotContain("legacy-should-not-win");
+        assertThat(detail.getResultJson()).doesNotContain("PRIVATE_ACTIVATED_SKILL_BODY", "PRIVATE_REJECTED_SKILL_BODY", "instructions");
+        assertThat(draft.getSelectedSkills()).containsExactly("webnovel-outline-building");
     }
 
     @Test
@@ -187,15 +252,232 @@ class KnowledgeAgentTraceServiceTest {
         assertThat(detail.getMcpToolCalls()).contains("rank.lookup");
         assertThat(detail.getToolPermissionDecisions()).contains("within route");
         assertThat(detail.getEvidenceContract()).contains("verified_latest");
+        assertThat(detail.getMemoryCandidates()).doesNotContain("likes fast starts");
+        assertThat(detail.getResultJson()).doesNotContain("likes fast starts");
         assertThat(detail.getSelectedSnapshotGroup()).contains("2026-06-23T00:00:00");
         assertThat(detail.getRejectedSnapshotGroups()).contains("2026-06-22T00:00:00");
         assertThat(detail.getMemoryUsed()).contains("semantic");
-        assertThat(detail.getMemoryCandidates()).contains("likes fast starts");
         assertThat(detail.getSpecialistAgentResults()).contains("OutlineAgent");
         assertThat(detail.getSelectedExperts()).contains("market_scan");
         assertThat(detail.getExpertRouter()).contains("intent:mixed_creation_research");
         assertThat(detail.getSupervisorDecision()).contains("answerable");
         assertThat(detail.getFinalAnswerBoundary()).contains("bounded");
+    }
+
+    @Test
+    void shouldKeepMemoryBodiesOutOfTopLevelAndNestedTracePayloads() {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        KnowledgeAgentTraceService service = new KnowledgeAgentTraceService(jdbcTemplate);
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setStatus("answered");
+        response.setResultJson(Map.ofEntries(
+            Map.entry("taskGraph", Map.of("tasks", List.of())),
+            Map.entry("toolRuns", List.of()),
+            Map.entry("memoryCandidatePayloads", List.of(Map.of(
+                "content", "TOP_LEVEL_MEMORY_BODY",
+                "body", "TOP_LEVEL_BODY",
+                "novelText", "TOP_LEVEL_NOVEL_TEXT"
+            ))),
+            Map.entry("privateMemoryPayload", Map.of("source", "UNKNOWN_MEMORY_BODY")),
+            Map.entry("memoryContext", Map.of(
+                "items", List.of(Map.of(
+                    "memoryId", 12,
+                    "Content", "NESTED_CASE_VARIANT_BODY",
+                    "body", "NESTED_BODY",
+                    "novelText", "NESTED_NOVEL_TEXT",
+                    "reason", "REASON_MEMORY_BODY",
+                    "sourceTraceId", "trace-memory-source"
+                ), "LIST_MEMORY_BODY")
+            )),
+            Map.entry("memoryDiagnostics", Map.of(
+                "candidatePersistence", Map.of(
+                    "saved", 1,
+                    "payload", Map.of("content", "DIAGNOSTIC_MEMORY_BODY"),
+                    "backendFallback", Map.of(
+                        "status", "failed",
+                        "errorType", "IllegalStateException",
+                        "message", "PRIVATE_DATABASE_FAILURE_DETAIL"
+                    )
+                )
+            )),
+            Map.entry("contextUsed", Map.of(
+                "memoryContext", Map.of("items", List.of(Map.of("body", "CONTEXT_USED_MEMORY_BODY")))
+            )),
+            Map.entry("trace", Map.of(
+                "traceId", "trace-memory-redaction",
+                "memoryContext", "SCALAR_MEMORY_BODY",
+                "memoryUsed", Map.of(
+                    "items", List.of(Map.of("novelText", "TRACE_MEMORY_BODY", "factKey", "safe.fact.key"))
+                ),
+                "memoryCandidatePayloads", List.of(Map.of("content", "TRACE_CANDIDATE_BODY"))
+            ))
+        ));
+
+        service.persistFromChat(7L, 11L, "conv-memory-redaction", "question", response);
+
+        AuthUserHolder.set(AuthUser.of(1L, "admin", Set.of("ADMIN")));
+        String resultJson = service.detailForAdmin(service.listForAdmin().get(0).getId()).getResultJson();
+        assertThat(resultJson)
+            .contains("trace-memory-source", "safe.fact.key", "IllegalStateException")
+            .doesNotContain(
+                "TOP_LEVEL_MEMORY_BODY",
+                "TOP_LEVEL_BODY",
+                "TOP_LEVEL_NOVEL_TEXT",
+                "UNKNOWN_MEMORY_BODY",
+                "NESTED_CASE_VARIANT_BODY",
+                "NESTED_BODY",
+                "NESTED_NOVEL_TEXT",
+                "REASON_MEMORY_BODY",
+                "LIST_MEMORY_BODY",
+                "DIAGNOSTIC_MEMORY_BODY",
+                "PRIVATE_DATABASE_FAILURE_DETAIL",
+                "CONTEXT_USED_MEMORY_BODY",
+                "SCALAR_MEMORY_BODY",
+                "TRACE_MEMORY_BODY",
+                "TRACE_CANDIDATE_BODY"
+            );
+    }
+
+    @Test
+    void shouldPersistOnlySafeTraceProjectionForToolBodiesUploadsAndCredentials() {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        KnowledgeAgentTraceService service = new KnowledgeAgentTraceService(jdbcTemplate);
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setStatus("answered");
+        response.setAnswer("PRIVATE_RESPONSE_BODY_" + "a".repeat(260));
+        response.setResultJson(Map.ofEntries(
+            Map.entry("taskGraph", Map.of("tasks", List.of(Map.of("type", "project_retrieve")))),
+            Map.entry("toolRuns", List.of(Map.of(
+                "name", "project.retrieve",
+                "status", "succeeded",
+                "durationMs", 18,
+                "input", Map.of("query", "PRIVATE_CHAPTER_BODY_" + "b".repeat(260), "apiKey", "sk-private-trace-secret"),
+                "output", Map.of(
+                    "evidence", List.of(Map.of(
+                        "chapterNo", 12,
+                        "generationId", 77,
+                        "chunkText", "PRIVATE_CHAPTER_BODY_" + "b".repeat(260),
+                        "contentHash", "a".repeat(64)
+                    )),
+                    "uploadedFile", Map.of("name", "private.md", "content", "PRIVATE_UPLOAD_BODY_" + "c".repeat(260))
+                )
+            ))),
+            Map.entry("projectKnowledge", Map.of("retrievedEvidence", List.of(Map.of(
+                "chapterNo", 12,
+                "generationId", 77,
+                "chunkText", "PRIVATE_CHAPTER_BODY_" + "b".repeat(260),
+                "contentHash", "a".repeat(64)
+            )))),
+            Map.entry("retrievalDiagnostics", Map.of(
+                "partialFlush", true,
+                "vectorLatencyMs", 18,
+                "generationId", 77,
+                "degradationReasons", List.of("vector_unavailable")
+            )),
+            Map.entry("trace", Map.of("traceId", "trace-safe-projection", "accessToken", "sk-private-trace-secret"))
+        ));
+
+        service.persistFromChat(7L, 11L, "conv-safe-projection", "normal question", response);
+
+        AuthUserHolder.set(AuthUser.of(1L, "admin", Set.of("ADMIN")));
+        KnowledgeAgentTraceVO detail = service.detailForAdmin(service.listForAdmin().get(0).getId());
+
+        assertThat(detail.getResultJson())
+            .contains("chapterNo", "generationId", "contentHash", "inputHash", "outputHash", "vectorLatencyMs")
+            .doesNotContain(
+                "PRIVATE_RESPONSE_BODY_",
+                "PRIVATE_CHAPTER_BODY_",
+                "PRIVATE_UPLOAD_BODY_",
+                "sk-private-trace-secret",
+                "private.md"
+            );
+    }
+
+    @Test
+    void shouldPersistSanitizedProviderLedgerAndConversationContinuityWithoutBodies() {
+        JdbcTemplate jdbcTemplate = jdbcTemplate();
+        KnowledgeAgentTraceService service = new KnowledgeAgentTraceService(jdbcTemplate);
+        KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
+        response.setStatus("answered");
+        response.setResultJson(Map.ofEntries(
+            Map.entry("taskGraph", Map.of("tasks", List.of(Map.of("type", "outline_building")))),
+            Map.entry("providerCalls", List.of(Map.ofEntries(
+                Map.entry("node", "compose_answer"),
+                Map.entry("model", "deepseek-v4-pro"),
+                Map.entry("requestedModel", "C:\\private\\prompt.txt"),
+                Map.entry("status", "succeeded"),
+                Map.entry("durationMs", 149806),
+                Map.entry("tokenUsed", 700),
+                Map.entry("promptCacheHitTokens", 120),
+                Map.entry("wireApi", "responses"),
+                Map.entry("providerTransportFallback", Map.of(
+                    "from", "responses",
+                    "to", "chat_completions",
+                    "reason", "model_not_responses_capable",
+                    "model", "deepseek-v4-pro"
+                )),
+                Map.entry("usage", Map.of(
+                    "inputTokens", 4096,
+                    "outputTokens", 700,
+                    "reasoningTokens", 320,
+                    "cachedInputTokens", 2048,
+                    "totalTokens", 4796
+                )),
+                Map.entry("requestSummary", Map.of(
+                    "messageCount", 3,
+                    "roleCounts", Map.of("system", 1, "user", 1, "assistant", 1),
+                    "messageChars", 30981,
+                    "toolSchemaCount", 0,
+                    "reasoningRequested", true,
+                    "bodyRedacted", true
+                )),
+                Map.entry("responseSummary", Map.of(
+                    "outputChars", 512,
+                    "toolCallCount", 0,
+                    "emptyResponse", false,
+                    "bodyRedacted", true
+                )),
+                Map.entry("cacheContinuity", Map.of(
+                    "provider", "openai_compatible",
+                    "wireApi", "responses",
+                    "model", "deepseek-v4-pro",
+                    "requestFamily", "answer",
+                    "cacheIdentityMode", "provider_user",
+                    "bodyRedacted", true
+                )),
+                Map.entry("prompt", "PRIVATE_PROVIDER_PROMPT"),
+                Map.entry("responseBody", "PRIVATE_PROVIDER_RESPONSE")
+            ))),
+            Map.entry("contextBudget", Map.of(
+                "conversationContinuity", Map.of(
+                    "historyTotalCount", 6,
+                    "historyIncludedCount", 4,
+                    "historyIncludedChars", 11215,
+                    "historyTruncated", true,
+                    "contextSummaryChars", 18114,
+                    "contextSummaryTruncated", false
+                )
+            )),
+            Map.entry("trace", Map.of("traceId", "trace-provider-ledger"))
+        ));
+
+        service.persistFromChat(7L, 11L, "conv-provider-ledger", "continue the outline", response);
+
+        AuthUserHolder.set(AuthUser.of(1L, "admin", Set.of("ADMIN")));
+        String resultJson = service.detailForAdmin(service.listForAdmin().get(0).getId()).getResultJson();
+
+        assertThat(resultJson)
+            .contains(
+                "providerCalls", "compose_answer", "deepseek-v4-pro", "requestSummary", "responseSummary",
+                "messageCount", "roleCounts", "messageChars", "toolSchemaCount", "reasoningRequested",
+                "bodyRedacted", "outputChars", "toolCallCount", "emptyResponse", "tokenUsed",
+                "promptCacheHitTokens", "wireApi", "responses", "providerTransportFallback", "chat_completions",
+                "cacheContinuity", "cacheIdentityMode", "provider_user", "requestFamily", "answer",
+                "inputTokens", "outputTokens", "reasoningTokens", "cachedInputTokens", "totalTokens",
+                "conversationContinuity", "historyTotalCount", "historyIncludedCount",
+                "historyIncludedChars", "historyTruncated", "contextSummaryChars", "contextSummaryTruncated"
+            )
+            .doesNotContain("PRIVATE_PROVIDER_PROMPT", "PRIVATE_PROVIDER_RESPONSE", "prompt.txt", "C:\\private");
     }
 
     @Test
@@ -223,7 +505,7 @@ class KnowledgeAgentTraceServiceTest {
         assertThat(draft.getStatus()).isEqualTo("DRAFT");
         assertThat(draft.getTraceId()).isEqualTo("trace-golden");
         assertThat(draft.getQuestion()).isEqualTo("How should this book open?");
-        assertThat(draft.getAnswer()).contains("fresh rank evidence");
+        assertThat(draft.getAnswer()).isNull();
         assertThat(draft.getTraceSummary()).contains("fresh evidence verified");
         assertThat(draft.getSelectedSkills()).contains("webnovel-market-scan", "webnovel-opening-hook");
         assertThat(draft.getSelectedTools()).contains("rank.lookup");
@@ -255,12 +537,11 @@ class KnowledgeAgentTraceServiceTest {
         assertThat(page.getTotal()).isEqualTo(6);
         assertThat(page.getItems()).hasSize(1);
         assertThat(page.getItems().get(0).getStatus()).isEqualTo("answered");
-        assertThat(page.getItems().get(0).getTaskGraph()).isNull();
-        assertThat(page.getItems().get(0).getToolRuns()).isNull();
+        assertThat(page.getItems().get(0).getHealthSummary()).isEmpty();
     }
 
     @Test
-    void shouldExposeResultJsonOnPagedTraceSummaryForHealthBlocks() {
+    void shouldExposeCompactHealthSummaryWithoutDetailPayload() throws Exception {
         JdbcTemplate jdbcTemplate = jdbcTemplate();
         KnowledgeAgentTraceService service = new KnowledgeAgentTraceService(jdbcTemplate);
         KnowledgeChatResponseVO response = new KnowledgeChatResponseVO();
@@ -268,6 +549,7 @@ class KnowledgeAgentTraceServiceTest {
         response.setResultJson(Map.ofEntries(
             Map.entry("taskGraph", Map.of("tasks", List.of(Map.of("type", "outline_building")))),
             Map.entry("toolRuns", List.of(Map.of("name", "rank.lookup", "status", "succeeded"))),
+            Map.entry("answer", "DETAIL_ONLY_MARKER_" + "x".repeat(250_000)),
             Map.entry("fallbackUsed", true),
             Map.entry("degraded", true),
             Map.entry("providerCalls", List.of(Map.of(
@@ -291,14 +573,16 @@ class KnowledgeAgentTraceServiceTest {
         AuthUserHolder.set(AuthUser.of(1L, "admin", Set.of("ADMIN")));
 
         var page = service.listForAdmin(1, 20, null, null);
-        KnowledgeAgentTraceVO summary = page.getItems().get(0);
+        var summary = page.getItems().get(0);
 
-        assertThat(summary.getResultJson()).contains("trace-health-summary");
-        assertThat(summary.getResultJson()).contains("fallbackUsed");
-        assertThat(summary.getResultJson()).contains("providerCalls");
-        assertThat(summary.getResultJson()).contains("fallback_used");
-        assertThat(summary.getTaskGraph()).isNull();
-        assertThat(summary.getToolRuns()).isNull();
+        assertThat(summary.getHealthSummary()).containsEntry("model", "fallback_used");
+        assertThat(summary.getHealthSummary()).containsEntry("tools", "succeeded");
+        assertThat(summary.getHealthSummary()).containsEntry("memory", "skipped");
+        assertThat(summary.getHealthSummary()).containsEntry("experts", "skipped");
+        String serializedPage = new ObjectMapper().findAndRegisterModules().writeValueAsString(page);
+        assertThat(serializedPage).doesNotContain("resultJson", "DETAIL_ONLY_MARKER_");
+        assertThat(serializedPage.length()).isLessThan(5_000);
+        assertThat(service.detailForAdmin(summary.getId()).getResultJson()).doesNotContain("DETAIL_ONLY_MARKER_");
     }
 
     static JdbcTemplate jdbcTemplate() {

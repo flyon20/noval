@@ -3,6 +3,7 @@ package com.novelanalyzer.modules.security;
 import com.jayway.jsonpath.JsonPath;
 import com.novelanalyzer.common.utils.JwtUtils;
 import com.novelanalyzer.config.AuthProperties;
+import com.novelanalyzer.config.SecurityProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -55,6 +56,9 @@ class Phase2SecurityIntegrationTest {
     private AuthProperties authProperties;
 
     @Autowired
+    private SecurityProperties securityProperties;
+
+    @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
     @Test
@@ -76,19 +80,26 @@ class Phase2SecurityIntegrationTest {
     @Test
     void shouldReturn429AndWriteLogWhenRateLimited() throws Exception {
         String adminToken = loginAndGetToken("admin", "admin123");
-        for (int i = 0; i < 100; i++) {
-            mockMvc.perform(get("/api/secure/user/ping")
-                    .with(remoteAddr("127.0.9.9"))
-                    .header("Authorization", "Bearer " + adminToken))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200));
-        }
+        int previousLimit = securityProperties.getRateLimitPerMinute();
+        String rateLimitIp = "127.0.9." + (10 + Math.floorMod(System.nanoTime(), 200));
+        try {
+            securityProperties.setRateLimitPerMinute(3);
+            for (int i = 0; i < securityProperties.getRateLimitPerMinute(); i++) {
+                mockMvc.perform(get("/api/secure/user/ping")
+                        .with(remoteAddr(rateLimitIp))
+                        .header("Authorization", "Bearer " + adminToken))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(200));
+            }
 
-        mockMvc.perform(get("/api/secure/user/ping")
-                .with(remoteAddr("127.0.9.9"))
-                .header("Authorization", "Bearer " + adminToken))
-            .andExpect(status().isTooManyRequests())
-            .andExpect(jsonPath("$.code").value(429));
+            mockMvc.perform(get("/api/secure/user/ping")
+                    .with(remoteAddr(rateLimitIp))
+                    .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value(429));
+        } finally {
+            securityProperties.setRateLimitPerMinute(previousLimit);
+        }
 
         Integer count = jdbcTemplate.queryForObject(
             "SELECT COUNT(1) FROM sys_operation_log WHERE operation_type = 'RATE_LIMIT'",

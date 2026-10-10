@@ -45,9 +45,39 @@ describe('AppBottomNav', () => {
     expect(links[3].classes()).toContain('is-active');
   });
 
+  test('moves one shared active indicator with route changes', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes,
+    });
+    await router.push('/rank');
+    const wrapper = mount(AppBottomNav, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    expect(wrapper.findAll('.app-bottom-nav__indicator')).toHaveLength(1);
+    expect(wrapper.get('nav').attributes('style')).toContain('--active-index: 0');
+
+    await router.push('/history');
+    await router.isReady();
+
+    expect(wrapper.get('nav').attributes('style')).toContain('--active-index: 4');
+  });
+
   test('uses five nav columns so history remains visible on mobile', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../AppBottomNav.vue'), 'utf-8');
 
     expect(source).toContain('repeat(5, minmax(0, 1fr))');
+  });
+
+  test('uses a transform-only spring transition with a reduced-motion fallback', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppBottomNav.vue'), 'utf-8');
+
+    expect(source).toContain('useXpbdSelector');
+    expect(source).toContain('--indicator-position');
+    expect(source).toMatch(/\.app-bottom-nav__indicator\s*\{[^}]*transform:/s);
+    expect(source).toContain('@media (prefers-reduced-motion: reduce)');
   });
 });

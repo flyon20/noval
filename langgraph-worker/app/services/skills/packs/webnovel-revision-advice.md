@@ -2,6 +2,7 @@
 skillId: webnovel-revision-advice
 version: 1.0.0
 intents: [revision_advice]
+requestedCapabilities: []
 triggers: [revise, diagnose, rewrite, polish]
 ---
 

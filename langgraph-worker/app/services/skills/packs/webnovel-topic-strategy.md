@@ -3,7 +3,7 @@ skillId: webnovel-topic-strategy
 version: 1.0.0
 intents: [mixed_creation_research, inspiration_expand]
 appliesTo: [topic_strategy]
-allowedTools: [rank.lookup, rank.research_pack, knowledge.vector_search, skill.lookup, memory.project_context]
+requestedCapabilities: [market.read, book.read, skill.activate, memory.project.read]
 requiredEvidence: [current_structured_rank_topn]
 triggers: [topic, premise, selling-point]
 ---

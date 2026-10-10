@@ -17,6 +17,8 @@ public class AsyncJobVO {
     private Integer retryCount;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
+    private LocalDateTime queuePublishedAt;
+    private Integer queuePublishedAttempt;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -122,6 +124,22 @@ public class AsyncJobVO {
 
     public void setFinishedAt(LocalDateTime finishedAt) {
         this.finishedAt = finishedAt;
+    }
+
+    public LocalDateTime getQueuePublishedAt() {
+        return queuePublishedAt;
+    }
+
+    public void setQueuePublishedAt(LocalDateTime queuePublishedAt) {
+        this.queuePublishedAt = queuePublishedAt;
+    }
+
+    public Integer getQueuePublishedAttempt() {
+        return queuePublishedAttempt;
+    }
+
+    public void setQueuePublishedAttempt(Integer queuePublishedAttempt) {
+        this.queuePublishedAttempt = queuePublishedAttempt;
     }
 
     public LocalDateTime getCreateTime() {

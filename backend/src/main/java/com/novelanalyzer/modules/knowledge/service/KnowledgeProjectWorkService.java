@@ -10,14 +10,13 @@ import com.novelanalyzer.modules.knowledge.dto.ProjectChapterImportRequest;
 import com.novelanalyzer.modules.knowledge.dto.ProjectWorkRequest;
 import com.novelanalyzer.modules.knowledge.vo.ProjectChapterVO;
 import com.novelanalyzer.modules.knowledge.vo.ProjectWorkVO;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -37,9 +36,26 @@ import java.util.regex.Pattern;
 @Service
 public class KnowledgeProjectWorkService {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(KnowledgeProjectWorkService.class);
     private static final int SCENE_TARGET_CHARS = 900;
     private static final Pattern PARAGRAPH_SPLIT = Pattern.compile("\\R\\s*\\R+");
+    private static final Runnable NO_OP_CHECKPOINT = () -> {
+    };
+    private static final String EXECUTION_FENCE_FROM = """
+        from ai_project_ingest_job j
+        where j.ingest_job_id = ? and j.generation_id = ?
+          and j.status = 'PARSING' and j.stage = 'PARSING'
+          and j.lease_owner = ? and j.fencing_token = ?
+          and j.lease_expires_at >= current_timestamp
+        """;
+    private static final String EXECUTION_FENCE_EXISTS = """
+        exists (
+          select 1 from ai_project_ingest_job j
+          where j.ingest_job_id = ? and j.generation_id = ?
+            and j.status = 'PARSING' and j.stage = 'PARSING'
+            and j.lease_owner = ? and j.fencing_token = ?
+            and j.lease_expires_at >= current_timestamp
+        )
+        """;
 
     private final JdbcTemplate jdbcTemplate;
     private final KnowledgeProjectService projectService;
@@ -87,28 +103,88 @@ public class KnowledgeProjectWorkService {
         if (key == null) {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "work id missing");
         }
-        return findOwnedWork(projectId, key.longValue(), user.getUserId());
+        return findOwnedWorkPublic(projectId, key.longValue(), user.getUserId());
     }
 
+    @Transactional
     public List<ProjectWorkVO> listWorks(Long projectId) {
         AuthUser user = requireUser();
         projectService.ensureOwned(projectId, user.getUserId());
+        List<ProjectWorkVO> works = queryWorks(projectId, user.getUserId());
+        if (works.isEmpty()) {
+            ensureDefaultWork(projectId, null);
+            works = queryWorks(projectId, user.getUserId());
+        }
+        return works;
+    }
+
+    public List<ProjectWorkVO> listMyWorkLibrary() {
+        AuthUser user = requireUser();
+        return jdbcTemplate.query(
+            """
+                select w.work_id, w.user_id, w.project_id, w.title, w.alias, w.genre, w.status,
+                    w.created_at, w.updated_at
+                from ai_project_work w
+                join ai_project p on p.project_id = w.project_id and p.user_id = w.user_id
+                where w.user_id = ? and w.status <> 'ARCHIVED' and p.status <> 'ARCHIVED'
+                order by w.updated_at desc, w.work_id desc
+            """,
+            workMapper(),
+            user.getUserId()
+        );
+    }
+
+    @Transactional
+    public ProjectWorkVO ensureDefaultWork(Long projectId, String preferredTitle) {
+        AuthUser user = requireUser();
+        projectService.ensureOwned(projectId, user.getUserId());
+        String projectName = jdbcTemplate.queryForObject(
+            "select name from ai_project where project_id = ? and user_id = ? for update",
+            String.class,
+            projectId,
+            user.getUserId()
+        );
+        List<ProjectWorkVO> existing = queryWorks(projectId, user.getUserId());
+        if (!existing.isEmpty()) {
+            return existing.get(0);
+        }
+        String title = trimToNull(preferredTitle, 200);
+        if (title == null) {
+            title = projectName;
+        }
+        if (title == null || title.isBlank()) {
+            title = "未命名作品";
+        }
+        jdbcTemplate.update(
+            "insert into ai_project_work(user_id, project_id, title, alias, genre, status) values(?, ?, ?, null, null, 'ACTIVE')",
+            user.getUserId(),
+            projectId,
+            title
+        );
+        List<ProjectWorkVO> created = queryWorks(projectId, user.getUserId());
+        if (created.isEmpty()) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "default work creation failed");
+        }
+        return created.get(0);
+    }
+
+    private List<ProjectWorkVO> queryWorks(Long projectId, Long userId) {
         return jdbcTemplate.query(
             """
                 select work_id, user_id, project_id, title, alias, genre, status, created_at, updated_at
                 from ai_project_work
                 where project_id = ? and user_id = ? and status <> 'ARCHIVED'
                 order by updated_at desc, work_id desc
-                """,
+            """,
             workMapper(),
             projectId,
-            user.getUserId()
+            userId
         );
     }
 
     public ProjectChapterVO importChapter(Long projectId, Long workId, ProjectChapterImportRequest request) {
         AuthUser user = requireUser();
-        ProjectWorkVO work = findOwnedWork(projectId, workId, user.getUserId());
+        ProjectWorkVO work = findOwnedWorkPublic(projectId, workId, user.getUserId());
         int chapterNo = request == null || request.getChapterNo() == null ? 0 : request.getChapterNo();
         if (chapterNo <= 0) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "chapter no is required");
@@ -123,7 +199,7 @@ public class KnowledgeProjectWorkService {
                 where work_id = ? and chapter_no = ? and content_hash = ? and status <> 'ARCHIVED'
                 order by chapter_id asc
                 """,
-            chapterMapper(),
+            chapterMapperPublic(),
             workId,
             chapterNo,
             hash
@@ -165,19 +241,14 @@ public class KnowledgeProjectWorkService {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "chapter id missing");
         }
         ProjectChapterVO chapter = findOwnedChapter(projectId, workId, key.longValue(), user.getUserId());
-        createIngestArtifacts(chapter);
+        // Task 9: HTTP import no longer materializes parse/index artifacts synchronously.
         return chapter;
     }
 
     public List<ProjectChapterVO> listChapters(Long projectId, Long workId) {
         AuthUser user = requireUser();
-        findOwnedWork(projectId, workId, user.getUserId());
+        findOwnedWorkPublic(projectId, workId, user.getUserId());
         return listChaptersForUser(user.getUserId(), projectId, workId, null, 200);
-    }
-
-    public List<ProjectChapterVO> searchChapters(Long userId, Long projectId, Long workId, String query, int limit) {
-        findOwnedWork(projectId, workId, userId);
-        return listChaptersForUser(userId, projectId, workId, trimToNull(query, 200), limit);
     }
 
     public Map<String, Object> resolveWork(Long userId, Long projectId, Long workId, String query, int limit) {
@@ -185,12 +256,49 @@ public class KnowledgeProjectWorkService {
             throw new BusinessException(ResultCode.BAD_REQUEST, "user id is required");
         }
         if (projectId != null && workId != null) {
-            ProjectWorkVO work = findOwnedWork(projectId, workId, userId);
+            ProjectWorkVO work = findOwnedWorkPublic(projectId, workId, userId);
             return resolvedWork(work);
         }
         String normalizedQuery = trimToNull(query, 200);
         if (normalizedQuery == null) {
-            return mapRow("status", "not_found", "candidates", List.of());
+            int safeLimit = Math.max(1, Math.min(limit, 20));
+            List<ProjectWorkVO> works;
+            if (projectId == null) {
+                works = jdbcTemplate.query(
+                    """
+                        select work_id, user_id, project_id, title, alias, genre, status, created_at, updated_at
+                        from ai_project_work
+                        where user_id = ? and status <> 'ARCHIVED'
+                        order by updated_at desc, work_id desc
+                        limit ?
+                        """,
+                    workMapper(),
+                    userId,
+                    safeLimit
+                );
+            } else {
+                projectService.ensureOwned(projectId, userId);
+                works = jdbcTemplate.query(
+                    """
+                        select work_id, user_id, project_id, title, alias, genre, status, created_at, updated_at
+                        from ai_project_work
+                        where user_id = ? and project_id = ? and status <> 'ARCHIVED'
+                        order by updated_at desc, work_id desc
+                        limit ?
+                        """,
+                    workMapper(),
+                    userId,
+                    projectId,
+                    safeLimit
+                );
+            }
+            if (works.isEmpty()) {
+                return mapRow("status", "not_found", "candidates", List.of());
+            }
+            if (works.size() == 1) {
+                return resolvedWork(works.get(0));
+            }
+            return mapRow("status", "ambiguous", "candidates", works.stream().map(this::workCandidate).toList());
         }
         int safeLimit = Math.max(1, Math.min(limit, 20));
         String like = "%" + normalizedQuery + "%";
@@ -264,17 +372,25 @@ public class KnowledgeProjectWorkService {
                                                         Long workId,
                                                         String status,
                                                         int limit) {
-        findOwnedWork(projectId, workId, userId);
+        findOwnedWorkPublic(projectId, workId, userId);
         String normalizedStatus = trimToNull(status, 30);
         int safeLimit = Math.max(1, Math.min(limit, 100));
         if (normalizedStatus == null) {
             return jdbcTemplate.query(
                 """
-                    select foreshadowing_id, project_id, work_id, title, content, status,
-                        planted_chapter_no, paid_off_chapter_no, importance, confidence
-                    from ai_project_foreshadowing
-                    where user_id = ? and project_id = ? and work_id = ?
-                    order by planted_chapter_no asc, foreshadowing_id asc
+                    select f.foreshadowing_id, f.project_id, f.work_id, f.title, f.content, f.status,
+                        f.planted_chapter_no, f.paid_off_chapter_no, f.importance, f.confidence
+                    from ai_project_foreshadowing f
+                    join ai_project_ingest_generation g
+                      on g.generation_id = f.generation_id
+                     and g.user_id = f.user_id and g.project_id = f.project_id and g.work_id = f.work_id
+                     and g.status = 'ACTIVE'
+                    join ai_project_chapter_head h
+                      on h.user_id = f.user_id and h.project_id = f.project_id and h.work_id = f.work_id
+                     and h.chapter_no = g.chapter_no and h.active_generation_id = g.generation_id
+                     and h.active_chapter_id = g.chapter_id and h.tombstoned_at is null
+                    where f.user_id = ? and f.project_id = ? and f.work_id = ?
+                    order by f.planted_chapter_no asc, f.foreshadowing_id asc
                     limit ?
                     """,
                 (rs, rowNum) -> mapRow(
@@ -294,11 +410,19 @@ public class KnowledgeProjectWorkService {
         }
         return jdbcTemplate.query(
             """
-                select foreshadowing_id, project_id, work_id, title, content, status,
-                    planted_chapter_no, paid_off_chapter_no, importance, confidence
-                from ai_project_foreshadowing
-                where user_id = ? and project_id = ? and work_id = ? and status = ?
-                order by planted_chapter_no asc, foreshadowing_id asc
+                select f.foreshadowing_id, f.project_id, f.work_id, f.title, f.content, f.status,
+                    f.planted_chapter_no, f.paid_off_chapter_no, f.importance, f.confidence
+                from ai_project_foreshadowing f
+                join ai_project_ingest_generation g
+                  on g.generation_id = f.generation_id
+                 and g.user_id = f.user_id and g.project_id = f.project_id and g.work_id = f.work_id
+                 and g.status = 'ACTIVE'
+                join ai_project_chapter_head h
+                  on h.user_id = f.user_id and h.project_id = f.project_id and h.work_id = f.work_id
+                 and h.chapter_no = g.chapter_no and h.active_generation_id = g.generation_id
+                 and h.active_chapter_id = g.chapter_id and h.tombstoned_at is null
+                where f.user_id = ? and f.project_id = ? and f.work_id = ? and f.status = ?
+                order by f.planted_chapter_no asc, f.foreshadowing_id asc
                 limit ?
                 """,
             (rs, rowNum) -> mapRow(
@@ -318,14 +442,23 @@ public class KnowledgeProjectWorkService {
     }
 
     public List<Map<String, Object>> lookupTimeline(Long userId, Long projectId, Long workId, String query, int limit) {
-        findOwnedWork(projectId, workId, userId);
+        findOwnedWorkPublic(projectId, workId, userId);
         return queryStructured(
             """
-                select event_id, project_id, work_id, chapter_no, event_order, title, summary, confidence
-                from ai_project_timeline_event
-                where user_id = ? and project_id = ? and work_id = ?
-                  and (? is null or title like ? or summary like ?)
-                order by chapter_no asc, event_order asc, event_id asc
+                select t.event_id, t.project_id, t.work_id, t.chapter_no, t.event_order,
+                    t.title, t.summary, t.confidence
+                from ai_project_timeline_event t
+                join ai_project_ingest_generation g
+                  on g.generation_id = t.generation_id
+                 and g.user_id = t.user_id and g.project_id = t.project_id and g.work_id = t.work_id
+                 and g.chapter_id = t.chapter_id and g.status = 'ACTIVE'
+                join ai_project_chapter_head h
+                  on h.user_id = t.user_id and h.project_id = t.project_id and h.work_id = t.work_id
+                 and h.chapter_no = g.chapter_no and h.active_generation_id = g.generation_id
+                 and h.active_chapter_id = g.chapter_id and h.tombstoned_at is null
+                where t.user_id = ? and t.project_id = ? and t.work_id = ? and t.status = 'ACTIVE'
+                  and (? is null or t.title like ? or t.summary like ?)
+                order by t.chapter_no asc, t.event_order asc, t.event_id asc
                 limit ?
                 """,
             userId, projectId, workId, query, limit,
@@ -338,14 +471,23 @@ public class KnowledgeProjectWorkService {
     }
 
     public List<Map<String, Object>> lookupCharacterStates(Long userId, Long projectId, Long workId, String query, int limit) {
-        findOwnedWork(projectId, workId, userId);
+        findOwnedWorkPublic(projectId, workId, userId);
         return queryStructured(
             """
-                select state_id, project_id, work_id, character_name, chapter_no, state_summary, motivation, confidence
-                from ai_project_character_state
-                where user_id = ? and project_id = ? and work_id = ?
-                  and (? is null or character_name like ? or state_summary like ? or motivation like ?)
-                order by chapter_no asc, state_id asc
+                select s.state_id, s.project_id, s.work_id, s.character_name, s.chapter_no,
+                    s.state_summary, s.motivation, s.confidence
+                from ai_project_character_state s
+                join ai_project_ingest_generation g
+                  on g.generation_id = s.generation_id
+                 and g.user_id = s.user_id and g.project_id = s.project_id and g.work_id = s.work_id
+                 and g.chapter_id = s.chapter_id and g.status = 'ACTIVE'
+                join ai_project_chapter_head h
+                  on h.user_id = s.user_id and h.project_id = s.project_id and h.work_id = s.work_id
+                 and h.chapter_no = g.chapter_no and h.active_generation_id = g.generation_id
+                 and h.active_chapter_id = g.chapter_id and h.tombstoned_at is null
+                where s.user_id = ? and s.project_id = ? and s.work_id = ? and s.status = 'ACTIVE'
+                  and (? is null or s.character_name like ? or s.state_summary like ? or s.motivation like ?)
+                order by s.chapter_no asc, s.state_id asc
                 limit ?
                 """,
             userId, projectId, workId, query, limit,
@@ -358,14 +500,23 @@ public class KnowledgeProjectWorkService {
     }
 
     public List<Map<String, Object>> lookupWorldRules(Long userId, Long projectId, Long workId, String query, int limit) {
-        findOwnedWork(projectId, workId, userId);
+        findOwnedWorkPublic(projectId, workId, userId);
         return queryStructured(
             """
-                select rule_id, project_id, work_id, rule_type, title, content, first_chapter_no, confidence
-                from ai_project_world_rule
-                where user_id = ? and project_id = ? and work_id = ?
-                  and (? is null or title like ? or content like ? or rule_type like ?)
-                order by first_chapter_no asc, rule_id asc
+                select r.rule_id, r.project_id, r.work_id, r.rule_type, r.title,
+                    r.content, r.first_chapter_no, r.confidence
+                from ai_project_world_rule r
+                join ai_project_ingest_generation g
+                  on g.generation_id = r.generation_id
+                 and g.user_id = r.user_id and g.project_id = r.project_id and g.work_id = r.work_id
+                 and g.status = 'ACTIVE'
+                join ai_project_chapter_head h
+                  on h.user_id = r.user_id and h.project_id = r.project_id and h.work_id = r.work_id
+                 and h.chapter_no = g.chapter_no and h.active_generation_id = g.generation_id
+                 and h.active_chapter_id = g.chapter_id and h.tombstoned_at is null
+                where r.user_id = ? and r.project_id = ? and r.work_id = ? and r.status_proj = 'ACTIVE'
+                  and (? is null or r.title like ? or r.content like ? or r.rule_type like ?)
+                order by r.first_chapter_no asc, r.rule_id asc
                 limit ?
                 """,
             userId, projectId, workId, query, limit,
@@ -375,56 +526,6 @@ public class KnowledgeProjectWorkService {
             "content", "content",
             "firstChapterNo", "first_chapter_no"
         );
-    }
-
-    public List<Map<String, Object>> searchVectorChunks(Long userId,
-                                                        Long projectId,
-                                                        Long workId,
-                                                        String query,
-                                                        int limit) {
-        findOwnedWork(projectId, workId, userId);
-        int safeLimit = Math.max(1, Math.min(limit, 50));
-        String normalizedQuery = trimToNull(query, 200);
-        if (normalizedQuery == null) {
-            List<Map<String, Object>> chunks = jdbcTemplate.query(
-                """
-                    select id, project_id, work_id, chapter_id, scene_id, source_type, source_id,
-                        qdrant_point_id, chunk_text, visibility
-                    from ai_project_vector_chunk
-                    where user_id = ? and project_id = ? and work_id = ? and visibility = 'private'
-                    order by id asc
-                    limit ?
-                    """,
-                (rs, rowNum) -> mapVectorChunk(rs),
-                userId, projectId, workId, safeLimit
-            );
-            return markRetrievalBackend(chunks, "lexical");
-        }
-        List<Map<String, Object>> qdrantResults = searchVectorChunksByQdrant(
-            userId,
-            projectId,
-            workId,
-            normalizedQuery,
-            safeLimit
-        );
-        if (!qdrantResults.isEmpty()) {
-            return qdrantResults;
-        }
-        String like = "%" + normalizedQuery + "%";
-        List<Map<String, Object>> chunks = jdbcTemplate.query(
-            """
-                select id, project_id, work_id, chapter_id, scene_id, source_type, source_id,
-                    qdrant_point_id, chunk_text, visibility
-                from ai_project_vector_chunk
-                where user_id = ? and project_id = ? and work_id = ? and visibility = 'private'
-                  and chunk_text like ?
-                order by id asc
-                limit ?
-                """,
-            (rs, rowNum) -> mapVectorChunk(rs),
-            userId, projectId, workId, like, safeLimit
-        );
-        return markRetrievalBackend(chunks, "lexical");
     }
 
     private List<ProjectChapterVO> listChaptersForUser(Long userId, Long projectId, Long workId, String query, int limit) {
@@ -439,7 +540,7 @@ public class KnowledgeProjectWorkService {
                     order by chapter_no asc, version asc, chapter_id asc
                     limit ?
                     """,
-                chapterMapper(),
+                chapterMapperPublic(),
                 userId,
                 projectId,
                 workId,
@@ -457,7 +558,7 @@ public class KnowledgeProjectWorkService {
                 order by chapter_no asc, version asc, chapter_id asc
                 limit ?
                 """,
-            chapterMapper(),
+            chapterMapperPublic(),
             userId,
             projectId,
             workId,
@@ -508,112 +609,6 @@ public class KnowledgeProjectWorkService {
         return value;
     }
 
-    private Map<String, Object> mapVectorChunk(ResultSet rs) throws SQLException {
-        return mapRow(
-            "chunkId", rs.getLong("id"),
-            "projectId", rs.getLong("project_id"),
-            "workId", rs.getLong("work_id"),
-            "chapterId", columnValue(rs, "chapter_id"),
-            "sceneId", columnValue(rs, "scene_id"),
-            "sourceType", rs.getString("source_type"),
-            "sourceId", columnValue(rs, "source_id"),
-            "qdrantPointId", rs.getString("qdrant_point_id"),
-            "chunkText", columnValue(rs, "chunk_text"),
-            "visibility", rs.getString("visibility")
-        );
-    }
-
-    private List<Map<String, Object>> searchVectorChunksByQdrant(Long userId,
-                                                                  Long projectId,
-                                                                  Long workId,
-                                                                  String query,
-                                                                  int limit) {
-        if (embeddingClient == null || qdrantClient == null) {
-            return List.of();
-        }
-        try {
-            List<Double> vector = embeddingClient.embed(query);
-            qdrantClient.ensureCollection();
-            List<QdrantClient.SearchResult> results = qdrantClient.search(
-                vector,
-                Map.of(
-                    "user_id", userId,
-                    "project_id", projectId,
-                    "work_id", workId,
-                    "visibility", "private"
-                ),
-                limit
-            );
-            List<Map<String, Object>> mapped = new ArrayList<>();
-            for (QdrantClient.SearchResult result : results) {
-                Map<String, Object> row = mapQdrantProjectChunkResult(userId, projectId, workId, result);
-                if (row != null) {
-                    mapped.add(row);
-                }
-            }
-            return mapped;
-        } catch (RuntimeException ex) {
-            LOGGER.warn("project vector search fallback to lexical: {}: {}", ex.getClass().getSimpleName(), ex.getMessage());
-            return List.of();
-        }
-    }
-
-    private Map<String, Object> mapQdrantProjectChunkResult(Long userId,
-                                                            Long projectId,
-                                                            Long workId,
-                                                            QdrantClient.SearchResult result) {
-        Long chunkId = longPayload(result.payload(), "project_vector_chunk_id");
-        if (chunkId == null) {
-            chunkId = longPayload(result.payload(), "projectVectorChunkId");
-        }
-        if (chunkId == null) {
-            return null;
-        }
-        List<Map<String, Object>> rows = jdbcTemplate.query(
-            """
-                select id, project_id, work_id, chapter_id, scene_id, source_type, source_id,
-                    qdrant_point_id, chunk_text, visibility
-                from ai_project_vector_chunk
-                where id = ? and user_id = ? and project_id = ? and work_id = ? and visibility = 'private'
-                limit 1
-                """,
-            (rs, rowNum) -> mapVectorChunk(rs),
-            chunkId,
-            userId,
-            projectId,
-            workId
-        );
-        if (rows.isEmpty()) {
-            return null;
-        }
-        Map<String, Object> row = rows.get(0);
-        row.put("retrievalBackend", "qdrant");
-        row.put("score", result.score());
-        return row;
-    }
-
-    private Long longPayload(Map<String, Object> payload, String key) {
-        if (payload == null || payload.get(key) == null) {
-            return null;
-        }
-        Object value = payload.get(key);
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        try {
-            return Long.parseLong(String.valueOf(value));
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-
-    private List<Map<String, Object>> markRetrievalBackend(List<Map<String, Object>> rows, String retrievalBackend) {
-        for (Map<String, Object> row : rows) {
-            row.put("retrievalBackend", retrievalBackend);
-        }
-        return rows;
-    }
-
     private void upsertProjectVectorChunk(ProjectChapterVO chapter,
                                           Long vectorChunkId,
                                           Long sceneId,
@@ -621,31 +616,37 @@ public class KnowledgeProjectWorkService {
                                           Long sourceId,
                                           String contentHash,
                                           String qdrantPointId,
-                                          String text) {
-        if (embeddingClient == null || qdrantClient == null || text == null || text.isBlank()) {
-            return;
+                                          String text,
+                                          Long generationId,
+                                          Integer chapterVersion,
+                                          Runnable ownershipCheckpoint) {
+        requireVectorRuntime();
+        if (text == null || text.isBlank()) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "project vector chunk text is required");
         }
-        try {
-            List<Double> vector = embeddingClient.embed(trimForStorage(text, 8000));
-            qdrantClient.ensureCollection();
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("user_id", chapter.getUserId());
-            payload.put("project_id", chapter.getProjectId());
-            payload.put("work_id", chapter.getWorkId());
-            payload.put("chapter_id", chapter.getChapterId());
-            payload.put("chapter_no", chapter.getChapterNo());
-            putIfNotNull(payload, "scene_id", sceneId);
-            payload.put("source_type", sourceType);
-            putIfNotNull(payload, "source_id", sourceId);
-            payload.put("content_hash", contentHash);
-            payload.put("visibility", "private");
-            payload.put("project_vector_chunk_id", vectorChunkId);
-            payload.put("chunk_text_preview", trimForStorage(text, 1000));
-            qdrantClient.upsertPoint(qdrantPointId, vector, payload);
-        } catch (RuntimeException ex) {
-            LOGGER.warn("project vector chunk upsert skipped: chunkId={}, reason={}: {}",
-            vectorChunkId, ex.getClass().getSimpleName(), ex.getMessage());
-        }
+        ownershipCheckpoint.run();
+        List<Double> vector = embeddingClient.embed(trimForStorage(text, 8000));
+        ownershipCheckpoint.run();
+        qdrantClient.ensureCollection();
+        ownershipCheckpoint.run();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("user_id", chapter.getUserId());
+        payload.put("project_id", chapter.getProjectId());
+        payload.put("work_id", chapter.getWorkId());
+        payload.put("chapter_id", chapter.getChapterId());
+        payload.put("chapter_no", chapter.getChapterNo());
+        putIfNotNull(payload, "generation_id", generationId);
+        putIfNotNull(payload, "chapter_version", chapterVersion);
+        putIfNotNull(payload, "scene_id", sceneId);
+        payload.put("source_type", sourceType);
+        putIfNotNull(payload, "source_id", sourceId);
+        payload.put("content_hash", contentHash);
+        payload.put("visibility", "private");
+        payload.put("project_vector_chunk_id", vectorChunkId);
+        payload.put("chunk_text_preview", trimForStorage(text, 1000));
+        ownershipCheckpoint.run();
+        qdrantClient.upsertPoint(qdrantPointId, vector, payload);
+        ownershipCheckpoint.run();
     }
 
     private void putIfNotNull(Map<String, Object> payload, String key, Object value) {
@@ -684,7 +685,7 @@ public class KnowledgeProjectWorkService {
         return row;
     }
 
-    private ProjectWorkVO findOwnedWork(Long projectId, Long workId, Long userId) {
+    public ProjectWorkVO findOwnedWorkPublic(Long projectId, Long workId, Long userId) {
         projectService.ensureOwned(projectId, userId);
         List<ProjectWorkVO> works = jdbcTemplate.query(
             """
@@ -711,7 +712,7 @@ public class KnowledgeProjectWorkService {
                 from ai_project_chapter
                 where project_id = ? and work_id = ? and chapter_id = ? and user_id = ?
                 """,
-            chapterMapper(),
+            chapterMapperPublic(),
             projectId,
             workId,
             chapterId,
@@ -733,18 +734,100 @@ public class KnowledgeProjectWorkService {
         return version == null ? 1 : version;
     }
 
-    private void createIngestArtifacts(ProjectChapterVO chapter) {
+    public ArtifactCounts materializeGenerationArtifacts(ProjectChapterVO chapter, Long generationId) {
+        return materializeGenerationArtifacts(chapter, generationId, NO_OP_CHECKPOINT);
+    }
+
+    public ArtifactCounts materializeGenerationArtifacts(ProjectChapterVO chapter,
+                                                          Long generationId,
+                                                          Runnable ownershipCheckpoint) {
+        return materializeGenerationArtifacts(chapter, generationId, ownershipCheckpoint, null);
+    }
+
+    public ArtifactCounts materializeGenerationArtifacts(ProjectChapterVO chapter,
+                                                          Long generationId,
+                                                          Runnable ownershipCheckpoint,
+                                                          ExecutionFence executionFence) {
+        if (generationId == null) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "project ingest generation is required");
+        }
+        Runnable checkpoint = ownershipCheckpoint == null ? NO_OP_CHECKPOINT : ownershipCheckpoint;
+        checkpoint.run();
+        resetRebuildableGenerationArtifacts(generationId, executionFence);
+        checkpoint.run();
+        return createIngestArtifacts(chapter, generationId, checkpoint, executionFence);
+    }
+
+    public void cleanupGenerationArtifacts(Long generationId) {
+        if (generationId == null) {
+            return;
+        }
+        resetGenerationArtifacts(generationId);
+    }
+
+    private void resetGenerationArtifacts(Long generationId) {
+        requireQdrantRuntime();
+        qdrantClient.ensureCollection();
+        qdrantClient.deletePoints(Map.of("generation_id", generationId));
+        resetRebuildableGenerationArtifacts(generationId, null);
+        jdbcTemplate.update("delete from ai_project_vector_chunk where generation_id = ?", generationId);
+        jdbcTemplate.update("delete from ai_project_scene where generation_id = ?", generationId);
+    }
+
+    private void resetRebuildableGenerationArtifacts(Long generationId, ExecutionFence executionFence) {
+        deleteGenerationRows("ai_project_story_edge", generationId, false, executionFence);
+        deleteGenerationRows("ai_project_story_node", generationId, false, executionFence);
+        deleteGenerationRows("ai_project_search_document", generationId, false, executionFence);
+        deleteGenerationRows("ai_project_extraction_candidate", generationId, true, executionFence);
+        deleteGenerationRows("ai_project_character_state", generationId, false, executionFence);
+        deleteGenerationRows("ai_project_world_rule", generationId, false, executionFence);
+        deleteGenerationRows("ai_project_foreshadowing", generationId, false, executionFence);
+        deleteGenerationRows("ai_project_timeline_event", generationId, false, executionFence);
+    }
+
+    private void deleteGenerationRows(String table,
+                                      Long generationId,
+                                      boolean pendingOnly,
+                                      ExecutionFence executionFence) {
+        String sql = "delete from " + table + " where generation_id = ?"
+            + (pendingOnly ? " and status = 'PENDING'" : "");
+        if (executionFence == null) {
+            jdbcTemplate.update(sql, generationId);
+            return;
+        }
+        jdbcTemplate.update(
+            sql + " and " + EXECUTION_FENCE_EXISTS,
+            fencedArgs(generationId, executionFence, generationId));
+    }
+
+    private void requireVectorRuntime() {
+        if (embeddingClient == null || qdrantClient == null) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "project vector runtime unavailable");
+        }
+    }
+
+    private void requireQdrantRuntime() {
+        if (qdrantClient == null) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "project qdrant runtime unavailable");
+        }
+    }
+
+    private ArtifactCounts createIngestArtifacts(ProjectChapterVO chapter,
+                                                  Long generationId,
+                                                  Runnable ownershipCheckpoint,
+                                                  ExecutionFence executionFence) {
         if (chapter == null || chapter.getChapterId() == null) {
-            return;
+            return new ArtifactCounts(0, 0, 0);
         }
-        if (hasIngestArtifacts(chapter.getChapterId())) {
-            return;
-        }
+        ownershipCheckpoint.run();
         List<SceneSlice> scenes = splitScenes(chapter.getContent());
+        ownershipCheckpoint.run();
         List<Long> sceneIds = new ArrayList<>();
         for (SceneSlice scene : scenes) {
-            Long sceneId = insertScene(chapter, scene);
+            ownershipCheckpoint.run();
+            Long sceneId = findOrInsertScene(chapter, scene, generationId, executionFence);
             sceneIds.add(sceneId);
+            ownershipCheckpoint.run();
             insertVectorChunk(
                 chapter,
                 sceneId,
@@ -752,9 +835,13 @@ public class KnowledgeProjectWorkService {
                 sceneId,
                 scene.text(),
                 "project-" + chapter.getProjectId() + "-work-" + chapter.getWorkId()
-                    + "-chapter-" + chapter.getChapterId() + "-scene-" + sceneId
+                    + "-chapter-" + chapter.getChapterId() + "-scene-" + sceneId,
+                generationId,
+                ownershipCheckpoint,
+                executionFence
             );
         }
+        ownershipCheckpoint.run();
         insertVectorChunk(
             chapter,
             null,
@@ -762,13 +849,22 @@ public class KnowledgeProjectWorkService {
             chapter.getChapterId(),
             chapter.getContent(),
             "project-" + chapter.getProjectId() + "-work-" + chapter.getWorkId()
-                + "-chapter-" + chapter.getChapterId() + "-full"
+                + "-chapter-" + chapter.getChapterId() + "-full",
+            generationId,
+            ownershipCheckpoint,
+            executionFence
         );
-        extractWorldRules(chapter);
-        extractForeshadowings(chapter);
-        extractTimelineEvents(chapter, sceneIds);
-        extractCharacterState(chapter);
-        insertIngestJob(chapter, scenes.size());
+        int entityCount = 0;
+        entityCount += extractWorldRules(chapter, generationId, ownershipCheckpoint, executionFence);
+        entityCount += extractForeshadowings(chapter, generationId, ownershipCheckpoint, executionFence);
+        entityCount += extractTimelineEvents(chapter, sceneIds, generationId, ownershipCheckpoint, executionFence);
+        entityCount += extractCharacterState(chapter, generationId, ownershipCheckpoint, executionFence);
+        ownershipCheckpoint.run();
+        int vectorCount = scenes.size() + 1;
+        return new ArtifactCounts(scenes.size(), vectorCount, entityCount);
+    }
+
+    public record ArtifactCounts(int sceneCount, int vectorCount, int entityCount) {
     }
 
     private boolean hasIngestArtifacts(Long chapterId) {
@@ -825,33 +921,84 @@ public class KnowledgeProjectWorkService {
         }
     }
 
-    private Long insertScene(ProjectChapterVO chapter, SceneSlice scene) {
-        KeyHolder keyHolder = new GeneratedKeyHolder();
-        jdbcTemplate.update(connection -> {
-            PreparedStatement statement = connection.prepareStatement(
+    private Long insertScene(ProjectChapterVO chapter,
+                             SceneSlice scene,
+                             Long generationId,
+                             ExecutionFence executionFence) {
+        String insertSql = executionFence == null
+            ? """
+                insert into ai_project_scene(user_id, project_id, work_id, chapter_id, generation_id, chapter_version, status, scene_no,
+                    summary, start_offset, end_offset, confidence)
+                values(?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?)
                 """
-                    insert into ai_project_scene(user_id, project_id, work_id, chapter_id, scene_no,
-                        summary, start_offset, end_offset, confidence)
-                    values(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+            : """
+                insert into ai_project_scene(user_id, project_id, work_id, chapter_id, generation_id, chapter_version, status, scene_no,
+                    summary, start_offset, end_offset, confidence)
+                select ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?
+                """ + EXECUTION_FENCE_FROM;
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        int inserted = jdbcTemplate.update(connection -> {
+            PreparedStatement statement = connection.prepareStatement(
+                insertSql,
                 new String[]{"scene_id"}
             );
             statement.setLong(1, chapter.getUserId());
             statement.setLong(2, chapter.getProjectId());
             statement.setLong(3, chapter.getWorkId());
             statement.setLong(4, chapter.getChapterId());
-            statement.setInt(5, scene.sceneNo());
-            statement.setString(6, summarize(scene.text(), 280));
-            statement.setInt(7, scene.startOffset());
-            statement.setInt(8, scene.endOffset());
-            statement.setDouble(9, 0.70d);
+            if (generationId == null) {
+                statement.setObject(5, null);
+            } else {
+                statement.setLong(5, generationId);
+            }
+            statement.setObject(6, chapter.getVersion());
+            statement.setInt(7, scene.sceneNo());
+            statement.setString(8, summarize(scene.text(), 280));
+            statement.setInt(9, scene.startOffset());
+            statement.setInt(10, scene.endOffset());
+            statement.setDouble(11, 0.70d);
+            if (executionFence != null) {
+                bindExecutionFence(statement, 12, generationId, executionFence);
+            }
             return statement;
         }, keyHolder);
+        if (executionFence != null && inserted != 1) {
+            throw new ExecutionLeaseLostException();
+        }
         Number key = keyHolder.getKey();
         if (key == null) {
+            if (executionFence != null) {
+                throw new ExecutionLeaseLostException();
+            }
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "scene id missing");
         }
         return key.longValue();
+    }
+
+    private Long findOrInsertScene(ProjectChapterVO chapter,
+                                   SceneSlice scene,
+                                   Long generationId,
+                                   ExecutionFence executionFence) {
+        List<Long> existing = jdbcTemplate.query(
+            "select scene_id from ai_project_scene where generation_id = ? and chapter_id = ? and scene_no = ? order by scene_id asc limit 1",
+            (rs, rowNum) -> rs.getLong("scene_id"),
+            generationId, chapter.getChapterId(), scene.sceneNo());
+        if (existing.isEmpty()) {
+            return insertScene(chapter, scene, generationId, executionFence);
+        }
+        Long sceneId = existing.get(0);
+        String updateSql = "update ai_project_scene set status = 'ACTIVE', chapter_version = ?, summary = ?, "
+            + "start_offset = ?, end_offset = ?, confidence = ? where scene_id = ? and generation_id = ?";
+        Object[] values = new Object[]{chapter.getVersion(), summarize(scene.text(), 280), scene.startOffset(),
+            scene.endOffset(), 0.70d, sceneId, generationId};
+        if (executionFence == null) {
+            jdbcTemplate.update(updateSql, values);
+        } else {
+            jdbcTemplate.update(
+                updateSql + " and " + EXECUTION_FENCE_EXISTS,
+                fencedArgs(generationId, executionFence, values));
+        }
+        return sceneId;
     }
 
     private void insertVectorChunk(ProjectChapterVO chapter,
@@ -859,70 +1006,155 @@ public class KnowledgeProjectWorkService {
                                    String sourceType,
                                    Long sourceId,
                                    String text,
-                                   String pointId) {
+                                   String pointId,
+                                   Long generationId,
+                                   Runnable ownershipCheckpoint,
+                                   ExecutionFence executionFence) {
+        ownershipCheckpoint.run();
         String contentHash = sha256((text == null ? "" : text) + "|" + pointId);
-        String qdrantPointId = projectVectorPointId(pointId);
-        KeyHolder keyHolder = new GeneratedKeyHolder();
-        jdbcTemplate.update(connection -> {
-            PreparedStatement statement = connection.prepareStatement(
-                """
-                    insert into ai_project_vector_chunk(user_id, project_id, work_id, chapter_id, scene_id,
-                        source_type, source_id, content_hash, qdrant_point_id, chunk_text, visibility)
-                    values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'private')
-                    """,
-                new String[]{"id"}
-            );
-            statement.setLong(1, chapter.getUserId());
-            statement.setLong(2, chapter.getProjectId());
-            statement.setLong(3, chapter.getWorkId());
-            statement.setLong(4, chapter.getChapterId());
-            if (sceneId == null) {
-                statement.setObject(5, null);
-            } else {
-                statement.setLong(5, sceneId);
-            }
-            statement.setString(6, sourceType);
-            if (sourceId == null) {
-                statement.setObject(7, null);
-            } else {
-                statement.setLong(7, sourceId);
-            }
-            statement.setString(8, contentHash);
-            statement.setString(9, qdrantPointId);
-            statement.setString(10, trimForStorage(text, 4000));
-            return statement;
-        }, keyHolder);
-        Number key = keyHolder.getKey();
-        if (key == null) {
-            throw new BusinessException(ResultCode.INTERNAL_ERROR, "project vector chunk id missing");
+        String generatedQdrantPointId = projectVectorPointId(pointId + "|generation:" + generationId);
+        List<VectorChunkCheckpoint> checkpoints = jdbcTemplate.query(
+            "select id, status, qdrant_point_id from ai_project_vector_chunk where generation_id = ? and source_type = ? and content_hash = ? order by id asc limit 1",
+            (rs, rowNum) -> new VectorChunkCheckpoint(
+                rs.getLong("id"), rs.getString("status"), rs.getString("qdrant_point_id")),
+            generationId, sourceType, contentHash);
+        if (!checkpoints.isEmpty() && "ACTIVE".equals(checkpoints.get(0).status())) {
+            ownershipCheckpoint.run();
+            return;
         }
+        long vectorChunkId;
+        String qdrantPointId;
+        if (checkpoints.isEmpty()) {
+            qdrantPointId = generatedQdrantPointId;
+            String insertSql = executionFence == null
+                ? """
+                    insert into ai_project_vector_chunk(user_id, project_id, work_id, chapter_id, generation_id, chapter_version, status, scene_id,
+                        source_type, source_id, content_hash, qdrant_point_id, chunk_text, visibility)
+                    values(?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, 'private')
+                    """
+                : """
+                    insert into ai_project_vector_chunk(user_id, project_id, work_id, chapter_id, generation_id, chapter_version, status, scene_id,
+                        source_type, source_id, content_hash, qdrant_point_id, chunk_text, visibility)
+                    select ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, 'private'
+                    """ + EXECUTION_FENCE_FROM;
+            KeyHolder keyHolder = new GeneratedKeyHolder();
+            int inserted = jdbcTemplate.update(connection -> {
+                PreparedStatement statement = connection.prepareStatement(
+                    insertSql,
+                    new String[]{"id"}
+                );
+                statement.setLong(1, chapter.getUserId());
+                statement.setLong(2, chapter.getProjectId());
+                statement.setLong(3, chapter.getWorkId());
+                statement.setLong(4, chapter.getChapterId());
+                statement.setLong(5, generationId);
+                statement.setObject(6, chapter.getVersion());
+                if (sceneId == null) {
+                    statement.setObject(7, null);
+                } else {
+                    statement.setLong(7, sceneId);
+                }
+                statement.setString(8, sourceType);
+                if (sourceId == null) {
+                    statement.setObject(9, null);
+                } else {
+                    statement.setLong(9, sourceId);
+                }
+                statement.setString(10, contentHash);
+                statement.setString(11, qdrantPointId);
+                statement.setString(12, trimForStorage(text, 4000));
+                if (executionFence != null) {
+                    bindExecutionFence(statement, 13, generationId, executionFence);
+                }
+                return statement;
+            }, keyHolder);
+            if (executionFence != null && inserted != 1) {
+                throw new ExecutionLeaseLostException();
+            }
+            Number key = keyHolder.getKey();
+            if (key == null) {
+                if (executionFence != null) {
+                    throw new ExecutionLeaseLostException();
+                }
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "project vector chunk id missing");
+            }
+            vectorChunkId = key.longValue();
+        } else {
+            vectorChunkId = checkpoints.get(0).id();
+            qdrantPointId = checkpoints.get(0).qdrantPointId();
+            String updateSql = "update ai_project_vector_chunk set status = 'PENDING', scene_id = ?, source_type = ?, "
+                + "source_id = ?, content_hash = ?, chunk_text = ? where id = ? and generation_id = ?";
+            Object[] values = new Object[]{sceneId, sourceType, sourceId, contentHash, trimForStorage(text, 4000),
+                vectorChunkId, generationId};
+            if (executionFence == null) {
+                jdbcTemplate.update(updateSql, values);
+            } else {
+                jdbcTemplate.update(
+                    updateSql + " and " + EXECUTION_FENCE_EXISTS,
+                    fencedArgs(generationId, executionFence, values));
+            }
+        }
+        ownershipCheckpoint.run();
         upsertProjectVectorChunk(
             chapter,
-            key.longValue(),
+            vectorChunkId,
             sceneId,
             sourceType,
             sourceId,
             contentHash,
             qdrantPointId,
-            text
+            text,
+            generationId,
+            chapter.getVersion(),
+            ownershipCheckpoint
         );
+        ownershipCheckpoint.run();
+        String activationSql = "update ai_project_vector_chunk set status = 'ACTIVE' "
+            + "where id = ? and generation_id = ? and status = 'PENDING'";
+        int activated = executionFence == null
+            ? jdbcTemplate.update(activationSql, vectorChunkId, generationId)
+            : jdbcTemplate.update(
+                activationSql + " and " + EXECUTION_FENCE_EXISTS,
+                fencedArgs(generationId, executionFence, vectorChunkId, generationId));
+        if (activated != 1) {
+            if (executionFence != null) {
+                throw new ExecutionLeaseLostException();
+            }
+            throw new BusinessException(ResultCode.CONFLICT, "project vector checkpoint activation rejected");
+        }
+        ownershipCheckpoint.run();
     }
 
-    private void extractWorldRules(ProjectChapterVO chapter) {
+    private int extractWorldRules(ProjectChapterVO chapter,
+                                  Long generationId,
+                                  Runnable ownershipCheckpoint,
+                                  ExecutionFence executionFence) {
+        ownershipCheckpoint.run();
         List<String> candidates = linesMatching(
             chapter.getContent(),
             List.of("System rule", "系统规则", "设定", "规则", "金手指", "三端", "terminal")
         );
+        ownershipCheckpoint.run();
         for (String candidate : candidates) {
-            jdbcTemplate.update(
+            ownershipCheckpoint.run();
+            insertGenerationProjection(
                 """
-                    insert into ai_project_world_rule(user_id, project_id, work_id, rule_type, title,
-                        content, first_chapter_no, status, confidence)
-                    values(?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)
+                    insert into ai_project_world_rule(user_id, project_id, work_id, generation_id, chapter_version,
+                        status_proj, rule_type, title, content, first_chapter_no, status, confidence)
+                    values(?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, 'ACTIVE', ?)
                     """,
+                """
+                    insert into ai_project_world_rule(user_id, project_id, work_id, generation_id, chapter_version,
+                        status_proj, rule_type, title, content, first_chapter_no, status, confidence)
+                    select ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, 'ACTIVE', ?
+                    """,
+                generationId,
+                executionFence,
                 chapter.getUserId(),
                 chapter.getProjectId(),
                 chapter.getWorkId(),
+                generationId,
+                chapter.getVersion(),
                 "system_rule",
                 summarize(candidate, 120),
                 candidate,
@@ -930,23 +1162,39 @@ public class KnowledgeProjectWorkService {
                 0.78d
             );
         }
+        return candidates.size();
     }
 
-    private void extractForeshadowings(ProjectChapterVO chapter) {
+    private int extractForeshadowings(ProjectChapterVO chapter,
+                                      Long generationId,
+                                      Runnable ownershipCheckpoint,
+                                      ExecutionFence executionFence) {
+        ownershipCheckpoint.run();
         List<String> candidates = linesMatching(
             chapter.getContent(),
             List.of("Foreshadowing", "伏笔", "暗线", "未回收", "未解", "神秘", "unknown", "unresolved")
         );
+        ownershipCheckpoint.run();
         for (String candidate : candidates) {
-            jdbcTemplate.update(
+            ownershipCheckpoint.run();
+            insertGenerationProjection(
                 """
-                    insert into ai_project_foreshadowing(user_id, project_id, work_id, title, content,
-                        status, planted_chapter_no, importance, evidence_refs, confidence)
-                    values(?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+                    insert into ai_project_foreshadowing(user_id, project_id, work_id, generation_id, chapter_version,
+                        title, content, status, planted_chapter_no, importance, evidence_refs, confidence)
+                    values(?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
                     """,
+                """
+                    insert into ai_project_foreshadowing(user_id, project_id, work_id, generation_id, chapter_version,
+                        title, content, status, planted_chapter_no, importance, evidence_refs, confidence)
+                    select ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?
+                    """,
+                generationId,
+                executionFence,
                 chapter.getUserId(),
                 chapter.getProjectId(),
                 chapter.getWorkId(),
+                generationId,
+                chapter.getVersion(),
                 summarize(candidate, 120),
                 candidate,
                 chapter.getChapterNo(),
@@ -955,29 +1203,46 @@ public class KnowledgeProjectWorkService {
                 0.76d
             );
         }
+        return candidates.size();
     }
 
-    private void extractTimelineEvents(ProjectChapterVO chapter, List<Long> sceneIds) {
+    private int extractTimelineEvents(ProjectChapterVO chapter,
+                                      List<Long> sceneIds,
+                                      Long generationId,
+                                      Runnable ownershipCheckpoint,
+                                      ExecutionFence executionFence) {
+        ownershipCheckpoint.run();
         List<String> candidates = linesMatching(
             chapter.getContent(),
             List.of("Timeline event", "时间线", "事件", "完成", "开启", "交付", "receives", "completes")
         );
+        ownershipCheckpoint.run();
         if (candidates.isEmpty()) {
             candidates = List.of(summarize(chapter.getContent(), 220));
         }
         int order = 1;
         for (String candidate : candidates) {
+            ownershipCheckpoint.run();
             Long sceneId = sceneIds.isEmpty() ? null : sceneIds.get(Math.min(sceneIds.size() - 1, order - 1));
-            jdbcTemplate.update(
+            insertGenerationProjection(
                 """
-                    insert into ai_project_timeline_event(user_id, project_id, work_id, chapter_id,
-                        chapter_no, scene_id, event_order, title, summary, causal_refs, confidence)
-                    values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    insert into ai_project_timeline_event(user_id, project_id, work_id, chapter_id, generation_id,
+                        chapter_version, status, chapter_no, scene_id, event_order, title, summary, causal_refs, confidence)
+                    values(?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?)
                     """,
+                """
+                    insert into ai_project_timeline_event(user_id, project_id, work_id, chapter_id, generation_id,
+                        chapter_version, status, chapter_no, scene_id, event_order, title, summary, causal_refs, confidence)
+                    select ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?
+                    """,
+                generationId,
+                executionFence,
                 chapter.getUserId(),
                 chapter.getProjectId(),
                 chapter.getWorkId(),
                 chapter.getChapterId(),
+                generationId,
+                chapter.getVersion(),
                 chapter.getChapterNo(),
                 sceneId,
                 order,
@@ -988,33 +1253,50 @@ public class KnowledgeProjectWorkService {
             );
             order++;
         }
+        return candidates.size();
     }
 
-    private void extractCharacterState(ProjectChapterVO chapter) {
+    private int extractCharacterState(ProjectChapterVO chapter,
+                                      Long generationId,
+                                      Runnable ownershipCheckpoint,
+                                      ExecutionFence executionFence) {
+        ownershipCheckpoint.run();
         String content = chapter.getContent();
         if (content == null || content.isBlank()) {
-            return;
+            return 0;
         }
         String characterName = firstMentionedName(content);
+        ownershipCheckpoint.run();
         if (characterName == null) {
-            return;
+            return 0;
         }
-        jdbcTemplate.update(
+        ownershipCheckpoint.run();
+        insertGenerationProjection(
             """
                 insert into ai_project_character_state(user_id, project_id, work_id, character_name,
-                    chapter_id, chapter_no, state_summary, motivation, confidence)
-                values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    chapter_id, generation_id, chapter_version, status, chapter_no, state_summary, motivation, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
                 """,
+            """
+                insert into ai_project_character_state(user_id, project_id, work_id, character_name,
+                    chapter_id, generation_id, chapter_version, status, chapter_no, state_summary, motivation, confidence)
+                select ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?
+                """,
+            generationId,
+            executionFence,
             chapter.getUserId(),
             chapter.getProjectId(),
             chapter.getWorkId(),
             characterName,
             chapter.getChapterId(),
+            generationId,
+            chapter.getVersion(),
             chapter.getChapterNo(),
             summarize(content, 220),
             "imported_chapter_context",
             0.55d
         );
+        return 1;
     }
 
     private void insertIngestJob(ProjectChapterVO chapter, int sceneCount) {
@@ -1099,6 +1381,43 @@ public class KnowledgeProjectWorkService {
         return text.substring(0, maxChars);
     }
 
+    private void insertGenerationProjection(String valuesSql,
+                                            String selectSql,
+                                            Long generationId,
+                                            ExecutionFence executionFence,
+                                            Object... values) {
+        if (executionFence == null) {
+            jdbcTemplate.update(valuesSql, values);
+            return;
+        }
+        int inserted = jdbcTemplate.update(
+            selectSql + EXECUTION_FENCE_FROM,
+            fencedArgs(generationId, executionFence, values));
+        if (inserted != 1) {
+            throw new ExecutionLeaseLostException();
+        }
+    }
+
+    private Object[] fencedArgs(Long generationId, ExecutionFence executionFence, Object... values) {
+        Object[] args = new Object[values.length + 4];
+        System.arraycopy(values, 0, args, 0, values.length);
+        args[values.length] = executionFence.ingestJobId();
+        args[values.length + 1] = generationId;
+        args[values.length + 2] = executionFence.leaseOwner();
+        args[values.length + 3] = executionFence.fencingToken();
+        return args;
+    }
+
+    private void bindExecutionFence(PreparedStatement statement,
+                                    int startIndex,
+                                    Long generationId,
+                                    ExecutionFence executionFence) throws SQLException {
+        statement.setLong(startIndex, executionFence.ingestJobId());
+        statement.setLong(startIndex + 1, generationId);
+        statement.setString(startIndex + 2, executionFence.leaseOwner());
+        statement.setLong(startIndex + 3, executionFence.fencingToken());
+    }
+
     private RowMapper<ProjectWorkVO> workMapper() {
         return (rs, rowNum) -> {
             ProjectWorkVO vo = new ProjectWorkVO();
@@ -1115,7 +1434,7 @@ public class KnowledgeProjectWorkService {
         };
     }
 
-    private RowMapper<ProjectChapterVO> chapterMapper() {
+    public RowMapper<ProjectChapterVO> chapterMapperPublic() {
         return (rs, rowNum) -> {
             ProjectChapterVO vo = new ProjectChapterVO();
             vo.setChapterId(rs.getLong("chapter_id"));
@@ -1175,6 +1494,18 @@ public class KnowledgeProjectWorkService {
         }
     }
 
+    public record ExecutionFence(Long ingestJobId, String leaseOwner, long fencingToken) {
+    }
+
+    public static final class ExecutionLeaseLostException extends RuntimeException {
+        private ExecutionLeaseLostException() {
+            super("project ingest execution lease lost");
+        }
+    }
+
     private record SceneSlice(int sceneNo, int startOffset, int endOffset, String text) {
+    }
+
+    private record VectorChunkCheckpoint(long id, String status, String qdrantPointId) {
     }
 }

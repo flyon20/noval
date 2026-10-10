@@ -24,6 +24,15 @@ public class AiMemoryCandidateRequest {
     @DecimalMax("1.0")
     private Double confidence = 0.0d;
     private String sourceTraceId;
+    private String factKey;
+    private String candidateKey;
+    private String provenanceJson;
+    private String evidenceJson;
+    private String sourceEvidenceIdsJson;
+    private String sourceChapterVersionsJson;
+    private String indexGeneration;
+    private String extractorVersion;
+    private Long supersedesId;
     @Min(1)
     @Max(365)
     private Integer ttlDays = 30;
@@ -98,6 +107,78 @@ public class AiMemoryCandidateRequest {
 
     public void setSourceTraceId(String sourceTraceId) {
         this.sourceTraceId = sourceTraceId;
+    }
+
+    public String getFactKey() {
+        return factKey;
+    }
+
+    public void setFactKey(String factKey) {
+        this.factKey = factKey;
+    }
+
+    public String getCandidateKey() {
+        return candidateKey;
+    }
+
+    public void setCandidateKey(String candidateKey) {
+        this.candidateKey = candidateKey;
+    }
+
+    public String getProvenanceJson() {
+        return provenanceJson;
+    }
+
+    public void setProvenanceJson(String provenanceJson) {
+        this.provenanceJson = provenanceJson;
+    }
+
+    public String getEvidenceJson() {
+        return evidenceJson;
+    }
+
+    public void setEvidenceJson(String evidenceJson) {
+        this.evidenceJson = evidenceJson;
+    }
+
+    public String getSourceEvidenceIdsJson() {
+        return sourceEvidenceIdsJson;
+    }
+
+    public void setSourceEvidenceIdsJson(String sourceEvidenceIdsJson) {
+        this.sourceEvidenceIdsJson = sourceEvidenceIdsJson;
+    }
+
+    public String getSourceChapterVersionsJson() {
+        return sourceChapterVersionsJson;
+    }
+
+    public void setSourceChapterVersionsJson(String sourceChapterVersionsJson) {
+        this.sourceChapterVersionsJson = sourceChapterVersionsJson;
+    }
+
+    public String getIndexGeneration() {
+        return indexGeneration;
+    }
+
+    public void setIndexGeneration(String indexGeneration) {
+        this.indexGeneration = indexGeneration;
+    }
+
+    public String getExtractorVersion() {
+        return extractorVersion;
+    }
+
+    public void setExtractorVersion(String extractorVersion) {
+        this.extractorVersion = extractorVersion;
+    }
+
+    public Long getSupersedesId() {
+        return supersedesId;
+    }
+
+    public void setSupersedesId(Long supersedesId) {
+        this.supersedesId = supersedesId;
     }
 
     public Integer getTtlDays() {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from typing import Any, List
 from urllib.parse import quote, urljoin, urlparse
 
@@ -53,8 +54,10 @@ class FanqieCrawler(BaseCrawler):
                  chapter_fetch_workers: int | None = None,
                  browser_search_client: Any | None = None) -> None:
         self._http_client = http_client or HttpClient(timeout_seconds=timeout_seconds)
-        self._decoder = decoder or ConfuseFontDecoder()
-        self._chapter_fetch_workers = max(1, chapter_fetch_workers or settings.chapter_fetch_workers)
+        self._decoder = decoder
+        self._decoder_lock = threading.Lock()
+        requested_workers = chapter_fetch_workers or settings.chapter_fetch_workers
+        self._chapter_fetch_workers = max(1, min(requested_workers, settings.chapter_fetch_workers))
         self._browser_search_client = browser_search_client
 
     def fetch_board_catalog(self) -> List[BoardCatalogChannel]:
@@ -441,7 +444,7 @@ class FanqieCrawler(BaseCrawler):
         content = html_to_text(str(chapter_data.get("content") or ""))
         if any(0xE000 <= ord(ch) <= 0xF8FF for ch in content):
             css = str(reader_state.get("common", {}).get("css") or "")
-            content = self._decoder.decode(content, css)
+            content = self._decode_obfuscated_text(content, css)
         if not content:
             raise ValueError(f"chapter content parse failed for itemId: {item_id}")
         source_word_count = self._parse_positive_int(chapter_data.get("chapterWordNumber")) or len(
@@ -550,65 +553,91 @@ class FanqieCrawler(BaseCrawler):
         if params is None:
             return []
 
-        books: list[dict[str, Any]] = []
-        seen_keys: set[str] = set()
-        offset = 0
-        total_num: int | None = None
         target_count = rank_fetch_count if rank_fetch_count is not None and rank_fetch_count > 0 else None
-
         try:
-            while True:
-                payload = self._http_client.get_json(
-                    self.RANK_API_URL,
-                    params={
-                        **params,
-                        "offset": str(offset),
-                        "limit": str(self.RANK_API_PAGE_SIZE),
-                    },
-                )
-                if not isinstance(payload, dict):
-                    return []
-                response_code = payload.get("code")
-                if response_code not in (None, 0, "0"):
-                    return []
+            first_page, total_num = self._fetch_rank_api_page(params, 0)
+            if not first_page:
+                return []
+            expected_count = target_count
+            if total_num is not None:
+                expected_count = total_num if expected_count is None else min(total_num, expected_count)
+            if expected_count is None:
+                return self._fetch_rank_books_sequentially(params, first_page)
 
-                data = payload.get("data") or {}
-                if not isinstance(data, dict):
-                    return []
-                page_books = data.get("book_list") or data.get("bookList") or []
-                if not isinstance(page_books, list):
-                    return []
-
-                if total_num is None:
-                    total_num = self._parse_positive_int(data.get("total_num"))
-
-                appended_count = 0
-                for book in page_books:
-                    if not isinstance(book, dict):
-                        continue
-                    book_id = str(book.get("bookId") or "").strip()
-                    rank_no = str(book.get("currentPos") or book.get("rankPos") or "").strip()
-                    dedupe_key = book_id or rank_no
-                    if not dedupe_key or dedupe_key in seen_keys:
-                        continue
-                    seen_keys.add(dedupe_key)
-                    books.append(book)
-                    appended_count += 1
-                    if target_count is not None and len(books) >= target_count:
-                        return books[:target_count]
-
-                if total_num is not None and len(books) >= total_num:
-                    if target_count is not None:
-                        return books[:min(total_num, target_count)]
-                    return books[:total_num]
-                if len(page_books) < self.RANK_API_PAGE_SIZE or appended_count == 0:
-                    if target_count is not None:
-                        return books[:target_count]
-                    return books
-
-                offset += self.RANK_API_PAGE_SIZE
+            pages: dict[int, list[dict[str, Any]]] = {0: first_page}
+            offsets = list(range(self.RANK_API_PAGE_SIZE, expected_count, self.RANK_API_PAGE_SIZE))
+            if offsets:
+                max_workers = min(self._chapter_fetch_workers, len(offsets))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        offset: executor.submit(self._fetch_rank_api_page, params, offset)
+                        for offset in offsets
+                    }
+                    for offset, future in futures.items():
+                        pages[offset] = future.result()[0]
+            return self._merge_rank_api_pages(pages, expected_count)
         except Exception:
             return []
+
+    def _fetch_rank_api_page(
+        self,
+        params: dict[str, str],
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        payload = self._http_client.get_json(
+            self.RANK_API_URL,
+            params={
+                **params,
+                "offset": str(offset),
+                "limit": str(self.RANK_API_PAGE_SIZE),
+            },
+        )
+        if not isinstance(payload, dict) or payload.get("code") not in (None, 0, "0"):
+            raise ValueError("rank api request failed")
+        data = payload.get("data") or {}
+        if not isinstance(data, dict):
+            raise ValueError("rank api response data is invalid")
+        page_books = data.get("book_list") or data.get("bookList") or []
+        if not isinstance(page_books, list):
+            raise ValueError("rank api book list is invalid")
+        return page_books, self._parse_positive_int(data.get("total_num"))
+
+    def _fetch_rank_books_sequentially(
+        self,
+        params: dict[str, str],
+        first_page: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        pages: dict[int, list[dict[str, Any]]] = {0: first_page}
+        offset = self.RANK_API_PAGE_SIZE
+        while len(pages[offset - self.RANK_API_PAGE_SIZE]) == self.RANK_API_PAGE_SIZE:
+            page_books, _ = self._fetch_rank_api_page(params, offset)
+            pages[offset] = page_books
+            if not page_books:
+                break
+            offset += self.RANK_API_PAGE_SIZE
+        return self._merge_rank_api_pages(pages, None)
+
+    def _merge_rank_api_pages(
+        self,
+        pages: dict[int, list[dict[str, Any]]],
+        expected_count: int | None,
+    ) -> list[dict[str, Any]]:
+        books: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for offset in sorted(pages):
+            for book in pages[offset]:
+                if not isinstance(book, dict):
+                    continue
+                book_id = str(book.get("bookId") or "").strip()
+                rank_no = str(book.get("currentPos") or book.get("rankPos") or "").strip()
+                dedupe_key = book_id or rank_no
+                if not dedupe_key or dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
+                books.append(book)
+                if expected_count is not None and len(books) >= expected_count:
+                    return books[:expected_count]
+        return books
 
     def _build_rank_api_params(self, rank_url: str) -> dict[str, str] | None:
         rank_slug = urlparse(rank_url).path.rstrip("/").rsplit("/", maxsplit=1)[-1]
@@ -657,8 +686,15 @@ class FanqieCrawler(BaseCrawler):
         if not raw_text:
             return raw_text
         if any(0xE000 <= ord(ch) <= 0xF8FF for ch in raw_text):
-            return self._decoder.decode(raw_text, css)
+            return self._decode_obfuscated_text(raw_text, css)
         return raw_text
+
+    def _decode_obfuscated_text(self, raw_text: str, css: str) -> str:
+        if self._decoder is None:
+            with self._decoder_lock:
+                if self._decoder is None:
+                    self._decoder = ConfuseFontDecoder()
+        return self._decoder.decode(raw_text, css)
 
     def _parse_positive_int(self, value: Any) -> int | None:
         if value is None:

@@ -214,7 +214,7 @@ const snapshotOption = computed(() => {
 });
 
 function syncViewportMode() {
-  isMobileViewport.value = window.innerWidth <= 760;
+  isMobileViewport.value = window.innerWidth <= 768;
 }
 
 function resolveInitialSelection(preference: UserRankPreference | null) {
@@ -912,6 +912,11 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.trend-page__toolbar-copy {
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+
 .trend-page__toolbar-title {
   font-size: 1rem;
   font-weight: 700;
@@ -1006,9 +1011,9 @@ onBeforeUnmount(() => {
 }
 
 .trend-page__support-table-wrap :deep(.el-table) {
-  --el-table-border-color: rgba(35, 65, 58, 0.08);
-  --el-table-header-bg-color: rgba(35, 65, 58, 0.04);
-  --el-table-row-hover-bg-color: rgba(35, 65, 58, 0.04);
+  --el-table-border-color: var(--color-border);
+  --el-table-header-bg-color: color-mix(in srgb, var(--color-primary-soft) 58%, transparent);
+  --el-table-row-hover-bg-color: color-mix(in srgb, var(--color-primary-soft) 72%, transparent);
   min-width: 560px;
 }
 
@@ -1110,6 +1115,10 @@ onBeforeUnmount(() => {
   .trend-page__model-select {
     width: 100%;
     min-width: 0;
+  }
+
+  .trend-page__toolbar-copy {
+    width: 100%;
   }
 
   .trend-page__result-support {

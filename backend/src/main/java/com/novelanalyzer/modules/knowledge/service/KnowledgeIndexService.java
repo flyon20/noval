@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 @Service
 public class KnowledgeIndexService {
@@ -40,6 +41,21 @@ public class KnowledgeIndexService {
     private static final String VECTOR_STATUS_INDEXED = "INDEXED";
     private static final String VECTOR_STATUS_PENDING = "PENDING";
     private static final String DEFAULT_CHUNK_STRATEGY_VERSION = "rag-v2";
+    private static final IndexExecutionGuard PERMISSIVE_GUARD = new IndexExecutionGuard() {
+        @Override
+        public void checkpoint() {
+        }
+
+        @Override
+        public <T> T mysqlSideEffect(Supplier<T> sideEffect) {
+            return sideEffect.get();
+        }
+
+        @Override
+        public String pointId(Long chunkId) {
+            return String.valueOf(chunkId);
+        }
+    };
 
     private final KnowledgeRepository knowledgeRepository;
     private final EmbeddingClient embeddingClient;
@@ -64,8 +80,17 @@ public class KnowledgeIndexService {
     }
 
     public IndexResult indexBook(Long bookId, String mode) {
+        return indexBook(bookId, mode, PERMISSIVE_GUARD);
+    }
+
+    public IndexResult indexBook(Long bookId,
+                                 String mode,
+                                 IndexExecutionGuard executionGuard) {
+        IndexExecutionGuard guard = executionGuard == null ? PERMISSIVE_GUARD : executionGuard;
+        guard.checkpoint();
         CrawlBookEntity book = knowledgeRepository.findBook(bookId)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
+        guard.checkpoint();
         qdrantClient.ensureCollection();
 
         int createdChunks = 0;
@@ -75,14 +100,15 @@ public class KnowledgeIndexService {
         boolean chapterOnly = "CHAPTER_MISSING".equals(normalizedMode);
 
         if (!rankOnly && !chapterOnly) {
-            ChunkIndexOutcome introOutcome = indexIntro(book);
+            ChunkIndexOutcome introOutcome = indexIntro(book, guard);
             createdChunks += introOutcome.createdChunks();
             indexedChunks += introOutcome.indexedChunks();
         }
 
         if (!chapterOnly) {
             for (KnowledgeRepository.RankEvidence rank : knowledgeRepository.findLatestRankEvidenceForBook(bookId)) {
-                ChunkIndexOutcome outcome = indexRank(book, rank);
+                guard.checkpoint();
+                ChunkIndexOutcome outcome = indexRank(book, rank, guard);
                 createdChunks += outcome.createdChunks();
                 indexedChunks += outcome.indexedChunks();
             }
@@ -94,7 +120,8 @@ public class KnowledgeIndexService {
                 knowledgeProperties.getIndex().getMaxChapters()
             );
             for (CrawlChapterEntity chapter : chapters) {
-                ChunkIndexOutcome outcome = indexChapter(book, chapter);
+                guard.checkpoint();
+                ChunkIndexOutcome outcome = indexChapter(book, chapter, guard);
                 createdChunks += outcome.createdChunks();
                 indexedChunks += outcome.indexedChunks();
             }
@@ -105,38 +132,8 @@ public class KnowledgeIndexService {
     public IndexResult indexAnalysisResult(Long analysisResultId) {
         AnalysisResultEntity analysis = knowledgeRepository.findAnalysisResult(analysisResultId)
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "analysis result not found"));
-        CrawlBookEntity book = knowledgeRepository.findBook(analysis.getBookId())
-            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
-        qdrantClient.ensureCollection();
-        String content = normalizeText(analysis.getResultContent());
-        if (content.isEmpty()) {
-            content = normalizeText(analysis.getResultJson());
-        }
-        if (content.isEmpty()) {
-            return new IndexResult(book.getId(), 0, 0);
-        }
-
-        KnowledgeDocumentEntity document = knowledgeRepository.saveOrUpdateDocument(
-            SOURCE_TYPE_ANALYSIS,
-            analysis.getId(),
-            analysis.getPlatform(),
-            analysis.getBookId(),
-            defaultText(analysis.getAnalysisType()) + " \u5206\u6790\u7ed3\u679c"
-        );
-        String chunkText = buildHeader(book, SOURCE_TYPE_ANALYSIS, null, null)
-            + "\u5206\u6790\u7c7b\u578b\uff1a" + defaultText(analysis.getAnalysisType()) + '\n'
-            + content;
-        ChunkIndexOutcome outcome = persistAndVectorizeChunk(
-            document,
-            book,
-            SOURCE_TYPE_ANALYSIS,
-            analysis.getId(),
-            null,
-            analysis.getAnalysisType(),
-            "analysis-" + analysis.getId() + "-1",
-            chunkText
-        );
-        return new IndexResult(book.getId(), outcome.createdChunks(), outcome.indexedChunks());
+        LOGGER.info("Skipping private analysis result {} for ownerless global knowledge index", analysisResultId);
+        return new IndexResult(analysis.getBookId(), 0, 0);
     }
 
     public AsyncJobSubmitResponse submitBookIndexJob(Long bookId, Long triggerUserId) {
@@ -144,11 +141,28 @@ public class KnowledgeIndexService {
     }
 
     public AsyncJobSubmitResponse submitBookIndexJob(Long bookId, Long triggerUserId, String mode) {
+        return submitBookIndexJob(bookId, triggerUserId, mode, null);
+    }
+
+    public AsyncJobSubmitResponse submitBookIndexJob(Long bookId,
+                                                     Long triggerUserId,
+                                                     String mode,
+                                                     String actionIdempotencyKey) {
         String normalizedMode = normalizeIndexMode(mode);
-        String jobKey = buildJobKey(bookId, normalizedMode);
+        String jobKey = buildJobKey(bookId, normalizedMode, actionIdempotencyKey);
         String resourceKey = "book:" + bookId;
         String requestJson = "{\"bookId\":" + bookId + ",\"mode\":\"" + normalizedMode + "\"}";
-        return asyncJobService.submitOrReuse(
+        if (actionIdempotencyKey == null || actionIdempotencyKey.isBlank()) {
+            return asyncJobService.submitOrReuse(
+                JOB_TYPE_INDEX_BOOK,
+                jobKey,
+                resourceKey,
+                requestJson,
+                triggerUserId,
+                INDEX_JOB_LOCK_TTL_SECONDS
+            );
+        }
+        return asyncJobService.submitOrReuseSuccessful(
             JOB_TYPE_INDEX_BOOK,
             jobKey,
             resourceKey,
@@ -163,11 +177,28 @@ public class KnowledgeIndexService {
     }
 
     public AsyncJobSubmitResponse submitBookIndexPendingJob(Long bookId, Long triggerUserId, String mode) {
+        return submitBookIndexPendingJob(bookId, triggerUserId, mode, null);
+    }
+
+    public AsyncJobSubmitResponse submitBookIndexPendingJob(Long bookId,
+                                                            Long triggerUserId,
+                                                            String mode,
+                                                            String actionIdempotencyKey) {
         String normalizedMode = normalizeIndexMode(mode);
-        String jobKey = buildJobKey(bookId, normalizedMode);
+        String jobKey = buildJobKey(bookId, normalizedMode, actionIdempotencyKey);
         String resourceKey = "book:" + bookId;
         String requestJson = "{\"bookId\":" + bookId + ",\"mode\":\"" + normalizedMode + "\"}";
-        return asyncJobService.submitOrReusePending(
+        if (actionIdempotencyKey == null || actionIdempotencyKey.isBlank()) {
+            return asyncJobService.submitOrReusePending(
+                JOB_TYPE_INDEX_BOOK,
+                jobKey,
+                resourceKey,
+                requestJson,
+                triggerUserId,
+                INDEX_JOB_LOCK_TTL_SECONDS
+            );
+        }
+        return asyncJobService.submitOrReuseSuccessfulPending(
             JOB_TYPE_INDEX_BOOK,
             jobKey,
             resourceKey,
@@ -191,40 +222,54 @@ public class KnowledgeIndexService {
     }
 
     private String buildJobKey(Long bookId, String normalizedMode) {
-        String jobKey = "book:" + bookId;
-        if ("ALL".equals(normalizedMode)) {
-            return jobKey;
-        }
-        if ("FULL_REINDEX".equals(normalizedMode)) {
-            return jobKey + ":" + normalizedMode + ":" + currentEmbeddingModel() + ":" + currentEmbeddingDimension();
-        }
-        return jobKey + ":" + normalizedMode;
+        return buildJobKey(bookId, normalizedMode, null);
     }
 
-    private ChunkIndexOutcome indexIntro(CrawlBookEntity book) {
+    private String buildJobKey(Long bookId,
+                               String normalizedMode,
+                               String actionIdempotencyKey) {
+        String jobKey = "book:" + bookId;
+        if (!"ALL".equals(normalizedMode)) {
+            if ("FULL_REINDEX".equals(normalizedMode)) {
+                jobKey += ":" + normalizedMode + ":" + currentEmbeddingModel() + ":" + currentEmbeddingDimension();
+            } else {
+                jobKey += ":" + normalizedMode;
+            }
+        }
+        if (actionIdempotencyKey == null || actionIdempotencyKey.isBlank()) {
+            return jobKey;
+        }
+        return jobKey + ":action:" + sha256(actionIdempotencyKey.trim());
+    }
+
+    private ChunkIndexOutcome indexIntro(CrawlBookEntity book, IndexExecutionGuard guard) {
         String intro = normalizeText(book.getIntro());
         if (intro.isEmpty()) {
             return new ChunkIndexOutcome(0, 0);
         }
-        KnowledgeDocumentEntity document = knowledgeRepository.saveOrUpdateDocument(
+        KnowledgeDocumentEntity document = guard.mysqlSideEffect(() -> knowledgeRepository.saveOrUpdateDocument(
             SOURCE_TYPE_INTRO,
             book.getId(),
             book.getPlatform(),
             book.getId(),
             book.getBookName() + " \u7b80\u4ecb"
-        );
+        ));
         String chunkText = buildHeader(book, SOURCE_TYPE_INTRO, null, null) + intro;
-        return persistAndVectorizeChunk(document, book, SOURCE_TYPE_INTRO, book.getId(), null, null, "intro-1", chunkText);
+        return persistAndVectorizeChunk(
+            document, book, SOURCE_TYPE_INTRO, book.getId(), null, null, "intro-1", chunkText, guard
+        );
     }
 
-    private ChunkIndexOutcome indexRank(CrawlBookEntity book, KnowledgeRepository.RankEvidence rank) {
-        KnowledgeDocumentEntity document = knowledgeRepository.saveOrUpdateDocument(
+    private ChunkIndexOutcome indexRank(CrawlBookEntity book,
+                                        KnowledgeRepository.RankEvidence rank,
+                                        IndexExecutionGuard guard) {
+        KnowledgeDocumentEntity document = guard.mysqlSideEffect(() -> knowledgeRepository.saveOrUpdateDocument(
             SOURCE_TYPE_RANK,
             rank.id(),
             defaultText(rank.platform()),
             book.getId(),
             rankTitle(rank)
-        );
+        ));
         String chunkText = buildHeader(book, SOURCE_TYPE_RANK, null, null)
             + "\u699c\u5355\uff1a" + rankBoardText(rank) + '\n'
             + "\u699c\u5355\u6807\u8bc6\uff1a" + defaultText(rank.channelCode()) + " / " + defaultText(rank.boardCode()) + '\n'
@@ -255,26 +300,30 @@ public class KnowledgeIndexService {
             null,
             "rank-" + rank.id(),
             chunkText,
-            extraPayload
+            extraPayload,
+            guard
         );
     }
 
-    private ChunkIndexOutcome indexChapter(CrawlBookEntity book, CrawlChapterEntity chapter) {
+    private ChunkIndexOutcome indexChapter(CrawlBookEntity book,
+                                           CrawlChapterEntity chapter,
+                                           IndexExecutionGuard guard) {
         String content = normalizeText(chapter.getContent());
         if (content.isEmpty()) {
             return new ChunkIndexOutcome(0, 0);
         }
-        KnowledgeDocumentEntity document = knowledgeRepository.saveOrUpdateDocument(
+        KnowledgeDocumentEntity document = guard.mysqlSideEffect(() -> knowledgeRepository.saveOrUpdateDocument(
             SOURCE_TYPE_CHAPTER,
             chapter.getId(),
             book.getPlatform(),
             book.getId(),
             chapter.getChapterTitle()
-        );
+        ));
         List<String> contentChunks = splitParagraphAware(content, resolveChunkTargetChars(), resolveChunkOverlapChars());
         int createdChunks = 0;
         int indexedChunks = 0;
         for (int index = 0; index < contentChunks.size(); index++) {
+            guard.checkpoint();
             String chunkText = buildHeader(book, SOURCE_TYPE_CHAPTER, chapter.getChapterNo(), chapter.getChapterTitle()) + contentChunks.get(index);
             ChunkIndexOutcome outcome = persistAndVectorizeChunk(
                 document,
@@ -284,7 +333,8 @@ public class KnowledgeIndexService {
                 chapter.getChapterNo(),
                 null,
                 "chapter-" + chapter.getChapterNo() + "-" + (index + 1),
-                chunkText
+                chunkText,
+                guard
             );
             createdChunks += outcome.createdChunks();
             indexedChunks += outcome.indexedChunks();
@@ -390,7 +440,25 @@ public class KnowledgeIndexService {
                                                        String analysisType,
                                                        String chunkKey,
                                                        String chunkText) {
-        return persistAndVectorizeChunk(document, book, sourceType, sourceRefId, chapterNo, analysisType, chunkKey, chunkText, Map.of());
+        return persistAndVectorizeChunk(
+            document, book, sourceType, sourceRefId, chapterNo, analysisType, chunkKey, chunkText,
+            Map.of(), PERMISSIVE_GUARD
+        );
+    }
+
+    private ChunkIndexOutcome persistAndVectorizeChunk(KnowledgeDocumentEntity document,
+                                                       CrawlBookEntity book,
+                                                       String sourceType,
+                                                       Long sourceRefId,
+                                                       Integer chapterNo,
+                                                       String analysisType,
+                                                       String chunkKey,
+                                                       String chunkText,
+                                                       IndexExecutionGuard guard) {
+        return persistAndVectorizeChunk(
+            document, book, sourceType, sourceRefId, chapterNo, analysisType, chunkKey, chunkText,
+            Map.of(), guard
+        );
     }
 
     private ChunkIndexOutcome persistAndVectorizeChunk(KnowledgeDocumentEntity document,
@@ -402,6 +470,23 @@ public class KnowledgeIndexService {
                                                        String chunkKey,
                                                        String chunkText,
                                                        Map<String, Object> extraPayload) {
+        return persistAndVectorizeChunk(
+            document, book, sourceType, sourceRefId, chapterNo, analysisType, chunkKey, chunkText,
+            extraPayload, PERMISSIVE_GUARD
+        );
+    }
+
+    private ChunkIndexOutcome persistAndVectorizeChunk(KnowledgeDocumentEntity document,
+                                                       CrawlBookEntity book,
+                                                       String sourceType,
+                                                       Long sourceRefId,
+                                                       Integer chapterNo,
+                                                       String analysisType,
+                                                       String chunkKey,
+                                                       String chunkText,
+                                                       Map<String, Object> extraPayload,
+                                                       IndexExecutionGuard guard) {
+        guard.checkpoint();
         String contentHash = sha256(chunkText);
         KnowledgeChunkEntity existing = knowledgeRepository.findChunk(document.getId(), chunkKey).orElse(null);
         if (existing != null
@@ -428,24 +513,30 @@ public class KnowledgeIndexService {
         chunk.setEmbeddingModel(currentEmbeddingModel());
         chunk.setEmbeddingDimension(currentEmbeddingDimension());
         chunk.setVectorStatus(VECTOR_STATUS_PENDING);
-        if (existing == null) {
-            knowledgeRepository.saveChunk(chunk);
-        } else {
-            knowledgeRepository.updateChunkForReindex(chunk);
-        }
+        guard.mysqlSideEffect(() -> {
+            if (existing == null) {
+                knowledgeRepository.saveChunk(chunk);
+            } else {
+                knowledgeRepository.updateChunkForReindex(chunk);
+            }
+            return chunk;
+        });
 
+        guard.checkpoint();
         LOGGER.info("knowledge index before embed: bookId={}, chunkId={}, chunkKey={}, sourceType={}",
             book.getId(),
             chunk.getId(),
             chunk.getChunkKey(),
             chunk.getSourceType());
         List<Double> embedding = embeddingClient.embed(chunkText);
+        guard.checkpoint();
         LOGGER.info("knowledge index after embed: bookId={}, chunkId={}, vectorSize={}",
             book.getId(),
             chunk.getId(),
             embedding == null ? 0 : embedding.size());
-        String pointId = String.valueOf(chunk.getId());
+        String pointId = guard.pointId(chunk.getId());
         Map<String, Object> payload = buildPayload(book, chunk, extraPayload);
+        payload.putAll(guard.payloadMetadata());
         LOGGER.info("knowledge index before qdrant upsert: bookId={}, chunkId={}, pointId={}, payloadKeys={}, payloadSize={}",
             book.getId(),
             chunk.getId(),
@@ -453,16 +544,32 @@ public class KnowledgeIndexService {
             payload.keySet(),
             payload.size());
         qdrantClient.upsertPoint(pointId, embedding, payload);
+        guard.checkpoint();
         LOGGER.info("knowledge index after qdrant upsert: bookId={}, chunkId={}, pointId={}",
             book.getId(),
             chunk.getId(),
             pointId);
-        knowledgeRepository.updateChunkVectorStatus(chunk, VECTOR_STATUS_INDEXED, pointId);
+        guard.mysqlSideEffect(() -> {
+            knowledgeRepository.updateChunkVectorStatus(chunk, VECTOR_STATUS_INDEXED, pointId);
+            return chunk;
+        });
         LOGGER.info("knowledge index after status update: bookId={}, chunkId={}, pointId={}",
             book.getId(),
             chunk.getId(),
             pointId);
         return new ChunkIndexOutcome(existing == null ? 1 : 0, 1);
+    }
+
+    public interface IndexExecutionGuard {
+        void checkpoint();
+
+        <T> T mysqlSideEffect(Supplier<T> sideEffect);
+
+        String pointId(Long chunkId);
+
+        default Map<String, Object> payloadMetadata() {
+            return Map.of();
+        }
     }
 
     private Map<String, Object> buildPayload(CrawlBookEntity book, KnowledgeChunkEntity chunk, Map<String, Object> extraPayload) {

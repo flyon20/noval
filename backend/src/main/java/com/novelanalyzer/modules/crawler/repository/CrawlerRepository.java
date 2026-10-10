@@ -18,8 +18,12 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -193,15 +197,32 @@ public class CrawlerRepository {
     }
 
     public List<CrawlRankEntity> findLatestRankSnapshot(String platform, String category) {
-        List<CrawlRankEntity> ranks = findRanks(platform, category);
-        if (ranks.isEmpty()) {
+        StringBuilder latestSql = new StringBuilder(
+            "SELECT MAX(crawl_time) FROM crawl_rank WHERE platform = ? AND deleted = 0"
+        );
+        List<Object> args = new ArrayList<>();
+        args.add(platform);
+        if (category != null && !category.isBlank()) {
+            latestSql.append(" AND category = ?");
+            args.add(category);
+        }
+        LocalDateTime latestSnapshotTime = jdbcTemplate.queryForObject(
+            latestSql.toString(),
+            LocalDateTime.class,
+            args.toArray()
+        );
+        if (latestSnapshotTime == null) {
             return List.of();
         }
-        LocalDateTime latestSnapshotTime = ranks.get(0).getCrawlTime();
-        return ranks.stream()
-            .filter(item -> Objects.equals(item.getCrawlTime(), latestSnapshotTime))
-            .sorted(Comparator.comparing(CrawlRankEntity::getRankNo))
-            .toList();
+        LambdaQueryWrapper<CrawlRankEntity> wrapper = new LambdaQueryWrapper<CrawlRankEntity>()
+            .eq(CrawlRankEntity::getPlatform, platform)
+            .eq(CrawlRankEntity::getDeleted, 0)
+            .eq(CrawlRankEntity::getCrawlTime, latestSnapshotTime)
+            .orderByAsc(CrawlRankEntity::getRankNo);
+        if (category != null && !category.isBlank()) {
+            wrapper.eq(CrawlRankEntity::getCategory, category);
+        }
+        return crawlRankMapper.selectList(wrapper);
     }
 
     public LocalDateTime findLatestRankSnapshotTime(String platform, String category) {
@@ -548,15 +569,96 @@ public class CrawlerRepository {
         if (normalizedKeyword.isEmpty()) {
             return List.of();
         }
-        return crawlBookMapper.selectList(
+        int safeLimit = Math.max(limit, 1);
+        List<CrawlBookEntity> exactMatches = crawlBookMapper.selectList(
             new LambdaQueryWrapper<CrawlBookEntity>()
                 .eq(CrawlBookEntity::getPlatform, platform)
                 .eq(CrawlBookEntity::getDeleted, 0)
                 .and(wrapper -> wrapper.like(CrawlBookEntity::getBookName, normalizedKeyword)
-                    .or().like(CrawlBookEntity::getAuthor, normalizedKeyword))
+                    .or().like(CrawlBookEntity::getAuthor, normalizedKeyword)
+                    .or().like(CrawlBookEntity::getIntro, normalizedKeyword))
                 .orderByDesc(CrawlBookEntity::getUpdateTime)
-                .last("LIMIT " + Math.max(limit, 1))
+                .last("LIMIT " + safeLimit)
         );
+        if (exactMatches.size() >= safeLimit) {
+            return exactMatches;
+        }
+
+        List<String> terms = descriptionBigrams(normalizedKeyword);
+        if (terms.isEmpty()) {
+            return exactMatches;
+        }
+        int candidateLimit = Math.min(200, Math.max(50, safeLimit * 10));
+        List<CrawlBookEntity> semanticCandidates = crawlBookMapper.selectList(
+            new LambdaQueryWrapper<CrawlBookEntity>()
+                .eq(CrawlBookEntity::getPlatform, platform)
+                .eq(CrawlBookEntity::getDeleted, 0)
+                .and(wrapper -> {
+                    for (int index = 0; index < terms.size(); index++) {
+                        if (index > 0) {
+                            wrapper.or();
+                        }
+                        String term = terms.get(index);
+                        wrapper.like(CrawlBookEntity::getBookName, term)
+                            .or().like(CrawlBookEntity::getAuthor, term)
+                            .or().like(CrawlBookEntity::getIntro, term);
+                    }
+                })
+                .last("LIMIT " + candidateLimit)
+        );
+        int minimumScore = Math.max(2, (terms.size() + 2) / 3);
+        semanticCandidates.removeIf(book -> descriptionMatchScore(book, terms) < minimumScore);
+        semanticCandidates.sort(
+            Comparator.comparingInt((CrawlBookEntity book) -> descriptionMatchScore(book, terms))
+                .reversed()
+                .thenComparing(CrawlBookEntity::getUpdateTime, Comparator.nullsLast(Comparator.reverseOrder()))
+        );
+
+        Map<Long, CrawlBookEntity> merged = new LinkedHashMap<>();
+        for (CrawlBookEntity book : exactMatches) {
+            merged.put(book.getId(), book);
+        }
+        for (CrawlBookEntity book : semanticCandidates) {
+            merged.putIfAbsent(book.getId(), book);
+            if (merged.size() >= safeLimit) {
+                break;
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private List<String> descriptionBigrams(String keyword) {
+        String normalized = normalizeSearchText(keyword);
+        boolean containsHan = normalized.codePoints()
+            .anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
+        if (!containsHan || normalized.length() < 4) {
+            return List.of();
+        }
+        List<String> terms = new ArrayList<>();
+        for (int index = 0; index < normalized.length() - 1 && terms.size() < 16; index++) {
+            String term = normalized.substring(index, index + 2);
+            if (!terms.contains(term)) {
+                terms.add(term);
+            }
+        }
+        return terms;
+    }
+
+    private int descriptionMatchScore(CrawlBookEntity book, List<String> terms) {
+        String material = normalizeSearchText(
+            String.join(" ",
+                Objects.toString(book.getBookName(), ""),
+                Objects.toString(book.getAuthor(), ""),
+                Objects.toString(book.getIntro(), "")
+            )
+        );
+        return (int) terms.stream().filter(material::contains).count();
+    }
+
+    private String normalizeSearchText(String value) {
+        return Objects.toString(value, "")
+            .replaceAll("[^\\p{IsHan}A-Za-z0-9]+", "")
+            .toLowerCase(Locale.ROOT);
     }
 
     public List<CrawlBookEntity> findBooksByIds(List<Long> ids) {
@@ -634,6 +736,7 @@ public class CrawlerRepository {
         vo.setContent(entity.getContent());
         vo.setWordCount(entity.getWordCount());
         vo.setSourceWordCount(entity.getSourceWordCount());
+        vo.setCrawlTime(entity.getCrawlTime());
         return vo;
     }
 

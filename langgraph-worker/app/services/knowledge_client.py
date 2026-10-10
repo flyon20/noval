@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 from typing import Any
 
 import httpx
 
 from app.config import settings
 from app.models.knowledge import BookCandidate, BookResearchPack, KnowledgeSource, RankLookupResult, RankResearchPack
+from app.services.harness.provider_dispatch_scope import ProviderDispatch
+from app.services.harness.tool_ledger import current_run_tool_ledger
 
 
 class KnowledgeBackendClient:
@@ -43,8 +46,13 @@ class KnowledgeBackendClient:
         analysis_type: str | None,
         limit: int,
         source_type: str | None = None,
+        user_id: int | None = None,
     ) -> list[KnowledgeSource]:
-        payload: dict[str, Any] = {"query": query, "limit": limit}
+        payload: dict[str, Any] = {
+            "userId": self._trusted_user_id(user_id),
+            "query": query,
+            "limit": limit,
+        }
         if book_id is not None:
             payload["bookId"] = book_id
         if platform:
@@ -68,6 +76,8 @@ class KnowledgeBackendClient:
         freshness: str | None = None,
         allow_historical: bool | None = None,
         time_window_days: int | None = None,
+        snapshot_start_date: str | None = None,
+        snapshot_end_date: str | None = None,
         require_snapshot_time: bool | None = None,
     ) -> list[RankLookupResult]:
         payload: dict[str, Any] = {"platform": platform, "limit": limit}
@@ -85,6 +95,10 @@ class KnowledgeBackendClient:
             payload["allowHistorical"] = allow_historical
         if time_window_days is not None:
             payload["timeWindowDays"] = time_window_days
+        if snapshot_start_date:
+            payload["snapshotStartDate"] = snapshot_start_date
+        if snapshot_end_date:
+            payload["snapshotEndDate"] = snapshot_end_date
         if require_snapshot_time is not None:
             payload["requireSnapshotTime"] = require_snapshot_time
         data = await self._post_json("/internal/knowledge/rank/lookup", payload)
@@ -98,8 +112,10 @@ class KnowledgeBackendClient:
         book_name: str | None = None,
         chapter_limit: int = 3,
         analysis_limit: int = 3,
+        user_id: int | None = None,
     ) -> BookResearchPack:
         payload: dict[str, Any] = {
+            "userId": self._trusted_user_id(user_id),
             "platform": platform,
             "chapterLimit": chapter_limit,
             "analysisLimit": analysis_limit,
@@ -124,9 +140,13 @@ class KnowledgeBackendClient:
         freshness: str | None = None,
         allow_historical: bool | None = None,
         time_window_days: int | None = None,
+        snapshot_start_date: str | None = None,
+        snapshot_end_date: str | None = None,
         require_snapshot_time: bool | None = None,
+        user_id: int | None = None,
     ) -> RankResearchPack:
         payload: dict[str, Any] = {
+            "userId": self._trusted_user_id(user_id),
             "platform": platform,
             "limit": limit,
             "chapterLimitPerBook": chapter_limit_per_book,
@@ -145,6 +165,10 @@ class KnowledgeBackendClient:
             payload["allowHistorical"] = allow_historical
         if time_window_days is not None:
             payload["timeWindowDays"] = time_window_days
+        if snapshot_start_date:
+            payload["snapshotStartDate"] = snapshot_start_date
+        if snapshot_end_date:
+            payload["snapshotEndDate"] = snapshot_end_date
         if require_snapshot_time is not None:
             payload["requireSnapshotTime"] = require_snapshot_time
         data = await self._post_json("/internal/knowledge/research-pack/rank", payload)
@@ -160,8 +184,15 @@ class KnowledgeBackendClient:
         rank_fetch_count: int | None = None,
         refresh_mode: str | None = None,
         force_reason: str | None = None,
+        user_id: int | None = None,
+        project_id: int | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"platform": platform}
+        if user_id is not None:
+            payload["userId"] = user_id
+        if project_id is not None:
+            payload["projectId"] = project_id
         if channel_code:
             payload["channelCode"] = channel_code
         if board_code:
@@ -174,6 +205,8 @@ class KnowledgeBackendClient:
             payload["refreshMode"] = refresh_mode
         if force_reason:
             payload["forceReason"] = force_reason
+        if idempotency_key:
+            payload["idempotencyKey"] = idempotency_key
         data = await self._post_json("/internal/knowledge/rank/refresh", payload)
         return self._unwrap_object(data)
 
@@ -203,26 +236,6 @@ class KnowledgeBackendClient:
         data = await self._post_json("/internal/knowledge/memory/search", payload)
         return self._unwrap_list(data)
 
-    async def search_project_chapters(
-        self,
-        *,
-        user_id: int,
-        project_id: int,
-        work_id: int,
-        query: str | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        payload: dict[str, Any] = {
-            "userId": user_id,
-            "projectId": project_id,
-            "workId": work_id,
-            "limit": limit,
-        }
-        if query:
-            payload["query"] = query
-        data = await self._post_json("/internal/knowledge/projects/chapters/search", payload)
-        return self._unwrap_list(data)
-
     async def resolve_project_work(
         self,
         *,
@@ -242,25 +255,51 @@ class KnowledgeBackendClient:
         data = await self._post_json("/internal/knowledge/projects/resolve", payload)
         return self._unwrap_object(data)
 
-    async def search_project_chunks(
+    async def retrieve_project_knowledge(
         self,
         *,
         user_id: int,
         project_id: int,
         work_id: int,
-        query: str | None = None,
+        query: str,
+        intent: str | None = None,
+        entities: list[str] | None = None,
+        chapter_from: int | None = None,
+        chapter_to: int | None = None,
+        channels: list[str] | None = None,
+        filters: dict[str, Any] | None = None,
+        weights: dict[str, float] | None = None,
         limit: int = 10,
-    ) -> list[dict[str, Any]]:
+        deep: bool = False,
+        graph_budget_millis: int = 300,
+        timeout_millis: int | None = None,
+        rerank_policy: str = "intent_aware",
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "userId": user_id,
             "projectId": project_id,
             "workId": work_id,
+            "query": query,
             "limit": limit,
+            "deep": bool(deep),
+            "channels": list(channels or []),
+            "filters": dict(filters or {}),
+            "weights": dict(weights or {}),
+            "graphBudgetMillis": graph_budget_millis,
+            "rerankPolicy": rerank_policy,
         }
-        if query:
-            payload["query"] = query
-        data = await self._post_json("/internal/knowledge/projects/chunks/search", payload)
-        return self._unwrap_list(data)
+        if intent:
+            payload["intent"] = intent
+        if entities:
+            payload["entities"] = list(entities)
+        if chapter_from is not None:
+            payload["chapterFrom"] = chapter_from
+        if chapter_to is not None:
+            payload["chapterTo"] = chapter_to
+        if timeout_millis is not None:
+            payload["timeoutMillis"] = timeout_millis
+        data = await self._post_json("/internal/knowledge/projects/retrieval", payload)
+        return self._unwrap_object(data)
 
     async def list_project_foreshadowings(
         self,
@@ -281,6 +320,21 @@ class KnowledgeBackendClient:
             payload["status"] = status
         data = await self._post_json("/internal/knowledge/projects/foreshadowings/list", payload)
         return self._unwrap_list(data)
+
+    async def aggregate_project_foreshadowings(
+        self,
+        *,
+        user_id: int,
+        project_id: int,
+        work_id: int,
+    ) -> dict[str, Any]:
+        payload = {
+            "userId": self._trusted_user_id(user_id),
+            "projectId": project_id,
+            "workId": work_id,
+        }
+        data = await self._post_json("/internal/knowledge/projects/foreshadowings/aggregate", payload)
+        return self._unwrap_object(data)
 
     async def lookup_project_timeline(
         self,
@@ -333,6 +387,11 @@ class KnowledgeBackendClient:
         summary: str | None,
         confidence: float,
         source_trace_id: str | None,
+        fact_key: str | None = None,
+        candidate_key: str | None = None,
+        provenance_json: str | None = None,
+        evidence_json: str | None = None,
+        extractor_version: str | None = None,
         ttl_days: int = 30,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -351,12 +410,68 @@ class KnowledgeBackendClient:
             payload["summary"] = summary
         if source_trace_id:
             payload["sourceTraceId"] = source_trace_id
+        if fact_key:
+            payload["factKey"] = fact_key
+        if candidate_key:
+            payload["candidateKey"] = candidate_key
+        if provenance_json:
+            payload["provenanceJson"] = provenance_json
+        if evidence_json:
+            payload["evidenceJson"] = evidence_json
+        if extractor_version:
+            payload["extractorVersion"] = extractor_version
         data = await self._post_json("/internal/knowledge/memory/candidates", payload)
         return self._unwrap_object(data)
 
     async def get_agent_runtime_config(self) -> dict[str, Any]:
         data = await self._get_json("/internal/knowledge/agent/runtime-config")
         return self._unwrap_object(data)
+
+    async def resolve_provider_dispatch(
+        self,
+        profile_key: str,
+        profile_version: str,
+    ) -> ProviderDispatch:
+        normalized_key = str(profile_key or "").strip()
+        normalized_version = str(profile_version or "").strip()
+        if not normalized_key:
+            raise ValueError("provider profile key is required")
+        if not normalized_version:
+            raise ValueError("provider profile version is required")
+        data = await self._post_json(
+            "/internal/knowledge/agent/provider-dispatch/resolve",
+            {
+                "profileKey": normalized_key,
+                "profileVersion": normalized_version,
+            },
+        )
+        return ProviderDispatch.from_payload(
+            self._unwrap_object(data),
+            expected_profile_key=normalized_key,
+            expected_profile_version=normalized_version,
+        )
+
+    async def report_provider_routing_outcome(self, outcome: dict[str, Any]) -> None:
+        profile_key = str(outcome.get("profileKey") or "").strip()
+        profile_version = str(outcome.get("profileVersion") or "").strip()
+        outcome_name = str(outcome.get("outcome") or "").strip().upper()
+        failure_class = str(outcome.get("failureClass") or "").strip().upper()
+        switched = outcome.get("switched")
+        if not profile_key or not profile_version:
+            raise ValueError("provider routing outcome identity is required")
+        if outcome_name not in {"SUCCEEDED", "TRANSIENT_FAILURE"}:
+            raise ValueError("provider routing outcome is invalid")
+        if type(switched) is not bool:
+            raise ValueError("provider routing outcome switched must be boolean")
+        payload: dict[str, Any] = {
+            "profileKey": profile_key,
+            "profileVersion": profile_version,
+            "outcome": outcome_name,
+            "switched": switched,
+        }
+        if failure_class:
+            payload["failureClass"] = failure_class
+        await self._post_json("/internal/knowledge/agent/provider-routing/outcome", payload)
 
     async def get_agent_expert_profiles(self) -> list[dict[str, Any]]:
         data = await self._get_json("/internal/knowledge/agent/experts")
@@ -380,6 +495,110 @@ class KnowledgeBackendClient:
         }
         data = await self._post_json("/internal/knowledge/agent/telemetry", payload)
         return self._unwrap_object(data)
+
+    async def append_semantic_checkpoint(
+        self,
+        *,
+        run_id: str,
+        user_id: int,
+        event_type: str,
+        event_idempotency_key: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        data = await self._post_json(
+            "/internal/knowledge/chat-runs/semantic-checkpoints",
+            {
+                "runId": str(run_id).strip(),
+                "userId": self._trusted_user_id(user_id),
+                "eventType": str(event_type).strip(),
+                "eventIdempotencyKey": str(event_idempotency_key).strip(),
+                "payload": dict(payload),
+            },
+        )
+        return self._normalize_semantic_checkpoint(self._unwrap_object(data))
+
+    async def list_semantic_checkpoints(
+        self,
+        *,
+        run_id: str,
+        user_id: int,
+        after_sequence: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        data = await self._post_json(
+            "/internal/knowledge/chat-runs/semantic-checkpoints/query",
+            {
+                "runId": str(run_id).strip(),
+                "userId": self._trusted_user_id(user_id),
+                "afterSequence": max(0, int(after_sequence)),
+                "limit": max(1, min(500, int(limit))),
+            },
+        )
+        return [self._normalize_semantic_checkpoint(item) for item in self._unwrap_list(data)]
+
+    def _normalize_semantic_checkpoint(self, event: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(event)
+        payload = normalized.get("payload")
+        if isinstance(payload, str):
+            try:
+                decoded = json.loads(payload)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                decoded = {}
+            normalized["payload"] = decoded if isinstance(decoded, dict) else {}
+        elif not isinstance(payload, dict):
+            normalized["payload"] = {}
+        self._validate_semantic_event_envelope(normalized)
+        return normalized
+
+    @staticmethod
+    def _validate_semantic_event_envelope(event: dict[str, Any]) -> None:
+        payload = event.get("payload")
+        envelope = payload.get("_event") if isinstance(payload, dict) else None
+        if envelope is None:
+            return
+        if not isinstance(envelope, dict):
+            raise ValueError("semantic checkpoint _event must be an object")
+        schema_version = envelope.get("schemaVersion")
+        if isinstance(schema_version, bool) or schema_version != 1:
+            raise ValueError("unsupported semantic checkpoint event schema")
+        if str(envelope.get("visibility") or "").strip() != "internal":
+            raise ValueError("semantic checkpoint visibility must be internal")
+
+        comparisons = (
+            ("eventId", "eventId"),
+            ("runId", "runId"),
+            ("sequence", "sequenceNo"),
+            ("eventType", "eventType"),
+            ("eventIdempotencyKey", "eventIdempotencyKey"),
+        )
+        for envelope_key, event_key in comparisons:
+            envelope_value = envelope.get(envelope_key)
+            event_value = event.get(event_key)
+            if envelope_value is None or str(envelope_value).strip() == "":
+                raise ValueError(f"semantic checkpoint {envelope_key} is required")
+            if event_value is not None and str(envelope_value) != str(event_value):
+                raise ValueError(f"semantic checkpoint {envelope_key} mismatch")
+
+    def _trusted_user_id(self, supplied_user_id: Any | None) -> int:
+        supplied = self._positive_int(supplied_user_id)
+        ledger = current_run_tool_ledger()
+        trusted = self._positive_int(ledger.identity.userId) if ledger is not None else None
+        if trusted is not None:
+            if supplied is not None and supplied != trusted:
+                raise ValueError("user scope mismatch")
+            return trusted
+        if supplied is None:
+            raise ValueError("user scope required")
+        return supplied
+
+    def _positive_int(self, value: Any | None) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> Any:
         headers = {"Content-Type": "application/json"}

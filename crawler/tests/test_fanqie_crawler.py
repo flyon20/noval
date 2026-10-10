@@ -73,6 +73,31 @@ class SlowTrackingHttpClient(StubHttpClient):
         raise AssertionError(f"unexpected json request: {url}")
 
 
+class SlowTrackingRankHttpClient(StubHttpClient):
+    def __init__(
+        self,
+        responses: dict[str, str],
+        json_responses: dict[tuple[str, tuple[tuple[str, str], ...]], dict],
+        delay_seconds: float = 0.05,
+    ) -> None:
+        super().__init__(responses, json_responses)
+        self.delay_seconds = delay_seconds
+        self.max_inflight = 0
+        self._inflight = 0
+        self._lock = threading.Lock()
+
+    def get_json(self, url: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> dict:
+        with self._lock:
+            self._inflight += 1
+            self.max_inflight = max(self.max_inflight, self._inflight)
+        try:
+            time.sleep(self.delay_seconds)
+            return super().get_json(url, params, headers)
+        finally:
+            with self._lock:
+                self._inflight -= 1
+
+
 class StubDecoder:
     def __init__(self, decoded_text: str | None = None, mapping: dict[str, str] | None = None) -> None:
         self.decoded_text = decoded_text
@@ -97,15 +122,39 @@ class StubRankCrawler:
 
 class FanqieCrawlerTest(unittest.TestCase):
 
+    def test_should_lazy_initialize_font_decoder_only_for_obfuscated_text(self) -> None:
+        decoder = StubDecoder("decoded")
+
+        with patch(
+            "app.services.fanqie_crawler.ConfuseFontDecoder",
+            return_value=decoder,
+        ) as decoder_factory:
+            crawler = FanqieCrawler(http_client=StubHttpClient({}))
+
+            self.assertEqual("plain text", crawler._decode_text_if_needed("plain text", ""))
+            decoder_factory.assert_not_called()
+            self.assertEqual("decoded", crawler._decode_text_if_needed("\ue401", "font css"))
+            self.assertEqual("decoded", crawler._decode_text_if_needed("\ue402", "font css"))
+
+        decoder_factory.assert_called_once_with()
+        self.assertTrue(decoder.called)
+
     def test_should_allow_runtime_overrides_for_timeout_and_workers(self) -> None:
-        crawler = FanqieCrawler(
-            decoder=StubDecoder(),
-            timeout_seconds=45,
-            chapter_fetch_workers=4,
-        )
+        with patch("app.services.fanqie_crawler.settings.chapter_fetch_workers", 4):
+            crawler = FanqieCrawler(
+                decoder=StubDecoder(),
+                timeout_seconds=45,
+                chapter_fetch_workers=4,
+            )
 
         self.assertEqual(4, crawler._chapter_fetch_workers)
         self.assertEqual(45, crawler._http_client.timeout_seconds)
+
+    def test_should_cap_runtime_workers_at_shared_resource_limit(self) -> None:
+        with patch("app.services.fanqie_crawler.settings.chapter_fetch_workers", 1):
+            crawler = FanqieCrawler(decoder=StubDecoder(), chapter_fetch_workers=4)
+
+        self.assertEqual(1, crawler._chapter_fetch_workers)
 
     def test_extract_initial_state(self) -> None:
         html = '<script>(function(){window.__INITIAL_STATE__={"rank":{"book_list":[{"bookId":"1"}]}};})()</script>'
@@ -287,16 +336,15 @@ class FanqieCrawlerTest(unittest.TestCase):
                 ("rank_version", ""),
             ),
         )
-        crawler = FanqieCrawler(
-            StubHttpClient(
-                {
-                    rank_page_url: (
-                        '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
-                        '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"}'
-                        ']}};})()</script>'
-                    )
-                },
-                json_responses={
+        http_client = SlowTrackingRankHttpClient(
+            {
+                rank_page_url: (
+                    '<script>(function(){window.__INITIAL_STATE__={"common":{"css":"@font-face{font-family:test;}"},"rank":{"bookList":['
+                    '{"currentPos":1,"bookId":"101","bookName":"Book A","author":"Author A","abstract":"Intro A"}'
+                    ']}};})()</script>'
+                )
+            },
+            json_responses={
                     page0_params: {
                         "code": 0,
                         "data": {
@@ -345,14 +393,15 @@ class FanqieCrawlerTest(unittest.TestCase):
                             ],
                         },
                     },
-                },
-            )
+            },
         )
+        crawler = FanqieCrawler(http_client)
 
         result = crawler.fetch_rank("male-new", "262")
 
         self.assertEqual(30, len(result))
         self.assertEqual(1, result[0].rankNo)
+        self.assertGreaterEqual(http_client.max_inflight, 2)
 
     def test_fetch_rank_should_stop_paginated_rank_api_results_at_requested_limit(self) -> None:
         rank_page_url = "https://fanqienovel.com/rank/1_1_262"
@@ -846,7 +895,8 @@ class FanqieCrawlerTest(unittest.TestCase):
                 ),
             }
         )
-        crawler = FanqieCrawler(http_client=http_client)
+        with patch("app.services.fanqie_crawler.settings.chapter_fetch_workers", 2):
+            crawler = FanqieCrawler(http_client=http_client)
 
         chapters = crawler.fetch_chapters("https://fanqienovel.com/page/101", 4)
 

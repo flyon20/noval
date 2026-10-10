@@ -36,9 +36,8 @@ const props = defineProps<{
   border-radius: 1.35rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   background:
-    radial-gradient(circle at top right, rgba(92, 124, 250, 0.18), transparent 26%),
-    radial-gradient(circle at bottom left, rgba(255, 147, 186, 0.16), transparent 22%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08)),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary-soft) 72%, transparent), transparent 48%),
+    linear-gradient(315deg, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 54%),
     color-mix(in srgb, var(--color-surface) 92%, transparent);
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(18px) saturate(1.1);

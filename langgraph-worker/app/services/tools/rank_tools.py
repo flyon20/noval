@@ -25,18 +25,20 @@ def create_rank_tools(client: KnowledgeBackendClient) -> dict[str, dict[str, Any
         if not callable(lookup_fn):
             return {"error": "lookup_rank not available"}
 
-        results = await lookup_fn(
-            platform=platform,
-            channel_code=channel_code,
-            board_code=board_code,
-            category=category,
-            rank_no=rank_no,
-            limit=limit,
-            freshness=payload.get("freshness") or source_policy.get("freshness"),
-            allow_historical=_optional_bool(payload, source_policy, "allowHistorical"),
-            time_window_days=payload.get("timeWindowDays") or source_policy.get("timeWindowDays"),
-            require_snapshot_time=_optional_bool(payload, source_policy, "requireSnapshotTime"),
-        )
+        lookup_args = {
+            "platform": platform,
+            "channel_code": channel_code,
+            "board_code": board_code,
+            "category": category,
+            "rank_no": rank_no,
+            "limit": limit,
+            "freshness": payload.get("freshness") or source_policy.get("freshness"),
+            "allow_historical": _optional_bool(payload, source_policy, "allowHistorical"),
+            "time_window_days": payload.get("timeWindowDays") or source_policy.get("timeWindowDays"),
+            "require_snapshot_time": _optional_bool(payload, source_policy, "requireSnapshotTime"),
+        }
+        _copy_date_range(lookup_args, payload, source_policy)
+        results = await lookup_fn(**lookup_args)
         return {"results": results, "count": len(results)}
 
     async def rank_research_pack(payload: dict[str, Any]) -> dict[str, Any]:
@@ -54,19 +56,21 @@ def create_rank_tools(client: KnowledgeBackendClient) -> dict[str, dict[str, Any
         if not callable(pack_fn):
             return {"error": "get_rank_research_pack not available"}
 
-        pack = await pack_fn(
-            platform=platform,
-            channel_code=channel_code,
-            board_code=board_code,
-            category=category,
-            rank_no=rank_no,
-            limit=limit,
-            chapter_limit_per_book=chapter_limit_per_book,
-            freshness=payload.get("freshness") or source_policy.get("freshness"),
-            allow_historical=_optional_bool(payload, source_policy, "allowHistorical"),
-            time_window_days=payload.get("timeWindowDays") or source_policy.get("timeWindowDays"),
-            require_snapshot_time=_optional_bool(payload, source_policy, "requireSnapshotTime"),
-        )
+        pack_args = {
+            "platform": platform,
+            "channel_code": channel_code,
+            "board_code": board_code,
+            "category": category,
+            "rank_no": rank_no,
+            "limit": limit,
+            "chapter_limit_per_book": chapter_limit_per_book,
+            "freshness": payload.get("freshness") or source_policy.get("freshness"),
+            "allow_historical": _optional_bool(payload, source_policy, "allowHistorical"),
+            "time_window_days": payload.get("timeWindowDays") or source_policy.get("timeWindowDays"),
+            "require_snapshot_time": _optional_bool(payload, source_policy, "requireSnapshotTime"),
+        }
+        _copy_date_range(pack_args, payload, source_policy)
+        pack = await pack_fn(**pack_args)
         if pack is None:
             return {"pack": None}
 
@@ -92,6 +96,8 @@ def create_rank_tools(client: KnowledgeBackendClient) -> dict[str, dict[str, Any
                     "freshness": {"type": "string"},
                     "allowHistorical": {"type": "boolean"},
                     "timeWindowDays": {"type": "integer"},
+                    "snapshotStartDate": {"type": "string", "format": "date"},
+                    "snapshotEndDate": {"type": "string", "format": "date"},
                     "requireSnapshotTime": {"type": "boolean"},
                     "sourcePolicy": {"type": "object"},
                 },
@@ -110,6 +116,8 @@ def create_rank_tools(client: KnowledgeBackendClient) -> dict[str, dict[str, Any
                     "freshness": {"type": "string"},
                     "allowHistorical": {"type": "boolean"},
                     "timeWindowDays": {"type": "integer"},
+                    "snapshotStartDate": {"type": "string", "format": "date"},
+                    "snapshotEndDate": {"type": "string", "format": "date"},
                     "requireSnapshotTime": {"type": "boolean"},
                     "sourcePolicy": {"type": "object"},
                 },
@@ -129,3 +137,15 @@ def _optional_bool(payload: dict[str, Any], source_policy: dict[str, Any], key: 
     if isinstance(value, bool):
         return value
     return None
+
+
+def _copy_date_range(
+    arguments: dict[str, Any],
+    payload: dict[str, Any],
+    source_policy: dict[str, Any],
+) -> None:
+    start = payload.get("snapshotStartDate") or source_policy.get("snapshotStartDate")
+    end = payload.get("snapshotEndDate") or source_policy.get("snapshotEndDate")
+    if start is not None and end is not None:
+        arguments["snapshot_start_date"] = start
+        arguments["snapshot_end_date"] = end

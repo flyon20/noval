@@ -9,6 +9,33 @@ public class AiModelOptionVO {
     private Double defaultTemperature;
     private Integer maxTokens;
     private String temperatureSpecJson;
+    private Boolean supportsReasoning;
+    private String providerFamily;
+    private java.util.List<String> reasoningTiers;
+
+    public String getProviderFamily() {
+        return providerFamily;
+    }
+
+    public void setProviderFamily(String providerFamily) {
+        this.providerFamily = providerFamily;
+    }
+
+    public Boolean getSupportsReasoning() {
+        return supportsReasoning;
+    }
+
+    public void setSupportsReasoning(Boolean supportsReasoning) {
+        this.supportsReasoning = supportsReasoning;
+    }
+
+    public java.util.List<String> getReasoningTiers() {
+        return reasoningTiers;
+    }
+
+    public void setReasoningTiers(java.util.List<String> reasoningTiers) {
+        this.reasoningTiers = reasoningTiers;
+    }
 
     public String getModelKey() {
         return modelKey;

@@ -5,6 +5,8 @@ import com.novelanalyzer.modules.knowledge.client.QdrantClient;
 import com.novelanalyzer.modules.knowledge.repository.KnowledgeRepository;
 import com.novelanalyzer.modules.knowledge.service.KnowledgeIndexService;
 import com.novelanalyzer.modules.asyncjob.dto.AsyncJobSubmitResponse;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobLockService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -16,13 +18,19 @@ import org.springframework.test.context.jdbc.Sql;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -59,6 +67,88 @@ import static org.mockito.Mockito.when;
 )
 class KnowledgeIndexServiceTest {
 
+    @Test
+    void shouldStopBeforeQdrantWhenIndexGenerationIsLostDuringEmbedding() {
+        long bookId = insertBook();
+        AtomicBoolean current = new AtomicBoolean(true);
+        when(embeddingClient.embed(anyString())).thenAnswer(invocation -> {
+            current.set(false);
+            return List.of(0.1, 0.2, 0.3);
+        });
+        KnowledgeIndexService.IndexExecutionGuard guard = new KnowledgeIndexService.IndexExecutionGuard() {
+            @Override
+            public void checkpoint() {
+                if (!current.get()) {
+                    throw new IllegalStateException("generation lost");
+                }
+            }
+
+            @Override
+            public <T> T mysqlSideEffect(Supplier<T> sideEffect) {
+                checkpoint();
+                return sideEffect.get();
+            }
+
+            @Override
+            public String pointId(Long chunkId) {
+                return "generation-point-" + chunkId;
+            }
+        };
+
+        assertThatThrownBy(() -> knowledgeIndexService.indexBook(bookId, "ALL", guard))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("generation lost");
+
+        verify(qdrantClient, org.mockito.Mockito.never()).upsertPoint(anyString(), any(), anyMap());
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT vector_status FROM knowledge_chunk WHERE book_id = ?",
+            String.class,
+            bookId
+        )).isEqualTo("PENDING");
+    }
+
+    @Test
+    void shouldPersistGenerationSpecificPointAndRejectMismatchedQdrantResult() {
+        long bookId = insertBook();
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+        KnowledgeIndexService.IndexExecutionGuard guard = new KnowledgeIndexService.IndexExecutionGuard() {
+            @Override
+            public void checkpoint() {
+            }
+
+            @Override
+            public <T> T mysqlSideEffect(Supplier<T> sideEffect) {
+                return sideEffect.get();
+            }
+
+            @Override
+            public String pointId(Long chunkId) {
+                return "generation-point-" + chunkId;
+            }
+
+            @Override
+            public Map<String, Object> payloadMetadata() {
+                return Map.of("indexJobId", 77L, "indexGeneration", 3);
+            }
+        };
+
+        knowledgeIndexService.indexBook(bookId, "ALL", guard);
+
+        Map<String, Object> chunk = jdbcTemplate.queryForMap(
+            "SELECT id, qdrant_point_id FROM knowledge_chunk WHERE book_id = ?",
+            bookId
+        );
+        Long chunkId = ((Number) chunk.get("ID")).longValue();
+        String pointId = String.valueOf(chunk.get("QDRANT_POINT_ID"));
+        assertThat(pointId).isEqualTo("generation-point-" + chunkId);
+        assertThat(knowledgeRepository.findSearchResultSource(chunkId, "stale-point", 0.9d)).isEmpty();
+        assertThat(knowledgeRepository.findSearchResultSource(chunkId, pointId, 0.9d)).isPresent();
+        verify(qdrantClient).upsertPoint(eq(pointId), any(), argThat(payload ->
+            Long.valueOf(77L).equals(payload.get("indexJobId"))
+                && Integer.valueOf(3).equals(payload.get("indexGeneration"))
+        ));
+    }
+
     @Autowired
     private KnowledgeIndexService knowledgeIndexService;
 
@@ -73,6 +163,15 @@ class KnowledgeIndexServiceTest {
 
     @MockBean
     private QdrantClient qdrantClient;
+
+    @MockBean
+    private AsyncJobLockService asyncJobLockService;
+
+    @BeforeEach
+    void allowTestJobLocks() {
+        when(asyncJobLockService.tryAcquire(anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong()))
+            .thenReturn(true);
+    }
 
     @Test
     void shouldIndexBookIntroAndChaptersWithIdempotentContentHashesAndChapterCap() {
@@ -162,6 +261,27 @@ class KnowledgeIndexServiceTest {
                 && "male-new".equals(payload.get("channelCode"))
                 && "urban-brain".equals(payload.get("boardCode"))
         ));
+    }
+
+    @Test
+    void shouldUseLatestRankEvidenceWhenHistoryHasMultipleSnapshots() {
+        long bookId = insertBook();
+        LocalDateTime now = LocalDateTime.now();
+        insertRankItemAt(bookId, 9, "male-new", "urban-brain", "男频新书榜", "都市脑洞", now.minusMinutes(2));
+        insertRankItemAt(bookId, 2, "male-new", "urban-brain", "男频新书榜", "都市脑洞", now.minusMinutes(1));
+        when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
+
+        KnowledgeIndexService.IndexResult result = knowledgeIndexService.indexBook(bookId);
+
+        assertThat(result.createdChunks()).isEqualTo(2);
+        String rankChunk = jdbcTemplate.queryForObject(
+            "SELECT chunk_text FROM knowledge_chunk WHERE book_id = ? AND source_type = 'RANK'",
+            String.class,
+            bookId
+        );
+        assertThat(rankChunk)
+            .contains("排名：第2名")
+            .doesNotContain("排名：第9名");
     }
 
     @Test
@@ -295,7 +415,7 @@ class KnowledgeIndexServiceTest {
     }
 
     @Test
-    void shouldIndexAnalysisResultAndSubmitDedupedBookIndexJob() {
+    void shouldKeepPrivateAnalysisOutOfGlobalKnowledgeIndexAndSubmitDedupedBookIndexJob() {
         long bookId = insertBook();
         long analysisId = insertAnalysisResult(bookId);
         when(embeddingClient.embed(anyString())).thenReturn(List.of(0.1, 0.2, 0.3));
@@ -304,20 +424,20 @@ class KnowledgeIndexServiceTest {
         AsyncJobSubmitResponse firstJob = knowledgeIndexService.submitBookIndexJob(bookId, 7L);
         AsyncJobSubmitResponse secondJob = knowledgeIndexService.submitBookIndexJob(bookId, 7L);
 
-        assertThat(analysisResult.createdChunks()).isEqualTo(1);
-        assertThat(analysisResult.indexedChunks()).isEqualTo(1);
+        assertThat(analysisResult.createdChunks()).isZero();
+        assertThat(analysisResult.indexedChunks()).isZero();
         Integer analysisChunkCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(1) FROM knowledge_chunk WHERE source_type = ? AND source_ref_id = ?",
             Integer.class,
             "ANALYSIS",
             analysisId
         );
-        assertThat(analysisChunkCount).isEqualTo(1);
+        assertThat(analysisChunkCount).isZero();
         assertThat(firstJob.getJobType()).isEqualTo("KNOWLEDGE_INDEX_BOOK");
         assertThat(firstJob.getReused()).isFalse();
         assertThat(secondJob.getReused()).isTrue();
-        verify(embeddingClient, times(1)).embed(anyString());
-        verify(qdrantClient, times(1)).upsertPoint(anyString(), any(), anyMap());
+        verify(embeddingClient, never()).embed(anyString());
+        verify(qdrantClient, never()).upsertPoint(anyString(), any(), anyMap());
     }
 
     @Test
@@ -490,25 +610,48 @@ class KnowledgeIndexServiceTest {
     }
 
     private void insertRankItem(long bookId, int rankNo, String channelCode, String boardCode, String channelName, String boardName) {
-        LocalDateTime now = LocalDateTime.now();
-        jdbcTemplate.update(
-            "INSERT INTO rank_board(platform, channel_code, board_code, board_name, description, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            "fanqie",
-            channelCode,
-            boardCode,
-            boardName,
-            channelName,
-            Timestamp.valueOf(now),
-            Timestamp.valueOf(now),
-            0
-        );
-        Long boardId = jdbcTemplate.queryForObject(
-            "SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ?",
-            Long.class,
+        insertRankItemAt(bookId, rankNo, channelCode, boardCode, channelName, boardName, LocalDateTime.now());
+    }
+
+    private void insertRankItemAt(
+        long bookId,
+        int rankNo,
+        String channelCode,
+        String boardCode,
+        String channelName,
+        String boardName,
+        LocalDateTime now
+    ) {
+        List<Long> boardIds = jdbcTemplate.query(
+            "SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ? ORDER BY id DESC LIMIT 1",
+            (rs, rowNum) -> rs.getLong(1),
             "fanqie",
             channelCode,
             boardCode
         );
+        Long boardId;
+        if (boardIds.isEmpty()) {
+            jdbcTemplate.update(
+                "INSERT INTO rank_board(platform, channel_code, board_code, board_name, description, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "fanqie",
+                channelCode,
+                boardCode,
+                boardName,
+                channelName,
+                Timestamp.valueOf(now),
+                Timestamp.valueOf(now),
+                0
+            );
+            boardId = jdbcTemplate.queryForObject(
+                "SELECT id FROM rank_board WHERE platform = ? AND channel_code = ? AND board_code = ?",
+                Long.class,
+                "fanqie",
+                channelCode,
+                boardCode
+            );
+        } else {
+            boardId = boardIds.get(0);
+        }
         assertThat(boardId).isNotNull();
         jdbcTemplate.update(
             "INSERT INTO rank_snapshot(rank_board_id, snapshot_time, record_count, create_time, update_time, deleted) VALUES (?, ?, ?, ?, ?, ?)",
@@ -518,12 +661,12 @@ class KnowledgeIndexServiceTest {
             Timestamp.valueOf(now),
             Timestamp.valueOf(now),
             0
-        );
-        Long snapshotId = jdbcTemplate.queryForObject(
-            "SELECT id FROM rank_snapshot WHERE rank_board_id = ?",
-            Long.class,
-            boardId
-        );
+            );
+            Long snapshotId = jdbcTemplate.queryForObject(
+                "SELECT id FROM rank_snapshot WHERE rank_board_id = ? ORDER BY id DESC LIMIT 1",
+                Long.class,
+                boardId
+            );
         assertThat(snapshotId).isNotNull();
         jdbcTemplate.update(
             """

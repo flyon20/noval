@@ -33,40 +33,40 @@ const summary = computed(() => {
 <template>
   <div class="evidence-pack-summary">
     <template v-if="!summary">
-      <p class="evidence-pack-summary__empty">No EvidencePack data</p>
+      <p class="evidence-pack-summary__empty">暂无证据包数据</p>
     </template>
     <template v-else>
       <el-row :gutter="16" class="evidence-pack-summary__stats">
         <el-col :span="6">
-          <el-statistic title="Facts" :value="summary.factCount" />
+          <el-statistic title="事实" :value="summary.factCount" />
         </el-col>
         <el-col :span="6">
-          <el-statistic title="Examples" :value="summary.exampleCount" />
+          <el-statistic title="示例" :value="summary.exampleCount" />
         </el-col>
         <el-col :span="6">
-          <el-statistic title="Signals" :value="summary.signalCount" />
+          <el-statistic title="趋势信号" :value="summary.signalCount" />
         </el-col>
         <el-col :span="6">
-          <el-statistic title="Seeds" :value="summary.inferenceSeedCount" />
+          <el-statistic title="推演种子" :value="summary.inferenceSeedCount" />
         </el-col>
       </el-row>
 
       <el-collapse v-if="summary.factCount > 0 || summary.exampleCount > 0" accordion class="evidence-pack-summary__details">
-        <el-collapse-item v-if="summary.facts.length" title="Facts" name="facts">
+        <el-collapse-item v-if="summary.facts.length" title="事实" name="facts">
           <ul class="evidence-list">
             <li v-for="(fact, idx) in summary.facts" :key="idx">
               <strong v-if="fact.ref">{{ fact.ref }}:</strong> {{ fact.claim || fact.summary || JSON.stringify(fact) }}
             </li>
           </ul>
         </el-collapse-item>
-        <el-collapse-item v-if="summary.examples.length" title="Examples" name="examples">
+        <el-collapse-item v-if="summary.examples.length" title="示例" name="examples">
           <ul class="evidence-list">
             <li v-for="(example, idx) in summary.examples" :key="idx">
               <strong v-if="example.ref">{{ example.ref }}:</strong> {{ example.excerpt || example.summary || JSON.stringify(example) }}
             </li>
           </ul>
         </el-collapse-item>
-        <el-collapse-item v-if="summary.signals.length" title="Signals" name="signals">
+        <el-collapse-item v-if="summary.signals.length" title="趋势信号" name="signals">
           <ul class="evidence-list">
             <li v-for="(signal, idx) in summary.signals" :key="idx">
               {{ signal.pattern || signal.summary || JSON.stringify(signal) }}

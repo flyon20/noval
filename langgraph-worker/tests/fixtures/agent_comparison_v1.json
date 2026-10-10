@@ -1,0 +1,27 @@
+{
+  "id": "agent-comparison-v1",
+  "project": {"userId": 7, "projectId": 91, "workId": 911, "title": "雾港钟声"},
+  "evidence": [
+    {"userId": 7, "projectId": 91, "workId": 911, "documentId": 701, "chapterId": 3, "chapterNo": 3, "generationId": 1, "chapterVersion": 1, "contentHash": "synthetic-ch3-v1", "sourceType": "CHAPTER", "title": "第三章：钟楼约定", "preview": "修表匠林澈向失明的钟楼看守许诺：第五夜钟声响起前，将银色怀表归还。怀表藏在他的工具箱里。他能回溯物件十秒钟的经历，每次使用会失去一段自身记忆。故事没有系统、任务面板或升级机制。"},
+    {"userId": 7, "projectId": 91, "workId": 911, "documentId": 702, "chapterId": 4, "chapterNo": 4, "generationId": 1, "chapterVersion": 1, "contentHash": "synthetic-ch4-v1", "sourceType": "CHAPTER", "title": "第四章：遗忘的门牌", "preview": "林澈回溯怀表，看到看守的女儿登上一艘已经沉没的渡船。代价是忘记母亲旧居的门牌。他没有把怀表交给看守，而是暂时留在工具箱中。"},
+    {"userId": 7, "projectId": 91, "workId": 911, "documentId": 703, "chapterId": 5, "chapterNo": 5, "generationId": 1, "chapterVersion": 1, "contentHash": "synthetic-ch5-v1", "sourceType": "CHAPTER", "title": "第五章：未响的钟", "preview": "第五夜钟楼停摆，林澈抵达塔下却发现入口被封。他仍握着工具箱，没有见到看守，也没有交还怀表。章节结束于他准备寻找侧门。归还是下一章的创作计划，尚未发生。"}
+  ],
+  "cases": [
+    {
+      "id": "creative-followup",
+      "request": {"userId": 7},
+      "turns": [
+        {"question": "我要写都市奇幻。主角林澈是修表匠，能回溯物件十秒钟的经历，每次会失去一段自己的记忆。没有系统、升级或任务面板。请设计开篇的三个具体场景，每个写清目标、阻碍、行动和后果，以失明的钟楼看守委托修理银色怀表开场。不要查榜单，也不要只讲写作方法。", "requiredTerms": ["林澈", "怀表", "记忆"]},
+        {"question": "沿用你刚才第二个场景，扩写成一段可以放进正文的对话。只能让林澈和看守两人出场，必须通过动作表现主角忘了一件重要的事，不要直接解释能力原理，不要增加组织或系统。最后留下一个关于怀表的疑问。", "requiredTerms": ["林澈", "怀表"]}
+      ]
+    },
+    {
+      "id": "project-evidence-followup",
+      "request": {"userId": 7, "projectId": 91, "workId": 911},
+      "turns": [
+        {"question": "请核对项目《雾港钟声》第三至第五章：林澈已经把怀表还给看守了吗？列出承诺、后续行动和当前状态，引用章节证据，分清已经发生的事和创作计划。", "requiredTerms": ["怀表"], "requireCitations": true},
+        {"question": "基于刚才的核对，为第六章设计两个能兑现怀表承诺的方案，各写三个因果相接的行动。保留记忆损耗的代价，不要把尚未发生的归还写成既定事实，也不要新增系统。结尾指出哪个方案更契合已有证据。", "requiredTerms": ["怀表", "记忆"]}
+      ]
+    }
+  ]
+}

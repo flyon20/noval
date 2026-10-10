@@ -1,9 +1,17 @@
 package com.novelanalyzer.modules.knowledge.dto;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class SkillCandidateCreateRequest {
     private String skillId;
     private String title;
     private String content;
+    private String version;
+    private String inputSchemaJson;
+    private String outputSchemaJson;
+    private List<String> requestedCapabilities = new ArrayList<>();
+    private String rolloutPolicyJson;
     private String evalResultJson;
     private Double requiredToolPassRate;
     private Double evidencePassRate;
@@ -32,6 +40,48 @@ public class SkillCandidateCreateRequest {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getVersion() {
+        return version;
+    }
+
+    public void setVersion(String version) {
+        this.version = version;
+    }
+
+    public String getInputSchemaJson() {
+        return inputSchemaJson;
+    }
+
+    public void setInputSchemaJson(String inputSchemaJson) {
+        this.inputSchemaJson = inputSchemaJson;
+    }
+
+    public String getOutputSchemaJson() {
+        return outputSchemaJson;
+    }
+
+    public void setOutputSchemaJson(String outputSchemaJson) {
+        this.outputSchemaJson = outputSchemaJson;
+    }
+
+    public List<String> getRequestedCapabilities() {
+        return requestedCapabilities;
+    }
+
+    public void setRequestedCapabilities(List<String> requestedCapabilities) {
+        this.requestedCapabilities = requestedCapabilities == null
+            ? new ArrayList<>()
+            : new ArrayList<>(requestedCapabilities);
+    }
+
+    public String getRolloutPolicyJson() {
+        return rolloutPolicyJson;
+    }
+
+    public void setRolloutPolicyJson(String rolloutPolicyJson) {
+        this.rolloutPolicyJson = rolloutPolicyJson;
     }
 
     public String getEvalResultJson() {

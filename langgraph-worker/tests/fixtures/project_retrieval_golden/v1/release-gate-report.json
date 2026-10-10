@@ -1,0 +1,1676 @@
+{
+  "schemaVersion": "project-retrieval-golden-report/v1",
+  "corpusVersion": "v1",
+  "runnerVersion": "scoped-bm25-v1",
+  "status": "passed",
+  "caseCount": 1200,
+  "passedCaseCount": 1200,
+  "failedCaseCount": 0,
+  "corpus": {
+    "bookCount": 10,
+    "documentCount": 3900,
+    "canonicalChapterCount": 1500,
+    "retiredDecoyCount": 1200,
+    "crossUserDecoyCount": 1200,
+    "chapterCountMinimum": 150,
+    "chapterCountMaximum": 150
+  },
+  "overall": {
+    "metrics": {
+      "active_retrieval_case_count": 1200,
+      "structured_case_count": 2400,
+      "chapter_location_case_count": 1200,
+      "foreshadowing_case_count": 1200,
+      "multi_hop_path_case_count": 1200,
+      "stale_rejection_case_count": 1200,
+      "cross_user_isolation_case_count": 1200,
+      "generation_case_count": 1200,
+      "hit_rate_at_k": 1.0,
+      "mrr_at_k": 1.0,
+      "context_precision_at_k": 0.19999999999999576,
+      "context_recall_at_k": 1.0,
+      "recall_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "precision_at_5": 0.19999999999999576,
+      "ndcg_at_10": 1.0,
+      "structured_accuracy": 1.0,
+      "chapter_location_accuracy": 1.0,
+      "foreshadowing_coverage": 1.0,
+      "multi_hop_path_evidence": 1.0,
+      "stale_rejection_rate": 1.0,
+      "cross_user_isolation_rate": 1.0,
+      "old_generation_misretrieval_rate": 0.0
+    },
+    "confidenceIntervals": {
+      "recall_at_5": {
+        "sample_count": 1200,
+        "mean": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      },
+      "chapter_location_accuracy": {
+        "sample_count": 1200,
+        "mean": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      },
+      "structured_accuracy": {
+        "sample_count": 1200,
+        "mean": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      },
+      "foreshadowing_coverage": {
+        "sample_count": 1200,
+        "mean": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      },
+      "multi_hop_path_evidence": {
+        "sample_count": 1200,
+        "mean": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      },
+      "cross_user_isolation_rate": {
+        "sample_count": 1200,
+        "mean": 1.0,
+        "lower": 1.0,
+        "upper": 1.0
+      }
+    }
+  },
+  "dimensions": {
+    "generation": {
+      "77": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "78": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "79": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "80": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "81": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "82": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "83": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "84": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "85": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "86": {
+        "caseCount": 120,
+        "metrics": {
+          "active_retrieval_case_count": 120,
+          "structured_case_count": 240,
+          "chapter_location_case_count": 120,
+          "foreshadowing_case_count": 120,
+          "multi_hop_path_case_count": 120,
+          "stale_rejection_case_count": 120,
+          "cross_user_isolation_case_count": 120,
+          "generation_case_count": 120,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.19999999999999957,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.19999999999999957,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 120,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      }
+    },
+    "genre": {
+      "history": {
+        "caseCount": 240,
+        "metrics": {
+          "active_retrieval_case_count": 240,
+          "structured_case_count": 480,
+          "chapter_location_case_count": 240,
+          "foreshadowing_case_count": 240,
+          "multi_hop_path_case_count": 240,
+          "stale_rejection_case_count": 240,
+          "cross_user_isolation_case_count": 240,
+          "generation_case_count": 240,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.2000000000000006,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.2000000000000006,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "romance": {
+        "caseCount": 240,
+        "metrics": {
+          "active_retrieval_case_count": 240,
+          "structured_case_count": 480,
+          "chapter_location_case_count": 240,
+          "foreshadowing_case_count": 240,
+          "multi_hop_path_case_count": 240,
+          "stale_rejection_case_count": 240,
+          "cross_user_isolation_case_count": 240,
+          "generation_case_count": 240,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.2000000000000006,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.2000000000000006,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "system": {
+        "caseCount": 240,
+        "metrics": {
+          "active_retrieval_case_count": 240,
+          "structured_case_count": 480,
+          "chapter_location_case_count": 240,
+          "foreshadowing_case_count": 240,
+          "multi_hop_path_case_count": 240,
+          "stale_rejection_case_count": 240,
+          "cross_user_isolation_case_count": 240,
+          "generation_case_count": 240,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.2000000000000006,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.2000000000000006,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "urban": {
+        "caseCount": 240,
+        "metrics": {
+          "active_retrieval_case_count": 240,
+          "structured_case_count": 480,
+          "chapter_location_case_count": 240,
+          "foreshadowing_case_count": 240,
+          "multi_hop_path_case_count": 240,
+          "stale_rejection_case_count": 240,
+          "cross_user_isolation_case_count": 240,
+          "generation_case_count": 240,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.2000000000000006,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.2000000000000006,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "xianxia": {
+        "caseCount": 240,
+        "metrics": {
+          "active_retrieval_case_count": 240,
+          "structured_case_count": 480,
+          "chapter_location_case_count": 240,
+          "foreshadowing_case_count": 240,
+          "multi_hop_path_case_count": 240,
+          "stale_rejection_case_count": 240,
+          "cross_user_isolation_case_count": 240,
+          "generation_case_count": 240,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.2000000000000006,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.2000000000000006,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 240,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      }
+    },
+    "intent": {
+      "chapter_recall": {
+        "caseCount": 300,
+        "metrics": {
+          "active_retrieval_case_count": 300,
+          "structured_case_count": 600,
+          "chapter_location_case_count": 300,
+          "foreshadowing_case_count": 300,
+          "multi_hop_path_case_count": 300,
+          "stale_rejection_case_count": 300,
+          "cross_user_isolation_case_count": 300,
+          "generation_case_count": 300,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.20000000000000104,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.20000000000000104,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "character_setting": {
+        "caseCount": 300,
+        "metrics": {
+          "active_retrieval_case_count": 300,
+          "structured_case_count": 600,
+          "chapter_location_case_count": 300,
+          "foreshadowing_case_count": 300,
+          "multi_hop_path_case_count": 300,
+          "stale_rejection_case_count": 300,
+          "cross_user_isolation_case_count": 300,
+          "generation_case_count": 300,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.20000000000000104,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.20000000000000104,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "foreshadowing": {
+        "caseCount": 300,
+        "metrics": {
+          "active_retrieval_case_count": 300,
+          "structured_case_count": 600,
+          "chapter_location_case_count": 300,
+          "foreshadowing_case_count": 300,
+          "multi_hop_path_case_count": 300,
+          "stale_rejection_case_count": 300,
+          "cross_user_isolation_case_count": 300,
+          "generation_case_count": 300,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.20000000000000104,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.20000000000000104,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "multi_hop": {
+        "caseCount": 300,
+        "metrics": {
+          "active_retrieval_case_count": 300,
+          "structured_case_count": 600,
+          "chapter_location_case_count": 300,
+          "foreshadowing_case_count": 300,
+          "multi_hop_path_case_count": 300,
+          "stale_rejection_case_count": 300,
+          "cross_user_isolation_case_count": 300,
+          "generation_case_count": 300,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.20000000000000104,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.20000000000000104,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 300,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      }
+    },
+    "lengthBucket": {
+      "long": {
+        "caseCount": 400,
+        "metrics": {
+          "active_retrieval_case_count": 400,
+          "structured_case_count": 800,
+          "chapter_location_case_count": 400,
+          "foreshadowing_case_count": 400,
+          "multi_hop_path_case_count": 400,
+          "stale_rejection_case_count": 400,
+          "cross_user_isolation_case_count": 400,
+          "generation_case_count": 400,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.20000000000000148,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.20000000000000148,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "mid": {
+        "caseCount": 400,
+        "metrics": {
+          "active_retrieval_case_count": 400,
+          "structured_case_count": 800,
+          "chapter_location_case_count": 400,
+          "foreshadowing_case_count": 400,
+          "multi_hop_path_case_count": 400,
+          "stale_rejection_case_count": 400,
+          "cross_user_isolation_case_count": 400,
+          "generation_case_count": 400,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.20000000000000148,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.20000000000000148,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      },
+      "short": {
+        "caseCount": 400,
+        "metrics": {
+          "active_retrieval_case_count": 400,
+          "structured_case_count": 800,
+          "chapter_location_case_count": 400,
+          "foreshadowing_case_count": 400,
+          "multi_hop_path_case_count": 400,
+          "stale_rejection_case_count": 400,
+          "cross_user_isolation_case_count": 400,
+          "generation_case_count": 400,
+          "hit_rate_at_k": 1.0,
+          "mrr_at_k": 1.0,
+          "context_precision_at_k": 0.20000000000000148,
+          "context_recall_at_k": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "precision_at_5": 0.20000000000000148,
+          "ndcg_at_10": 1.0,
+          "structured_accuracy": 1.0,
+          "chapter_location_accuracy": 1.0,
+          "foreshadowing_coverage": 1.0,
+          "multi_hop_path_evidence": 1.0,
+          "stale_rejection_rate": 1.0,
+          "cross_user_isolation_rate": 1.0,
+          "old_generation_misretrieval_rate": 0.0
+        },
+        "confidenceIntervals": {
+          "recall_at_5": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "chapter_location_accuracy": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "structured_accuracy": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "foreshadowing_coverage": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "multi_hop_path_evidence": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          },
+          "cross_user_isolation_rate": {
+            "sample_count": 400,
+            "mean": 1.0,
+            "lower": 1.0,
+            "upper": 1.0
+          }
+        }
+      }
+    }
+  },
+  "baselineComparison": {
+    "baselineVersion": "v1",
+    "maxRegressionDrop": 0.02,
+    "metrics": {
+      "recall_at_5": {
+        "baseline": 1.0,
+        "current": 1.0,
+        "delta": 0.0,
+        "current95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        },
+        "baseline95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        }
+      },
+      "chapter_location_accuracy": {
+        "baseline": 1.0,
+        "current": 1.0,
+        "delta": 0.0,
+        "current95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        },
+        "baseline95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        }
+      },
+      "structured_accuracy": {
+        "baseline": 1.0,
+        "current": 1.0,
+        "delta": 0.0,
+        "current95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        },
+        "baseline95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        }
+      },
+      "foreshadowing_coverage": {
+        "baseline": 1.0,
+        "current": 1.0,
+        "delta": 0.0,
+        "current95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        },
+        "baseline95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        }
+      },
+      "multi_hop_path_evidence": {
+        "baseline": 1.0,
+        "current": 1.0,
+        "delta": 0.0,
+        "current95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        },
+        "baseline95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        }
+      },
+      "cross_user_isolation_rate": {
+        "baseline": 1.0,
+        "current": 1.0,
+        "delta": 0.0,
+        "current95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        },
+        "baseline95": {
+          "sample_count": 1200,
+          "mean": 1.0,
+          "lower": 1.0,
+          "upper": 1.0
+        }
+      },
+      "old_generation_misretrieval_rate": {
+        "baseline": 0.0,
+        "current": 0.0,
+        "delta": 0.0,
+        "current95": null,
+        "baseline95": null
+      }
+    }
+  },
+  "gate": {
+    "enabled": true,
+    "passed": true,
+    "failures": [],
+    "thresholds": {
+      "min_recall_at_5": 0.95,
+      "min_chapter_location_accuracy": 0.95,
+      "min_structured_accuracy": 0.95,
+      "min_foreshadowing_coverage": 0.9,
+      "min_multi_hop_path_evidence": 0.85,
+      "min_cross_user_isolation_rate": 1.0,
+      "max_old_generation_misretrieval_rate": 0.01,
+      "max_regression_drop": 0.02
+    }
+  },
+  "failedCases": []
+}

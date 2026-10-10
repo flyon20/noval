@@ -31,10 +31,10 @@ class RequestIpResolverTest {
 
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setRemoteAddr("172.18.0.3");
-        request.addHeader("X-Real-IP", "47.238.247.169");
-        request.addHeader("X-Forwarded-For", "47.238.247.169, 172.18.0.3");
+        request.addHeader("X-Real-IP", "203.0.113.10");
+        request.addHeader("X-Forwarded-For", "203.0.113.10, 172.18.0.3");
 
-        assertThat(resolver.resolve(request)).isEqualTo("47.238.247.169");
+        assertThat(resolver.resolve(request)).isEqualTo("203.0.113.10");
     }
 
     @Test
@@ -45,8 +45,8 @@ class RequestIpResolverTest {
 
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setRemoteAddr("172.18.0.4");
-        request.addHeader("X-Forwarded-For", "47.238.247.169, 172.18.0.4");
+        request.addHeader("X-Forwarded-For", "203.0.113.10, 172.18.0.4");
 
-        assertThat(resolver.resolve(request)).isEqualTo("47.238.247.169");
+        assertThat(resolver.resolve(request)).isEqualTo("203.0.113.10");
     }
 }

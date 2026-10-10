@@ -19,6 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 
 @Component
 public class EmbeddingClient {
@@ -41,15 +44,19 @@ public class EmbeddingClient {
     }
 
     public List<Double> embed(String text) {
-        if (text == null || text.isBlank()) {
+        return embedAll(Collections.singletonList(text)).get(0);
+    }
+
+    public List<List<Double>> embedAll(List<String> texts) {
+        if (texts == null || texts.isEmpty() || texts.stream().anyMatch(text -> text == null || text.isBlank())) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "embedding text is required");
         }
         try {
             KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding = runtimeResolver.resolve();
             if ("dashscope-multimodal".equalsIgnoreCase(embedding.provider())) {
-                return embedDashscopeMultimodal(text, embedding);
+                return embedDashscopeMultimodal(texts, embedding);
             }
-            return embedOpenAiCompatible(text, embedding);
+            return embedOpenAiCompatible(texts, embedding);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -58,11 +65,11 @@ public class EmbeddingClient {
         }
     }
 
-    private List<Double> embedOpenAiCompatible(String text,
-                                               KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding) throws IOException, InterruptedException {
+    private List<List<Double>> embedOpenAiCompatible(List<String> texts,
+                                                     KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding) throws IOException, InterruptedException {
         Map<String, Object> body = Map.of(
             "model", embedding.model(),
-            "input", List.of(text),
+            "input", texts,
             "dimensions", embedding.dimension(),
             "encoding_format", "float"
         );
@@ -70,17 +77,32 @@ public class EmbeddingClient {
         ensureSuccess(response.statusCode(), response.body(), "embedding call failed");
         Map<String, Object> payload = objectMapper.readValue(response.body(), new TypeReference<>() {});
         List<Map<String, Object>> data = objectMapper.convertValue(payload.get("data"), new TypeReference<>() {});
-        if (data == null || data.isEmpty()) {
+        if (data == null || data.size() != texts.size()) {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding response is empty");
         }
-        return objectMapper.convertValue(data.get(0).get("embedding"), new TypeReference<List<Double>>() {});
+        List<IndexedEmbedding> indexed = new ArrayList<>(data.size());
+        for (int position = 0; position < data.size(); position++) {
+            Map<String, Object> item = data.get(position);
+            Object rawIndex = item.get("index");
+            int index = rawIndex instanceof Number number ? number.intValue() : position;
+            indexed.add(new IndexedEmbedding(
+                index,
+                objectMapper.convertValue(item.get("embedding"), new TypeReference<List<Double>>() {})
+            ));
+        }
+        indexed.sort(Comparator.comparingInt(IndexedEmbedding::index));
+        if (indexed.stream().anyMatch(item -> item.index() < 0 || item.index() >= texts.size()
+            || item.vector() == null || item.vector().isEmpty())) {
+            throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding response is invalid");
+        }
+        return indexed.stream().map(IndexedEmbedding::vector).toList();
     }
 
-    private List<Double> embedDashscopeMultimodal(String text,
-                                                  KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding) throws IOException, InterruptedException {
+    private List<List<Double>> embedDashscopeMultimodal(List<String> texts,
+                                                        KnowledgeEmbeddingRuntimeResolver.RuntimeEmbeddingConfig embedding) throws IOException, InterruptedException {
         Map<String, Object> body = Map.of(
             "model", embedding.model(),
-            "input", Map.of("contents", List.of(Map.of("text", text))),
+            "input", Map.of("contents", texts.stream().map(text -> Map.of("text", text)).toList()),
             "parameters", Map.of("dimension", embedding.dimension())
         );
         String url = trimTrailingSlash(embedding.baseUrl()) + "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding";
@@ -91,10 +113,18 @@ public class EmbeddingClient {
         List<Map<String, Object>> embeddings = output == null
             ? null
             : objectMapper.convertValue(output.get("embeddings"), new TypeReference<>() {});
-        if (embeddings == null || embeddings.isEmpty()) {
+        if (embeddings == null || embeddings.size() != texts.size()) {
             throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding response is empty");
         }
-        return objectMapper.convertValue(embeddings.get(0).get("embedding"), new TypeReference<List<Double>>() {});
+        List<List<Double>> vectors = new ArrayList<>(embeddings.size());
+        for (Map<String, Object> item : embeddings) {
+            List<Double> vector = objectMapper.convertValue(item.get("embedding"), new TypeReference<List<Double>>() {});
+            if (vector == null || vector.isEmpty()) {
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "embedding response is invalid");
+            }
+            vectors.add(vector);
+        }
+        return List.copyOf(vectors);
     }
 
     private HttpResponse<String> postJson(String url, String apiKey, Map<String, Object> body) throws IOException, InterruptedException {
@@ -144,5 +174,8 @@ public class EmbeddingClient {
         }
         String normalized = value.replace("\r", " ").replace("\n", " ").trim();
         return normalized.length() <= 500 ? normalized : normalized.substring(0, 500);
+    }
+
+    private record IndexedEmbedding(int index, List<Double> vector) {
     }
 }

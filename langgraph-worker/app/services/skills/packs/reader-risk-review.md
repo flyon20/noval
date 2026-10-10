@@ -3,7 +3,7 @@ skillId: reader-risk-review
 version: 1.0.0
 intents: [revision_advice]
 appliesTo: [reader_risk, reader_risk_review]
-allowedTools: [knowledge.vector_search, memory.project_context]
+requestedCapabilities: [book.read, memory.project.read]
 requiredEvidence: []
 triggers: [reader-risk, abandon, confusion, expectation]
 ---

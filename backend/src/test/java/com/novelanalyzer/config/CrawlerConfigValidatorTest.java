@@ -2,10 +2,16 @@ package com.novelanalyzer.config;
 
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CrawlerConfigValidatorTest {
+
+    @Test
+    void shouldDefaultRankBackfillFreshnessToThreeDays() {
+        assertThat(new CrawlerProperties().getRankBackfill().getRefreshDays()).isEqualTo(3);
+    }
 
     @Test
     void shouldRejectBlankInternalApiKey() {

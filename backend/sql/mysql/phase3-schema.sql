@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS crawl_book (
     deleted TINYINT DEFAULT 0 COMMENT '逻辑删除 0未删除 1已删除',
     UNIQUE KEY uk_platform_url (platform, book_url(255)),
     INDEX idx_platform (platform),
+    INDEX idx_crawl_book_platform_book_deleted (platform, platform_book_id, deleted),
     INDEX idx_book_name (book_name),
     INDEX idx_last_crawl_time (last_crawl_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='书籍详情表';

@@ -4,9 +4,14 @@ import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 
 public class KnowledgeSearchRequest {
 
+    @NotNull(message = "user scope is required")
+    @Positive(message = "user scope is invalid")
+    private Long userId;
     @NotBlank(message = "query is required")
     private String query;
     private Long bookId;
@@ -24,6 +29,14 @@ public class KnowledgeSearchRequest {
     @AssertTrue(message = "query is required")
     public boolean isQueryValid() {
         return query != null && !query.trim().isEmpty();
+    }
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
     }
 
     public String getQuery() {

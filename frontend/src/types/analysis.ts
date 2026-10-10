@@ -34,9 +34,17 @@ export interface StreamDeltaEvent {
 }
 
 export interface StreamProgressEvent {
-  event: 'progress';
+  event: 'progress' | 'context_compacting' | 'context_compacted';
   message: string;
   phase?: string;
+  progressEvent?: 'context_compacting' | 'context_compacted';
+  contextWindowTokens?: number;
+  thresholdTokens?: number;
+  beforeInputTokens?: number;
+  afterInputTokens?: number;
+  retainedTurnCount?: number;
+  summarizedMessageCount?: number;
+  generation?: number;
 }
 
 export interface StreamDoneEvent<T> {

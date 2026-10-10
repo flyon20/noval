@@ -1,5 +1,6 @@
 package com.novelanalyzer.modules.config.dto;
 
+import com.novelanalyzer.modules.config.model.AiProviderCapabilities;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
@@ -13,6 +14,8 @@ public class AiModelRegistryModelRequest {
     private String modelKey;
     private String displayName;
     private String providerType;
+    private String protocol;
+    private AiProviderCapabilities providerCapabilities;
     private String modelName;
     private String baseUrl;
     private String apiKey;
@@ -52,6 +55,22 @@ public class AiModelRegistryModelRequest {
 
     public String getModelName() {
         return modelName;
+    }
+
+    public String getProtocol() {
+        return protocol;
+    }
+
+    public void setProtocol(String protocol) {
+        this.protocol = protocol;
+    }
+
+    public AiProviderCapabilities getProviderCapabilities() {
+        return providerCapabilities;
+    }
+
+    public void setProviderCapabilities(AiProviderCapabilities providerCapabilities) {
+        this.providerCapabilities = providerCapabilities;
     }
 
     public void setModelName(String modelName) {

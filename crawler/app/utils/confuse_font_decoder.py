@@ -4,7 +4,9 @@ import hashlib
 import json
 import re
 import tempfile
+import threading
 from pathlib import Path
+from typing import Any
 from urllib.request import urlretrieve
 
 from fontTools.ttLib import TTFont
@@ -17,6 +19,7 @@ class ConfuseFontDecoder:
     BATCH_SIZE = 10
     ROW_FONT_SIZE = 150
     SINGLE_FONT_SIZES = (220, 280, 340)
+    MAX_OCR_INFERENCE_CALLS = 1
     CELL_SIZE = 180
     ROW_HEIGHT = 180
     SINGLE_CANVAS = 520
@@ -28,12 +31,14 @@ class ConfuseFontDecoder:
             0xE3FA: "g",
             0xE3FC: "儿",
             0xE408: "o",
+            0xE416: "T",
             0xE418: "当",
             0xE41C: "些",
             0xE41F: "十",
             0xE422: "气",
             0xE42D: "1",
             0xE436: "了",
+            0xE441: "M",
             0xE448: "l",
             0xE4DE: "一",
             0xE4E2: "光",
@@ -42,6 +47,8 @@ class ConfuseFontDecoder:
             0xE485: "位",
             0xE48C: "马",
             0xE4A3: "j",
+            0xE4DC: "k",
+            0xE519: "J",
             0xE4B0: "或",
             0xE503: "属",
             0xE510: "口",
@@ -56,6 +63,7 @@ class ConfuseFontDecoder:
             0xE534: "己",
             0xE535: "老",
             0xE536: "2",
+            0xE539: "m",
             0xE52F: "友",
             0xE542: "太",
             0xE547: "她",
@@ -66,7 +74,9 @@ class ConfuseFontDecoder:
     }
 
     def __init__(self, cache_dir: str | None = None) -> None:
-        self._ocr = RapidOCR()
+        self._ocr: RapidOCR | None = None
+        self._ocr_lock = threading.Lock()
+        self._remaining_ocr_calls = self.MAX_OCR_INFERENCE_CALLS
         self._font_path_cache: dict[str, str] = {}
         self._mapping_cache: dict[str, dict[str, str]] = {}
         self._workdir = Path(cache_dir) if cache_dir else Path(tempfile.gettempdir()) / "novel-crawler-fonts"
@@ -157,7 +167,10 @@ class ConfuseFontDecoder:
         image = ImageOps.autocontrast(image)
         image_path = self._workdir / f"row_{hashlib.sha1(''.join(batch).encode()).hexdigest()}.png"
         image.save(image_path)
-        result, _ = self._ocr(str(image_path))
+        ocr_output = self._run_ocr(image_path)
+        if ocr_output is None:
+            return None
+        result, _ = ocr_output
         if not result:
             return None
         text = "".join(item[1] for item in result).strip()
@@ -181,7 +194,10 @@ class ConfuseFontDecoder:
             image = ImageOps.autocontrast(image)
             image_path = self._workdir / f"single_{ord(char):x}_{font_size}.png"
             image.save(image_path)
-            result, _ = self._ocr(str(image_path))
+            ocr_output = self._run_ocr(image_path)
+            if ocr_output is None:
+                break
+            result, _ = ocr_output
             if not result:
                 continue
             text = result[0][1][:1]
@@ -190,6 +206,15 @@ class ConfuseFontDecoder:
                 best = text
                 best_confidence = confidence
         return best
+
+    def _run_ocr(self, image_path: Path) -> Any | None:
+        with self._ocr_lock:
+            if self._remaining_ocr_calls <= 0:
+                return None
+            self._remaining_ocr_calls -= 1
+            if self._ocr is None:
+                self._ocr = RapidOCR()
+            return self._ocr(str(image_path))
 
     def _is_acceptable_char(self, char: str) -> bool:
         if not char:

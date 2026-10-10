@@ -2,6 +2,7 @@
 skillId: webnovel-opening-strategy
 version: 1.0.0
 intents: [opening_strategy]
+requestedCapabilities: []
 triggers: [opening, launch, hook, premise]
 ---
 

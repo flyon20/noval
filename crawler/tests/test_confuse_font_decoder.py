@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from app.utils.confuse_font_decoder import ConfuseFontDecoder
 
@@ -145,11 +146,35 @@ class ConfuseFontDecoderTest(unittest.TestCase):
         decoder = TestableConfuseFontDecoder()
 
         decoded = decoder.decode(
-            "\ue3fa\ue408\ue448\ue45f\ue4a3",
+            "\ue3fa\ue408\ue416\ue441\ue448\ue45f\ue4a3\ue4dc\ue519\ue539",
             "@font-face{font-family:test;}",
         )
 
-        self.assertEqual("golIj", decoded)
+        self.assertEqual("goTMlIjkJm", decoded)
+
+    def test_should_initialize_rapid_ocr_only_when_inference_is_needed(self) -> None:
+        with patch("app.utils.confuse_font_decoder.RapidOCR") as rapid_ocr:
+            decoder = TestableConfuseFontDecoder()
+
+            decoded = decoder.decode("\ue3fa\ue408", "@font-face{font-family:test;}")
+
+        self.assertEqual("go", decoded)
+        rapid_ocr.assert_not_called()
+
+    def test_should_bound_and_reuse_rapid_ocr_inference(self) -> None:
+        ocr = MagicMock(return_value=(None, None))
+
+        with patch("app.utils.confuse_font_decoder.RapidOCR", return_value=ocr) as rapid_ocr:
+            decoder = ConfuseFontDecoder()
+            outputs = [
+                decoder._run_ocr(Path(f"image-{index}.png"))
+                for index in range(decoder.MAX_OCR_INFERENCE_CALLS + 2)
+            ]
+
+        rapid_ocr.assert_called_once_with()
+        self.assertEqual(1, decoder.MAX_OCR_INFERENCE_CALLS)
+        self.assertEqual(decoder.MAX_OCR_INFERENCE_CALLS, ocr.call_count)
+        self.assertEqual([None, None], outputs[-2:])
 
     def test_font_url_pattern_accepts_browser_font_face_css(self) -> None:
         css = '@font-face { font-family: TestFont; src: url("https://example.test/font.woff2") format("woff2"); }'

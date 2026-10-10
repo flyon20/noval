@@ -4,8 +4,18 @@ public class SkillCandidateVO {
     private Long id;
     private String skillId;
     private String title;
+    private String description;
     private String content;
     private String status;
+    private String lifecycleStatus;
+    private String legacyStatus;
+    private String version;
+    private String contentHash;
+    private String inputSchemaJson;
+    private String outputSchemaJson;
+    private String requestedCapabilitiesJson;
+    private String skillMetadataJson;
+    private String rolloutPolicyJson;
     private String evalStatus;
     private String evalResultJson;
     private Double requiredToolPassRate;
@@ -38,6 +48,14 @@ public class SkillCandidateVO {
         this.title = title;
     }
 
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
     public String getContent() {
         return content;
     }
@@ -52,6 +70,78 @@ public class SkillCandidateVO {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getLifecycleStatus() {
+        return lifecycleStatus;
+    }
+
+    public void setLifecycleStatus(String lifecycleStatus) {
+        this.lifecycleStatus = lifecycleStatus;
+    }
+
+    public String getLegacyStatus() {
+        return legacyStatus;
+    }
+
+    public void setLegacyStatus(String legacyStatus) {
+        this.legacyStatus = legacyStatus;
+    }
+
+    public String getVersion() {
+        return version;
+    }
+
+    public void setVersion(String version) {
+        this.version = version;
+    }
+
+    public String getContentHash() {
+        return contentHash;
+    }
+
+    public void setContentHash(String contentHash) {
+        this.contentHash = contentHash;
+    }
+
+    public String getInputSchemaJson() {
+        return inputSchemaJson;
+    }
+
+    public void setInputSchemaJson(String inputSchemaJson) {
+        this.inputSchemaJson = inputSchemaJson;
+    }
+
+    public String getOutputSchemaJson() {
+        return outputSchemaJson;
+    }
+
+    public void setOutputSchemaJson(String outputSchemaJson) {
+        this.outputSchemaJson = outputSchemaJson;
+    }
+
+    public String getRequestedCapabilitiesJson() {
+        return requestedCapabilitiesJson;
+    }
+
+    public void setRequestedCapabilitiesJson(String requestedCapabilitiesJson) {
+        this.requestedCapabilitiesJson = requestedCapabilitiesJson;
+    }
+
+    public String getSkillMetadataJson() {
+        return skillMetadataJson;
+    }
+
+    public void setSkillMetadataJson(String skillMetadataJson) {
+        this.skillMetadataJson = skillMetadataJson;
+    }
+
+    public String getRolloutPolicyJson() {
+        return rolloutPolicyJson;
+    }
+
+    public void setRolloutPolicyJson(String rolloutPolicyJson) {
+        this.rolloutPolicyJson = rolloutPolicyJson;
     }
 
     public String getEvalStatus() {

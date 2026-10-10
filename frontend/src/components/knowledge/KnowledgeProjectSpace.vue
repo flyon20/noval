@@ -1,14 +1,26 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { ChatLineRound, Close, Delete, Document, FolderOpened, Plus, Refresh, Upload } from '@element-plus/icons-vue';
 import { knowledgeApi } from '@/api/knowledge';
 import {
   emitKnowledgeConversationSelect,
   emitKnowledgeProjectChange,
+  getKnowledgeConversationsChangedDetail,
   getStoredKnowledgeProjectId,
+  getStoredKnowledgeReferenceWorkIds,
+  getStoredKnowledgeWorkId,
+  KNOWLEDGE_CONVERSATIONS_CHANGED_EVENT,
+  normalizeKnowledgeReferenceWorkIds,
   setStoredKnowledgeProjectId,
+  setStoredKnowledgeReferenceWorkIds,
+  setStoredKnowledgeWorkId,
 } from '@/composables/useKnowledgeProjectSelection';
-import type { KnowledgeChatRun, KnowledgeProject, ProjectChapter, ProjectWork } from '@/types/knowledge';
+import ProjectIngestPanel from '@/components/knowledge/ProjectIngestPanel.vue';
+import ProjectExtractionReview from '@/components/knowledge/ProjectExtractionReview.vue';
+import ProjectKnowledgeEntryList from '@/components/knowledge/ProjectKnowledgeEntryList.vue';
+import ProjectMemoryOverview from '@/components/knowledge/ProjectMemoryOverview.vue';
+import StoryRelationshipGraph from '@/components/knowledge/StoryRelationshipGraph.vue';
+import type { KnowledgeConversation, KnowledgeProject, ProjectChapter, ProjectWork } from '@/types/knowledge';
 
 const props = withDefaults(defineProps<{
   embedded?: boolean;
@@ -34,21 +46,67 @@ const loadingWorks = ref(false);
 const loadingChapters = ref(false);
 const creating = ref(false);
 const creatingWork = ref(false);
-const importingChapter = ref(false);
 const archivingProjectId = ref<number | null>(null);
 const errorMessage = ref('');
-const conversationRuns = ref<KnowledgeChatRun[]>([]);
+const conversations = ref<KnowledgeConversation[]>([]);
 const works = ref<ProjectWork[]>([]);
+const workLibrary = ref<ProjectWork[]>([]);
+const workLibraryLoaded = ref(false);
 const chapters = ref<ProjectChapter[]>([]);
 const activeWorkId = ref<number | null>(null);
+const referenceWorkIds = ref<number[]>(getStoredKnowledgeReferenceWorkIds(activeProjectId.value));
+type KnowledgeTab = 'memory' | 'works' | 'chapters' | 'characters' | 'settings' | 'foreshadowings' | 'timeline' | 'graph' | 'ingest' | 'review';
+type KnowledgeEntryKind = 'characters' | 'settings' | 'foreshadowings' | 'timeline';
+const knowledgeTabs: Array<{ value: KnowledgeTab; label: string }> = [
+  { value: 'memory', label: '记忆' },
+  { value: 'works', label: '作品' },
+  { value: 'chapters', label: '章节' },
+  { value: 'characters', label: '人物' },
+  { value: 'settings', label: '设定' },
+  { value: 'foreshadowings', label: '伏笔' },
+  { value: 'timeline', label: '时间线' },
+  { value: 'graph', label: '关系' },
+  { value: 'ingest', label: '导入记录' },
+  { value: 'review', label: '待确认结果' },
+];
+const knowledgeTab = ref<KnowledgeTab>('works');
+const focusedChapterId = ref<number | null>(null);
+const projectSpaceElement = ref<HTMLElement | null>(null);
 const workTitleDraft = ref('');
-const chapterNoDraft = ref('');
-const chapterTitleDraft = ref('');
-const chapterContentDraft = ref('');
+const memoryRefreshKey = ref(0);
+let conversationLoadGeneration = 0;
+let workLoadGeneration = 0;
+let chapterLoadGeneration = 0;
+let workMutationGeneration = 0;
+let scrollbarTimer: number | undefined;
 
 const activeProject = computed(() => (
   projects.value.find((project) => project.projectId === activeProjectId.value) ?? null
 ));
+const referenceWorkOptions = computed(() => workLibrary.value.filter((work) => (
+  work.workId !== activeWorkId.value
+)));
+const activeEntryKind = computed<KnowledgeEntryKind | null>(() => {
+  if (knowledgeTab.value === 'characters'
+    || knowledgeTab.value === 'settings'
+    || knowledgeTab.value === 'foreshadowings'
+    || knowledgeTab.value === 'timeline') {
+    return knowledgeTab.value;
+  }
+  return null;
+});
+const ingestActionLabel = computed(() => {
+  if (!activeProjectId.value) {
+    return '请先新建或选择项目';
+  }
+  if (loadingWorks.value) {
+    return '正在准备作品资料';
+  }
+  if (!activeWorkId.value) {
+    return '系统将自动准备默认作品';
+  }
+  return '导入资料';
+});
 
 function mergeProjects(nextProjects: KnowledgeProject[], currentProjects: KnowledgeProject[]) {
   const nextIds = new Set(nextProjects.map((project) => project.projectId));
@@ -58,7 +116,33 @@ function mergeProjects(nextProjects: KnowledgeProject[], currentProjects: Knowle
   ];
 }
 
-onMounted(loadProjects);
+onMounted(() => {
+  window.addEventListener(KNOWLEDGE_CONVERSATIONS_CHANGED_EVENT, handleConversationsChanged);
+  void loadProjects();
+  void loadWorkLibrary();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener(KNOWLEDGE_CONVERSATIONS_CHANGED_EVENT, handleConversationsChanged);
+  if (scrollbarTimer !== undefined) {
+    window.clearTimeout(scrollbarTimer);
+  }
+});
+
+function revealScrollbar() {
+  const element = projectSpaceElement.value;
+  if (!element) {
+    return;
+  }
+  element.classList.add('is-scrolling');
+  if (scrollbarTimer !== undefined) {
+    window.clearTimeout(scrollbarTimer);
+  }
+  scrollbarTimer = window.setTimeout(() => {
+    element.classList.remove('is-scrolling');
+    scrollbarTimer = undefined;
+  }, 850);
+}
 
 async function loadProjects() {
   loadingProjects.value = true;
@@ -79,121 +163,226 @@ async function loadProjects() {
   }
 }
 
-async function loadConversationRuns(projectId: number | null = activeProjectId.value) {
+async function loadConversations(projectId: number | null = activeProjectId.value) {
+  const generation = ++conversationLoadGeneration;
   loadingConversations.value = true;
   try {
-    const response = await knowledgeApi.listChatRuns({
-      projectId,
-      limit: 20,
-    });
-    conversationRuns.value = response.data.data ?? [];
+    const response = await knowledgeApi.listConversations(projectId);
+    if (generation !== conversationLoadGeneration || projectId !== activeProjectId.value) {
+      return;
+    }
+    const nextConversations = response.data.data ?? [];
+    conversations.value = projectId
+      ? nextConversations
+      : nextConversations.filter((conversation) => conversation.projectId == null);
   } catch {
-    conversationRuns.value = [];
-    errorMessage.value = '会话列表加载失败';
+    if (generation === conversationLoadGeneration && projectId === activeProjectId.value) {
+      conversations.value = [];
+      errorMessage.value = '会话列表加载失败';
+    }
   } finally {
-    loadingConversations.value = false;
+    if (generation === conversationLoadGeneration && projectId === activeProjectId.value) {
+      loadingConversations.value = false;
+    }
   }
 }
 
 async function loadProjectWorks(projectId: number | null = activeProjectId.value) {
+  const generation = ++workLoadGeneration;
+  chapterLoadGeneration++;
   works.value = [];
   chapters.value = [];
   activeWorkId.value = null;
   if (!projectId) {
+    loadingWorks.value = false;
+    loadingChapters.value = false;
     return;
   }
   loadingWorks.value = true;
   try {
     const response = await knowledgeApi.listProjectWorks(projectId);
+    if (generation !== workLoadGeneration || projectId !== activeProjectId.value) {
+      return;
+    }
     works.value = response.data.data ?? [];
-    activeWorkId.value = works.value[0]?.workId ?? null;
+    const storedWorkId = getStoredKnowledgeWorkId(projectId);
+    const nextWork = works.value.find((work) => work.workId === storedWorkId) ?? works.value[0] ?? null;
+    updateActiveWork(nextWork?.workId ?? null, projectId);
     if (activeWorkId.value) {
       await loadProjectChapters(activeWorkId.value, projectId);
     }
   } catch {
-    errorMessage.value = '作品资料加载失败';
+    if (generation === workLoadGeneration && projectId === activeProjectId.value) {
+      errorMessage.value = '作品资料加载失败';
+    }
   } finally {
-    loadingWorks.value = false;
+    if (generation === workLoadGeneration && projectId === activeProjectId.value) {
+      loadingWorks.value = false;
+    }
   }
 }
 
 async function loadProjectChapters(workId: number | null = activeWorkId.value, projectId: number | null = activeProjectId.value) {
+  const generation = ++chapterLoadGeneration;
   chapters.value = [];
   if (!projectId || !workId) {
+    loadingChapters.value = false;
     return;
   }
   loadingChapters.value = true;
   try {
     const response = await knowledgeApi.listProjectChapters(projectId, workId);
+    if (generation !== chapterLoadGeneration
+      || projectId !== activeProjectId.value
+      || workId !== activeWorkId.value) {
+      return;
+    }
     chapters.value = response.data.data ?? [];
   } catch {
-    errorMessage.value = '章节资料加载失败';
+    if (generation === chapterLoadGeneration
+      && projectId === activeProjectId.value
+      && workId === activeWorkId.value) {
+      errorMessage.value = '章节资料加载失败';
+    }
   } finally {
-    loadingChapters.value = false;
+    if (generation === chapterLoadGeneration
+      && projectId === activeProjectId.value
+      && workId === activeWorkId.value) {
+      loadingChapters.value = false;
+    }
   }
 }
 
 async function createWork() {
   const projectId = activeProjectId.value;
   const title = workTitleDraft.value.trim();
-  if (!projectId || !title || creatingWork.value) {
+  if (creatingWork.value) {
     return;
   }
+  if (!projectId) {
+    errorMessage.value = '请先新建或选择项目';
+    focusInput('knowledge-project-name');
+    return;
+  }
+  if (!title) {
+    focusInput('knowledge-work-title');
+    return;
+  }
+  const generation = ++workMutationGeneration;
   creatingWork.value = true;
   errorMessage.value = '';
   try {
     const response = await knowledgeApi.createProjectWork(projectId, { title });
+    if (generation !== workMutationGeneration || projectId !== activeProjectId.value) {
+      return;
+    }
     const work = response.data.data;
     works.value = [work, ...works.value.filter((item) => item.workId !== work.workId)];
+    workLibrary.value = [work, ...workLibrary.value.filter((item) => item.workId !== work.workId)];
     workTitleDraft.value = '';
     selectWork(work.workId);
   } catch {
-    errorMessage.value = '作品创建失败';
+    if (generation === workMutationGeneration && projectId === activeProjectId.value) {
+      errorMessage.value = '作品创建失败';
+    }
   } finally {
-    creatingWork.value = false;
+    if (generation === workMutationGeneration) {
+      creatingWork.value = false;
+    }
   }
 }
 
 function selectWork(workId: number) {
-  activeWorkId.value = workId;
+  focusedChapterId.value = null;
+  updateActiveWork(workId);
   void loadProjectChapters(workId);
 }
 
-async function importChapter() {
-  const projectId = activeProjectId.value;
-  const workId = activeWorkId.value;
-  const chapterNo = Number.parseInt(chapterNoDraft.value, 10);
-  const content = chapterContentDraft.value.trim();
-  if (!projectId || !workId || !chapterNo || !content || importingChapter.value) {
-    return;
-  }
-  importingChapter.value = true;
-  errorMessage.value = '';
+async function loadWorkLibrary() {
   try {
-    const response = await knowledgeApi.importProjectChapter(projectId, workId, {
-      chapterNo,
-      title: chapterTitleDraft.value.trim() || undefined,
-      content,
-      sourceType: 'upload',
-    });
-    const chapter = response.data.data;
-    chapters.value = [
-      ...chapters.value.filter((item) => item.chapterId !== chapter.chapterId),
-      chapter,
-    ].sort((left, right) => left.chapterNo - right.chapterNo || (left.version ?? 0) - (right.version ?? 0));
-    chapterNoDraft.value = '';
-    chapterTitleDraft.value = '';
-    chapterContentDraft.value = '';
+    const response = await knowledgeApi.listWorkLibrary();
+    workLibrary.value = response.data.data ?? [];
+    workLibraryLoaded.value = true;
+    setReferenceWorks(referenceWorkIds.value);
   } catch {
-    errorMessage.value = '章节导入失败';
-  } finally {
-    importingChapter.value = false;
+    workLibrary.value = [];
+    workLibraryLoaded.value = true;
+    setReferenceWorks([]);
   }
+}
+
+function updateActiveWork(workId: number | null, projectId: number | null = activeProjectId.value) {
+  activeWorkId.value = workId;
+  setStoredKnowledgeWorkId(projectId, workId);
+  setReferenceWorks(referenceWorkIds.value.filter((referenceWorkId) => referenceWorkId !== workId));
+  const work = works.value.find((item) => item.workId === workId);
+  emitKnowledgeProjectChange({
+    projectId,
+    projectName: projects.value.find((project) => project.projectId === projectId)?.name,
+    workId,
+    workTitle: work?.title,
+    referenceWorkIds: referenceWorkIds.value,
+  });
+}
+
+function setReferenceWorks(workIds: unknown) {
+  const normalized = normalizeKnowledgeReferenceWorkIds(workIds)
+    .filter((workId) => workId !== activeWorkId.value);
+  if (workLibraryLoaded.value) {
+    const availableIds = new Set(referenceWorkOptions.value.map((work) => work.workId));
+    referenceWorkIds.value = normalized.filter((workId) => availableIds.has(workId));
+  } else {
+    referenceWorkIds.value = normalized;
+  }
+  setStoredKnowledgeReferenceWorkIds(activeProjectId.value, referenceWorkIds.value);
+}
+
+function onReferenceWorksChange(value: unknown) {
+  setReferenceWorks(value);
+  emitKnowledgeProjectChange({
+    projectId: activeProjectId.value,
+    projectName: activeProject.value?.name,
+    workId: activeWorkId.value,
+    workTitle: works.value.find((work) => work.workId === activeWorkId.value)?.title,
+    referenceWorkIds: referenceWorkIds.value,
+  });
+}
+
+function referenceWorkLabel(work: ProjectWork) {
+  const projectName = projects.value.find((project) => project.projectId === work.projectId)?.name;
+  return projectName ? `${work.title} · ${projectName}` : work.title;
+}
+
+function onWorkSelect(value: string | number) {
+  const workId = Number(value);
+  if (Number.isInteger(workId) && workId > 0 && workId !== activeWorkId.value) {
+    selectWork(workId);
+  }
+}
+
+function handleConversationsChanged(event: Event) {
+  const detail = getKnowledgeConversationsChangedDetail(event);
+  if (detail.projectId === activeProjectId.value) {
+    void loadConversations(detail.projectId);
+  }
+}
+
+async function navigateToChapter(chapterId: number) {
+  knowledgeTab.value = 'chapters';
+  focusedChapterId.value = chapterId;
+  await nextTick();
+  const chapterElement = projectSpaceElement.value?.querySelector<HTMLElement>(`[data-chapter-id="${chapterId}"]`);
+  chapterElement?.focus();
+  chapterElement?.scrollIntoView?.({ block: 'nearest' });
 }
 
 async function createProject() {
   const name = projectNameDraft.value.trim();
-  if (!name || creating.value) {
+  if (creating.value) {
+    return;
+  }
+  if (!name) {
+    focusInput('knowledge-project-name');
     return;
   }
   creating.value = true;
@@ -209,6 +398,41 @@ async function createProject() {
   } finally {
     creating.value = false;
   }
+}
+
+async function openIngest() {
+  const projectId = activeProjectId.value;
+  if (!projectId) {
+    errorMessage.value = '请先新建或选择项目';
+    focusInput('knowledge-project-name');
+    return;
+  }
+  if (!activeWorkId.value) {
+    await loadProjectWorks(projectId);
+    if (projectId !== activeProjectId.value) {
+      return;
+    }
+    if (!activeWorkId.value) {
+      knowledgeTab.value = 'works';
+      errorMessage.value = '作品准备失败，请刷新后重试';
+      return;
+    }
+  }
+  errorMessage.value = '';
+  knowledgeTab.value = 'ingest';
+}
+
+function handleIngestReady() {
+  memoryRefreshKey.value += 1;
+  void loadProjectChapters(activeWorkId.value, activeProjectId.value);
+}
+
+function focusInput(testId: string) {
+  void nextTick(() => {
+    projectSpaceElement.value
+      ?.querySelector<HTMLInputElement>(`[data-test="${testId}"] input`)
+      ?.focus();
+  });
 }
 
 async function archiveProject(project: KnowledgeProject) {
@@ -238,35 +462,52 @@ function selectProject(
   projectId: number | null,
   options: { projectName?: string; close?: boolean } = {},
 ) {
+  conversationLoadGeneration++;
+  workLoadGeneration++;
+  chapterLoadGeneration++;
+  workMutationGeneration++;
+  creatingWork.value = false;
+  loadingConversations.value = false;
+  loadingWorks.value = false;
+  loadingChapters.value = false;
+  focusedChapterId.value = null;
   activeProjectId.value = projectId;
+  referenceWorkIds.value = getStoredKnowledgeReferenceWorkIds(projectId);
   const projectName = options.projectName
     ?? projects.value.find((project) => project.projectId === projectId)?.name;
   setStoredKnowledgeProjectId(projectId);
-  emitKnowledgeProjectChange({ projectId, projectName });
-  void loadConversationRuns(projectId);
+  emitKnowledgeProjectChange({ projectId, projectName, referenceWorkIds: referenceWorkIds.value });
+  void loadConversations(projectId);
   void loadProjectWorks(projectId);
   if (props.closeOnSelect && options.close !== false) {
     emit('close');
   }
 }
 
-function selectConversation(run: KnowledgeChatRun) {
-  const projectId = typeof run.projectId === 'number' ? run.projectId : activeProjectId.value;
+function selectConversation(conversation: KnowledgeConversation) {
+  const projectId = typeof conversation.projectId === 'number' ? conversation.projectId : activeProjectId.value;
   activeProjectId.value = projectId ?? null;
   setStoredKnowledgeProjectId(projectId ?? null);
   emitKnowledgeConversationSelect({
     projectId: projectId ?? null,
     projectName: projects.value.find((project) => project.projectId === projectId)?.name,
-    conversationId: run.conversationId,
-    runId: run.runId,
+    workId: activeWorkId.value,
+    workTitle: works.value.find((work) => work.workId === activeWorkId.value)?.title,
+    referenceWorkIds: referenceWorkIds.value,
+    conversationId: conversation.conversationId,
+    runId: conversation.lastRunId,
   });
   if (props.closeOnSelect) {
     emit('close');
   }
 }
 
-function runStatusLabel(status?: string) {
+function conversationStatusLabel(status?: string) {
   switch (String(status || '').toUpperCase()) {
+    case 'ACTIVE':
+      return '可继续';
+    case 'ARCHIVED':
+      return '已归档';
     case 'PENDING':
       return '排队中';
     case 'RUNNING':
@@ -282,16 +523,27 @@ function runStatusLabel(status?: string) {
   }
 }
 
-function runTimeLabel(run: KnowledgeChatRun) {
-  return run.updatedAt || run.finishedAt || run.startedAt || run.queuedAt || '刚刚';
+function conversationDisplayStatus(conversation: KnowledgeConversation) {
+  return conversation.lastRunStatus || conversation.status;
+}
+
+function conversationTimeLabel(conversation: KnowledgeConversation) {
+  return conversation.updatedAt || conversation.createdAt || '刚刚';
+}
+
+function conversationTitle(conversation: KnowledgeConversation) {
+  const title = String(conversation.title || '').trim();
+  return !title || title.toLowerCase() === 'new conversation' ? '新会话' : title;
 }
 </script>
 
 <template>
   <aside
+    ref="projectSpaceElement"
     class="knowledge-project-space"
     :class="{ 'is-embedded': embedded }"
     data-test="knowledge-project-space"
+    @scroll.passive="revealScrollbar"
   >
     <header class="knowledge-project-space__header">
       <div class="knowledge-project-space__title">
@@ -336,7 +588,7 @@ function runTimeLabel(run: KnowledgeChatRun) {
         type="primary"
         :icon="Plus"
         :loading="creating"
-        :disabled="!projectNameDraft.trim() || creating"
+        :disabled="creating"
         aria-label="新建项目"
         @click="createProject"
       />
@@ -356,86 +608,108 @@ function runTimeLabel(run: KnowledgeChatRun) {
         <h3 class="knowledge-project-space__section-title">作品资料</h3>
         <span v-if="loadingWorks">加载中</span>
       </div>
-      <div class="knowledge-project-space__knowledge-tabs" aria-label="作品资料分区">
-        <span>章节</span>
-        <span>设定</span>
-        <span>伏笔</span>
-        <span>时间线</span>
+      <div class="knowledge-project-space__scope">
+        <el-select
+          :model-value="activeWorkId"
+          data-test="knowledge-work-selector"
+          placeholder="选择作品"
+          :disabled="!works.length"
+          aria-label="当前作品"
+          @update:model-value="onWorkSelect"
+        >
+          <el-option v-for="work in works" :key="work.workId" :label="work.title" :value="work.workId" />
+        </el-select>
+        <el-tooltip :content="ingestActionLabel" placement="top">
+          <el-button
+            circle
+            :icon="Upload"
+            data-test="knowledge-open-ingest"
+            aria-label="导入资料"
+            @click="openIngest"
+          />
+        </el-tooltip>
+        <el-select
+          class="knowledge-project-space__reference-selector"
+          :model-value="referenceWorkIds"
+          data-test="knowledge-reference-work-selector"
+          multiple
+          collapse-tags
+          :max-collapse-tags="1"
+          clearable
+          placeholder="参考本人其他作品（可选）"
+          :disabled="!referenceWorkOptions.length"
+          aria-label="参考作品"
+          @update:model-value="onReferenceWorksChange"
+        >
+          <el-option
+            v-for="work in referenceWorkOptions"
+            :key="work.workId"
+            :label="referenceWorkLabel(work)"
+            :value="work.workId"
+          />
+        </el-select>
       </div>
-      <div class="knowledge-project-space__work-create">
-        <div data-test="knowledge-work-title">
-          <el-input
-            v-model="workTitleDraft"
-            placeholder="作品名"
-            :prefix-icon="Document"
-            :disabled="!activeProjectId || creatingWork"
-            @keydown.enter.prevent="createWork"
+      <div class="knowledge-project-space__knowledge-tabs" aria-label="作品资料分区" role="tablist">
+        <button
+          v-for="tab in knowledgeTabs"
+          :key="tab.value"
+          type="button"
+          role="tab"
+          :data-test="`knowledge-tab-${tab.value}`"
+          :class="{ 'is-active': knowledgeTab === tab.value }"
+          :aria-selected="knowledgeTab === tab.value"
+          @click="knowledgeTab = tab.value"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+      <div v-show="knowledgeTab === 'works'" class="knowledge-project-space__works-panel">
+        <div class="knowledge-project-space__work-create">
+          <div data-test="knowledge-work-title">
+            <el-input
+              v-model="workTitleDraft"
+              placeholder="作品名"
+              :prefix-icon="Document"
+              :disabled="!activeProjectId || creatingWork"
+              @keydown.enter.prevent="createWork"
+            />
+          </div>
+          <el-button
+            data-test="knowledge-create-work"
+            type="primary"
+            :icon="Plus"
+            :loading="creatingWork"
+            :disabled="creatingWork"
+            aria-label="新建作品"
+            @click="createWork"
           />
         </div>
-        <el-button
-          data-test="knowledge-create-work"
-          type="primary"
-          :icon="Plus"
-          :loading="creatingWork"
-          :disabled="!activeProjectId || !workTitleDraft.trim() || creatingWork"
-          aria-label="新建作品"
-          @click="createWork"
+        <div class="knowledge-project-space__works">
+          <button
+            v-for="work in works"
+            :key="work.workId"
+            type="button"
+            class="knowledge-project-space__work"
+            :class="{ 'is-active': work.workId === activeWorkId }"
+            :data-test="`knowledge-work-${work.workId}`"
+            @click="selectWork(work.workId)"
+          >
+            <span>{{ work.title }}</span>
+            <small>{{ work.genre || work.status || '作品资料' }}</small>
+          </button>
+          <div v-if="!works.length && !loadingWorks" class="knowledge-project-space__empty is-compact">
+            还没有作品
+          </div>
+        </div>
+      </div>
+      <div v-if="knowledgeTab === 'memory'" class="knowledge-project-space__panel" data-test="knowledge-memory-panel-wrap">
+        <ProjectMemoryOverview
+          :project-id="activeProjectId"
+          :work-id="activeWorkId"
+          :refresh-key="memoryRefreshKey"
         />
       </div>
-      <div class="knowledge-project-space__works">
-        <button
-          v-for="work in works"
-          :key="work.workId"
-          type="button"
-          class="knowledge-project-space__work"
-          :class="{ 'is-active': work.workId === activeWorkId }"
-          :data-test="`knowledge-work-${work.workId}`"
-          @click="selectWork(work.workId)"
-        >
-          <span>{{ work.title }}</span>
-          <small>{{ work.genre || work.status || '作品资料' }}</small>
-        </button>
-        <div v-if="!works.length && !loadingWorks" class="knowledge-project-space__empty is-compact">
-          还没有作品
-        </div>
-      </div>
-      <div class="knowledge-project-space__chapter-import">
-        <div data-test="knowledge-chapter-no">
-          <el-input
-            v-model="chapterNoDraft"
-            placeholder="章号"
-            inputmode="numeric"
-            :disabled="!activeWorkId || importingChapter"
-          />
-        </div>
-        <div data-test="knowledge-chapter-title">
-          <el-input
-            v-model="chapterTitleDraft"
-            placeholder="章节标题"
-            :disabled="!activeWorkId || importingChapter"
-          />
-        </div>
-        <div data-test="knowledge-chapter-content">
-          <el-input
-            v-model="chapterContentDraft"
-            type="textarea"
-            :rows="3"
-            placeholder="粘贴正文后导入"
-            :disabled="!activeWorkId || importingChapter"
-          />
-        </div>
-        <el-button
-          data-test="knowledge-import-chapter"
-          plain
-          :icon="Upload"
-          :loading="importingChapter"
-          :disabled="!activeWorkId || !chapterNoDraft.trim() || !chapterContentDraft.trim() || importingChapter"
-          @click="importChapter"
-        >
-          导入章节
-        </el-button>
-      </div>
-      <div class="knowledge-project-space__chapters">
+      <div v-show="knowledgeTab === 'chapters'" class="knowledge-project-space__chapters">
         <div class="knowledge-project-space__section-head">
           <h3 class="knowledge-project-space__section-title">章节</h3>
           <span v-if="loadingChapters">加载中</span>
@@ -444,6 +718,10 @@ function runTimeLabel(run: KnowledgeChatRun) {
           v-for="chapter in chapters"
           :key="chapter.chapterId"
           class="knowledge-project-space__chapter"
+          :class="{ 'is-highlighted': chapter.chapterId === focusedChapterId }"
+          :data-test="`knowledge-chapter-${chapter.chapterId}`"
+          :data-chapter-id="chapter.chapterId"
+          tabindex="-1"
         >
           <span>第{{ chapter.chapterNo }}章 {{ chapter.title || '未命名章节' }}</span>
           <small>{{ chapter.wordCount || 0 }} 字</small>
@@ -452,9 +730,53 @@ function runTimeLabel(run: KnowledgeChatRun) {
           还没有章节
         </div>
       </div>
+
+      <ProjectKnowledgeEntryList
+        v-if="activeEntryKind"
+        :project-id="activeProjectId"
+        :work-id="activeWorkId"
+        :kind="activeEntryKind"
+        @evidence-navigate="navigateToChapter"
+      />
+
+      <div v-show="knowledgeTab === 'ingest'" class="knowledge-project-space__panel" data-test="knowledge-ingest-panel-wrap">
+        <ProjectIngestPanel
+          :project-id="activeProjectId"
+          :work-id="activeWorkId"
+          @ready="handleIngestReady"
+        />
+      </div>
+      <div v-show="knowledgeTab === 'review'" class="knowledge-project-space__panel" data-test="knowledge-review-panel-wrap">
+        <ProjectExtractionReview
+          :project-id="activeProjectId"
+          :work-id="activeWorkId"
+          @evidence-navigate="navigateToChapter"
+        />
+      </div>
+      <div v-show="knowledgeTab === 'graph'" class="knowledge-project-space__panel" data-test="knowledge-graph-panel-wrap">
+        <StoryRelationshipGraph
+          :project-id="activeProjectId"
+          :work-id="activeWorkId"
+          @evidence-navigate="navigateToChapter"
+        />
+      </div>
     </section>
 
     <section class="knowledge-project-space__list" aria-label="问答项目列表">
+      <div
+        class="knowledge-project-space__row"
+        :class="{ 'is-active': activeProjectId === null }"
+      >
+        <button
+          type="button"
+          class="knowledge-project-space__project"
+          data-test="knowledge-project-unassigned"
+          @click="selectProject(null)"
+        >
+          <span>独立问答</span>
+          <small>未关联项目的会话</small>
+        </button>
+      </div>
       <div
         v-for="project in projects"
         :key="project.projectId"
@@ -495,21 +817,23 @@ function runTimeLabel(run: KnowledgeChatRun) {
         <span v-if="loadingConversations">加载中</span>
       </div>
       <button
-        v-for="run in conversationRuns"
-        :key="run.runId"
+        v-for="conversation in conversations"
+        :key="conversation.conversationId"
         type="button"
         class="knowledge-project-space__session"
-        :data-test="`knowledge-conversation-${run.conversationId}`"
-        @click="selectConversation(run)"
+        :data-test="`knowledge-conversation-${conversation.conversationId}`"
+        @click="selectConversation(conversation)"
       >
-        <span>{{ run.question || '未命名会话' }}</span>
+        <span>{{ conversationTitle(conversation) }}</span>
         <small>
-          <i :class="`is-${String(run.status || '').toLowerCase()}`">{{ runStatusLabel(run.status) }}</i>
-          {{ runTimeLabel(run) }}
+          <i :class="`is-${String(conversationDisplayStatus(conversation) || '').toLowerCase()}`">
+            {{ conversationStatusLabel(conversationDisplayStatus(conversation)) }}
+          </i>
+          {{ conversationTimeLabel(conversation) }}
         </small>
       </button>
       <div
-        v-if="!conversationRuns.length && !loadingConversations"
+        v-if="!conversations.length && !loadingConversations"
         class="knowledge-project-space__empty"
       >
         暂无会话
@@ -536,7 +860,8 @@ function runTimeLabel(run: KnowledgeChatRun) {
   left: 1.35rem;
   width: 330px;
   max-height: calc(100dvh - 2.7rem);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -613,17 +938,12 @@ function runTimeLabel(run: KnowledgeChatRun) {
 }
 
 .knowledge-project-space__list {
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
   display: grid;
   gap: 0.35rem;
   padding-right: 0.1rem;
 }
 
 .knowledge-project-space__sessions {
-  min-height: 0;
-  overflow-y: auto;
   display: grid;
   gap: 0.4rem;
   padding-top: 0.15rem;
@@ -631,14 +951,9 @@ function runTimeLabel(run: KnowledgeChatRun) {
 }
 
 .knowledge-project-space__knowledge {
-  min-height: 0;
-  overflow-y: auto;
   display: grid;
   gap: 0.55rem;
-  padding: 0.65rem;
-  border: 1px solid rgba(36, 61, 54, 0.1);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.34);
+  padding: 0.1rem;
 }
 
 .knowledge-project-space__section-head {
@@ -654,22 +969,55 @@ function runTimeLabel(run: KnowledgeChatRun) {
 }
 
 .knowledge-project-space__knowledge-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.25rem;
+  min-width: 0;
+  min-height: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+  scrollbar-width: thin;
 }
 
-.knowledge-project-space__knowledge-tabs span {
-  min-height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(36, 61, 54, 0.1);
-  border-radius: 8px;
+.knowledge-project-space__knowledge-tabs button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, transparent);
+  border-radius: 6px;
+  padding: 0.25rem 0.65rem;
   color: var(--color-text-muted);
-  background: rgba(255, 255, 255, 0.46);
-  font-size: 0.72rem;
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  cursor: pointer;
+  font-size: 0.78rem;
   font-weight: 650;
+  white-space: nowrap;
+}
+
+.knowledge-project-space__knowledge-tabs button.is-active {
+  color: var(--el-color-primary);
+  border-color: color-mix(in srgb, var(--el-color-primary) 45%, transparent);
+  background: color-mix(in srgb, var(--el-color-primary) 10%, transparent);
+}
+
+.knowledge-project-space__scope {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 0.4rem;
+}
+
+.knowledge-project-space__scope :deep(.el-select),
+.knowledge-project-space__scope :deep(.el-button) {
+  width: 100%;
+}
+
+.knowledge-project-space__reference-selector {
+  grid-column: 1 / -1;
+}
+
+.knowledge-project-space__works-panel {
+  display: grid;
+  gap: 0.4rem;
 }
 
 .knowledge-project-space__work-create {
@@ -695,10 +1043,10 @@ function runTimeLabel(run: KnowledgeChatRun) {
   display: grid;
   gap: 0.2rem;
   padding: 0.5rem 0.6rem;
-  border: 1px solid rgba(36, 61, 54, 0.08);
+  border: 1px solid color-mix(in srgb, var(--color-border) 86%, transparent);
   border-radius: 8px;
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.42);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
   text-align: left;
 }
 
@@ -707,8 +1055,18 @@ function runTimeLabel(run: KnowledgeChatRun) {
 }
 
 .knowledge-project-space__work.is-active {
-  border-color: rgba(199, 146, 92, 0.3);
-  background: rgba(199, 146, 92, 0.12);
+  border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-surface));
+}
+
+.knowledge-project-space__chapter.is-highlighted {
+  border-color: var(--el-color-primary);
+  background: color-mix(in srgb, var(--el-color-primary) 12%, white);
+}
+
+.knowledge-project-space__chapter:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 1px;
 }
 
 .knowledge-project-space__work span,
@@ -731,23 +1089,6 @@ function runTimeLabel(run: KnowledgeChatRun) {
 .knowledge-project-space__chapter small {
   color: var(--color-text-muted);
   font-size: 0.72rem;
-}
-
-.knowledge-project-space__chapter-import {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 0.4rem;
-}
-
-.knowledge-project-space__chapter-import [data-test="knowledge-chapter-content"],
-.knowledge-project-space__chapter-import :deep(.el-button) {
-  grid-column: 1 / -1;
-}
-
-.knowledge-project-space__chapter-import :deep(.el-input__wrapper),
-.knowledge-project-space__chapter-import :deep(.el-textarea__inner),
-.knowledge-project-space__chapter-import :deep(.el-button) {
-  border-radius: 8px;
 }
 
 .knowledge-project-space__chapters {
@@ -780,17 +1121,17 @@ function runTimeLabel(run: KnowledgeChatRun) {
   display: grid;
   gap: 0.3rem;
   padding: 0.62rem 0.72rem;
-  border: 1px solid rgba(36, 61, 54, 0.08);
+  border: 1px solid color-mix(in srgb, var(--color-border) 86%, transparent);
   border-radius: 8px;
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.42);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
   text-align: left;
   cursor: pointer;
 }
 
 .knowledge-project-space__session:hover {
-  border-color: rgba(36, 61, 54, 0.2);
-  background: rgba(255, 255, 255, 0.64);
+  border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+  background: color-mix(in srgb, var(--color-primary-soft) 48%, var(--color-surface));
 }
 
 .knowledge-project-space__session span,
@@ -817,22 +1158,22 @@ function runTimeLabel(run: KnowledgeChatRun) {
   flex: 0 0 auto;
   padding: 0.08rem 0.36rem;
   border-radius: 999px;
-  color: #22543d;
-  background: rgba(72, 187, 120, 0.16);
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 16%, transparent);
   font-style: normal;
   font-weight: 650;
 }
 
 .knowledge-project-space__session i.is-running,
 .knowledge-project-space__session i.is-pending {
-  color: #7a4f00;
-  background: rgba(236, 180, 77, 0.2);
+  color: var(--color-accent-strong);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
 .knowledge-project-space__session i.is-failed,
 .knowledge-project-space__session i.is-cancelled {
-  color: #8a1f1f;
-  background: rgba(229, 83, 83, 0.16);
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 16%, transparent);
 }
 
 .knowledge-project-space__row {
@@ -845,8 +1186,8 @@ function runTimeLabel(run: KnowledgeChatRun) {
 }
 
 .knowledge-project-space__row.is-active {
-  border-color: rgba(199, 146, 92, 0.24);
-  background: linear-gradient(135deg, rgba(199, 146, 92, 0.12), rgba(36, 61, 54, 0.06));
+  border-color: color-mix(in srgb, var(--color-accent-strong) 28%, var(--color-border));
+  background: var(--gradient-soft);
 }
 
 .knowledge-project-space__project {
@@ -881,7 +1222,7 @@ function runTimeLabel(run: KnowledgeChatRun) {
 }
 
 .knowledge-project-space__project:hover {
-  background: rgba(255, 255, 255, 0.48);
+  background: color-mix(in srgb, var(--color-primary-soft) 42%, var(--color-surface));
 }
 
 .knowledge-project-space__delete {
@@ -934,5 +1275,9 @@ function runTimeLabel(run: KnowledgeChatRun) {
   .knowledge-project-space__create :deep(.el-button) {
     min-height: 40px;
   }
+}
+
+.knowledge-project-space__panel {
+  min-width: 0;
 }
 </style>

@@ -40,10 +40,38 @@ export interface PromptConfigUpdateRequest {
   parseConfigJson?: string;
 }
 
+export type AiModelProtocol = 'responses' | 'chat_completions' | 'unspecified';
+
+export type AiPromptCacheStrategy =
+  | 'none'
+  | 'deepseek_automatic'
+  | 'openai_legacy'
+  | 'openai_gpt_5_6';
+
+export interface AiPromptCacheCapabilitiesV1 {
+  strategy: AiPromptCacheStrategy;
+  mode: 'disabled' | 'provider_managed' | 'implicit' | 'explicit';
+  retention: 'provider_default' | '30m' | 'in_memory' | '24h';
+  breakpoint: 'none' | 'stable_prefix';
+}
+
+export interface AiModelProviderCapabilitiesV1 {
+  schemaVersion: 1;
+  supportsStreaming: boolean;
+  supportsTools: boolean;
+  supportsJsonObject: boolean;
+  supportsReasoning: boolean;
+  reportsUsage: boolean;
+  reportsCacheUsage: boolean;
+  promptCache?: AiPromptCacheCapabilitiesV1;
+}
+
 export interface AiModelRegistryModel {
   modelKey: string;
   displayName: string;
   providerType: string;
+  protocol?: AiModelProtocol | null;
+  providerCapabilities?: AiModelProviderCapabilitiesV1 | null;
   modelName: string;
   baseUrl?: string | null;
   apiKey?: string | null;
@@ -57,9 +85,35 @@ export interface AiModelRegistryModel {
   promptBindings?: Partial<Record<PromptType, string>> | null;
 }
 
+export interface AiProviderRoutingPolicyV1 {
+  schemaVersion: 1;
+  enabled: boolean;
+  orderedProfileKeys: string[];
+  maxFailovers: number;
+  cooldownSeconds: number;
+}
+
 export interface AiModelRegistry {
   defaultModelKey: string;
   models: AiModelRegistryModel[];
+  providerRoutingPolicy?: AiProviderRoutingPolicyV1 | null;
+}
+
+export interface AiModelProviderProbeRequest {
+  modelKey: string;
+}
+
+export interface AiModelProviderProbeResult {
+  status: 'SUCCEEDED' | 'FAILED';
+  profileKey: string;
+  profileVersion: string;
+  endpointFingerprint?: string | null;
+  model?: string | null;
+  protocol?: Exclude<AiModelProtocol, 'unspecified'> | null;
+  latencyMillis: number;
+  usageReported: boolean;
+  cacheUsageReported: boolean;
+  errorCode?: string | null;
 }
 
 export interface AiModelOption {
@@ -70,14 +124,22 @@ export interface AiModelOption {
   defaultTemperature?: number | null;
   maxTokens?: number | null;
   temperatureSpecJson?: string | null;
+  /** 由 worker 方言表给出；worker 不可达时为空，表示该模型不展示思考强度控件。 */
+  supportsReasoning?: boolean | null;
+  reasoningTiers?: string[] | null;
+  /** worker 判定的供应商族，用于选择器分栏；比注册表里的 providerType 更准。 */
+  providerFamily?: string | null;
 }
 
 export interface AiModelRegistryUpdateRequest {
   defaultModelKey: string;
+  providerRoutingPolicy: AiProviderRoutingPolicyV1;
   models: Array<{
     modelKey: string;
     displayName: string;
     providerType: string;
+    protocol: AiModelProtocol;
+    providerCapabilities?: AiModelProviderCapabilitiesV1;
     modelName: string;
     baseUrl?: string;
     apiKey?: string;

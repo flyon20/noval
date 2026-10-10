@@ -246,12 +246,12 @@ VALUES
     ('crawler.http.timeout-seconds', '20', 'crawler', 'Python crawler page fetch timeout in seconds', 1, 0),
     ('crawler.chapter.fetch-workers', '3', 'crawler', 'Python crawler chapter fetch workers', 1, 0),
     ('crawler.chapter.force-refresh.user-max-times', '3', 'crawler', 'Maximum chapter force refresh times for normal users in current rank cache window', 1, 0),
-    ('crawler.rank.refresh-days', '5', 'crawler', 'Rank refresh days', 1, 0),
+    ('crawler.rank.refresh-days', '3', 'crawler', 'Rank refresh days', 1, 0),
     ('crawler.rank.force-cooldown-days', '2', 'crawler', 'Rank force refresh cooldown days', 1, 0),
     ('crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
     ('crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
     ('analysis.reanalyze.cooldown-hours', '0', 'analysis', 'Analysis reanalyze cooldown hours', 1, 0),
-    ('auth.bootstrap-admin-phones', '15599316908', 'auth', 'Comma-separated admin phone bootstrap list', 1, 0),
+    ('auth.bootstrap-admin-phones', '', 'auth', 'Comma-separated admin phone bootstrap list', 1, 0),
     ('security.audit.enabled', 'true', 'security', 'Whether audit logging is enabled', 1, 0)
 ON DUPLICATE KEY UPDATE
     config_value = VALUES(config_value),

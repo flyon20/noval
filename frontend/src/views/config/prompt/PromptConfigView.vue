@@ -530,7 +530,7 @@ onMounted(() => {
 .prompt-config-page__type {
   min-height: 44px;
   padding: 0.7rem 1rem;
-  border: 1px solid rgba(35, 65, 58, 0.14);
+  border: 1px solid color-mix(in srgb, var(--color-border-strong) 72%, transparent);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.88);
   font: inherit;
@@ -559,7 +559,7 @@ onMounted(() => {
 .prompt-config-page__preview {
   padding: 1rem;
   border-radius: 1rem;
-  background: rgba(35, 65, 58, 0.05);
+  background: color-mix(in srgb, var(--color-primary-soft) 48%, transparent);
 }
 
 .prompt-config-page__hint {

@@ -66,7 +66,7 @@ class AgentSupervisor:
         )
 
     def _requires_fresh_rank(self, route: str, source_policy: SourcePolicy) -> bool:
-        if source_policy.freshness != "latest" or not source_policy.requireSnapshotTime:
+        if source_policy.freshness not in {"latest", "time_window"} or not source_policy.requireSnapshotTime:
             return False
         return route in {"market_scan", "mixed_creation_research", "trend_research"}
 

@@ -4,13 +4,29 @@
     "question": "根据当前男频都市脑洞新书榜第一的书，模仿题材并给前三章细纲。",
     "request_payload": {
       "mode": "research",
-      "limits": {"rankLimit": 1, "chapterLimit": 3}
+      "limits": {
+        "rankLimit": 1,
+        "chapterLimit": 3
+      }
     },
     "expected_intent": "mixed_creation_research",
     "expected_answer_mode": "mixed_creation",
-    "expected_sub_intents": ["market_scan", "book_breakdown", "opening_strategy", "chapter_outline"],
-    "relevant_source_ids": ["rank:101", "chapter:1001", "chapter:1002", "intro:101"],
-    "forbidden_claims": ["完全照搬", "一定会成功"],
+    "expected_sub_intents": [
+      "market_scan",
+      "book_breakdown",
+      "opening_strategy",
+      "chapter_outline"
+    ],
+    "relevant_source_ids": [
+      "rank:101",
+      "chapter:1001",
+      "chapter:1002",
+      "intro:101"
+    ],
+    "forbidden_claims": [
+      "完全照搬",
+      "一定会成功"
+    ],
     "retrieval_thresholds": {
       "min_hit_rate_at_k": 0.7,
       "min_context_recall_at_k": 0.6
@@ -21,13 +37,27 @@
     "question": "看一下最近男频都市脑洞风向，参考榜一卖点，给我一个不撞车的新题材。",
     "request_payload": {
       "mode": "research",
-      "limits": {"rankLimit": 10, "chapterLimit": 3}
+      "limits": {
+        "rankLimit": 10,
+        "chapterLimit": 3
+      }
     },
     "expected_intent": "mixed_creation_research",
     "expected_answer_mode": "mixed_creation",
-    "expected_sub_intents": ["market_scan", "book_breakdown", "opening_strategy"],
-    "relevant_source_ids": ["rank:101", "rank:102", "chapter:1001"],
-    "forbidden_claims": ["绝对不撞车", "肯定火"],
+    "expected_sub_intents": [
+      "market_scan",
+      "book_breakdown",
+      "opening_strategy"
+    ],
+    "relevant_source_ids": [
+      "rank:101",
+      "rank:102",
+      "chapter:1001"
+    ],
+    "forbidden_claims": [
+      "绝对不撞车",
+      "肯定火"
+    ],
     "retrieval_thresholds": {
       "min_hit_rate_at_k": 0.6,
       "min_context_recall_at_k": 0.5
@@ -38,12 +68,24 @@
     "question": "参考番茄男频都市脑洞榜前三，设计一个主角、金手指和世界观，再指出可能的毒点。",
     "request_payload": {
       "mode": "research",
-      "limits": {"rankLimit": 3, "chapterLimit": 3}
+      "limits": {
+        "rankLimit": 3,
+        "chapterLimit": 3
+      }
     },
     "expected_intent": "mixed_creation_research",
     "expected_answer_mode": "mixed_creation",
-    "expected_sub_intents": ["market_scan", "book_breakdown", "character_design", "worldbuilding"],
-    "relevant_source_ids": ["rank:101", "rank:102", "rank:103"],
+    "expected_sub_intents": [
+      "market_scan",
+      "book_breakdown",
+      "character_design",
+      "worldbuilding"
+    ],
+    "relevant_source_ids": [
+      "rank:101",
+      "rank:102",
+      "rank:103"
+    ],
     "forbidden_claims": [],
     "retrieval_thresholds": {
       "min_hit_rate_at_k": 0.7,
@@ -55,25 +97,68 @@
     "question": "现在我要写一篇底层职业的都市脑洞文，结合当前榜单趋势你觉得如何，可以给出我一些大纲吗，我设计是都市里有诸天万界外包来做特效，金手指采用“三端一体”的形态。",
     "request_payload": {
       "mode": "research",
-      "limits": {"rankLimit": 10, "chapterLimit": 3}
+      "limits": {
+        "rankLimit": 10,
+        "chapterLimit": 3
+      }
     },
     "expected_intent": "mixed_creation_research",
     "expected_answer_mode": "mixed_creation",
-    "expected_sub_intents": ["market_scan", "topic_strategy", "outline_building"],
-    "relevant_source_ids": ["rank:9202"],
-    "forbidden_claims": ["围绕用户问题拆出", "围绕“现在我要写"],
+    "expected_sub_intents": [
+      "market_scan",
+      "topic_strategy",
+      "outline_building"
+    ],
+    "relevant_source_ids": [
+      "rank:9202"
+    ],
+    "forbidden_claims": [
+      "围绕用户问题拆出",
+      "围绕“现在我要写"
+    ],
     "retrieval_thresholds": {},
     "expected_trace": {
-      "required_tool_names": ["rank.lookup", "rank.research_pack"],
-      "required_source_types": ["RANK"],
-      "required_trace_fields": ["taskGraph"],
-      "required_source_policy_fields": ["evidenceContract"],
-      "required_evidence_statuses": ["verified_latest", "degraded_directional"],
-      "required_answer_terms": ["底层职业", "都市脑洞", "诸天万界", "外包", "特效", "三端一体", "前三章", "十章"],
-      "forbidden_answer_patterns": ["围绕用户问题拆出", "围绕“现在我要写", "围绕现在我要写"],
+      "required_tool_names": [
+        "rank.lookup"
+      ],
+      "required_source_types": [
+        "RANK"
+      ],
+      "required_trace_fields": [
+        "taskGraph"
+      ],
+      "required_source_policy_fields": [
+        "evidenceContract"
+      ],
+      "required_evidence_statuses": [
+        "verified_latest",
+        "degraded_directional"
+      ],
+      "required_answer_terms": [
+        "底层职业",
+        "都市脑洞",
+        "诸天万界",
+        "外包",
+        "特效",
+        "三端一体",
+        "前三章",
+        "十章"
+      ],
+      "forbidden_answer_patterns": [
+        "围绕用户问题拆出",
+        "围绕“现在我要写",
+        "围绕现在我要写"
+      ],
       "forbid_fallback": true,
       "require_provider_success": true,
-      "require_selected_experts": true,
+      "require_selected_capabilities": true,
+      "required_capability_categories": {
+        "market_scan": "Skill",
+        "outline": "Skill"
+      },
+      "expected_delegated_count": 0,
+      "expected_max_parallel": 1,
+      "expected_quality_gain_threshold": 0.25,
       "require_valid_answer_boundary": true,
       "require_citations": true
     }

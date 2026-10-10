@@ -60,7 +60,12 @@ describe('registerServiceWorker', () => {
     vi.stubEnv('PROD', true as unknown as string);
     vi.stubEnv('VITE_DISABLE_SW', 'false');
 
-    const register = vi.fn().mockResolvedValue(undefined);
+    const update = vi.fn().mockResolvedValue(undefined);
+    const register = vi.fn().mockResolvedValue({
+      waiting: null,
+      addEventListener: vi.fn(),
+      update,
+    });
     Object.defineProperty(globalThis.navigator, 'serviceWorker', {
       value: {
         register,
@@ -72,6 +77,7 @@ describe('registerServiceWorker', () => {
     registerServiceWorker();
     await Promise.resolve();
     expect(register).toHaveBeenCalledWith('/sw.js');
+    expect(update).toHaveBeenCalledOnce();
   });
 
   test('prompts user to activate a waiting update', async () => {
@@ -85,6 +91,7 @@ describe('registerServiceWorker', () => {
         postMessage,
       },
       addEventListener: vi.fn(),
+      update: vi.fn().mockResolvedValue(undefined),
     });
     Object.defineProperty(globalThis.navigator, 'serviceWorker', {
       value: {

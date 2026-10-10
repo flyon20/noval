@@ -1,4 +1,6 @@
 import ElementPlus from 'element-plus';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createPinia, setActivePinia } from 'pinia';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -37,6 +39,43 @@ describe('LoginView', () => {
     setActivePinia(createPinia());
     push.mockReset();
     vi.clearAllMocks();
+  });
+
+  test('hosts a full-page elastic mesh behind both login panels', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../LoginView.vue'), 'utf-8');
+
+    expect(source).toContain("import ElasticMeshBackground from '@/components/auth/ElasticMeshBackground.vue'");
+    expect(source).toContain('<ElasticMeshBackground class="login-page__mesh" />');
+    expect(source).toMatch(/<div class="login-page">\s*<ElasticMeshBackground[^>]*\/>\s*<section/s);
+    expect(source).toMatch(/\.login-page__mesh\s*\{[^}]*position:\s*absolute;/s);
+    expect(source).toMatch(/\.login-page\s*\{[^}]*position:\s*relative;[^}]*user-select:\s*none;/s);
+    expect(source).toMatch(/\.login-page__panel\s*\{[^}]*z-index:\s*1;/s);
+    expect(source).toMatch(/\.login-page :deep\(input\)[\s\S]*user-select:\s*text;/s);
+    expect(source).toContain('var(--color-glass) 16%');
+    expect(source).toContain('backdrop-filter: blur(6px)');
+    expect(source).not.toContain('var(--color-glass) 34%');
+    expect(source).toContain('min-height: 100dvh;');
+    expect(source).toContain('env(safe-area-inset-bottom)');
+    expect(source).toContain('var(--color-glass) 8%');
+    expect(source).toContain('min-height: 44px;');
+    expect(source).toContain('user-select: none;');
+    expect(source).not.toContain('cursor: crosshair;');
+  });
+
+  test('uses the shared XPBD selector object for login and registration switching', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../LoginView.vue'), 'utf-8');
+
+    expect(source).toContain('useXpbdSelector');
+    expect(source).toContain('login-card__mode-indicator');
+    expect(source).toContain('--auth-mode-position');
+  });
+
+  test('keeps the authentication card in the first mobile-landscape viewport', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../LoginView.vue'), 'utf-8');
+
+    expect(source).toContain('@media (max-height: 520px) and (orientation: landscape) and (max-width: 900px)');
+    expect(source).toContain('grid-template-columns: minmax(280px, 0.85fr) minmax(380px, 1.15fr);');
+    expect(source).toMatch(/\.login-page__form-wrap\s*\{[^}]*height:\s*100dvh;[^}]*overflow-y:\s*auto;/s);
   });
 
   test('successful phone password login triggers bootstrap and navigates to /rank', async () => {
@@ -105,7 +144,7 @@ describe('LoginView', () => {
       password: 'Password123',
       deviceLabel: expect.any(String),
     });
-    expect(systemApi.loginBootstrap).toHaveBeenCalledWith({ platform: 'fanqie' });
+    expect(systemApi.loginBootstrap).not.toHaveBeenCalled();
     expect(push).toHaveBeenCalledWith('/rank');
   });
 

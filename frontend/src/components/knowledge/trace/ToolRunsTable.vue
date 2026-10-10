@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { knowledgeStatusLabel } from '@/utils/knowledgeDisplay';
 
 interface Props {
   toolRunsJson?: string;
@@ -39,18 +40,18 @@ function fieldText(row: Record<string, unknown>, key: string, fallback = '') {
 function resultCountText(row: Record<string, unknown>) {
   const value = row.resultCount;
   if (value === undefined || value === null || value === '') return '';
-  return `${value} results`;
+  return `${value} 条结果`;
 }
 
 function inputSummary(row: Record<string, unknown>) {
   const input = objectValue(row.input);
   if (!input) return [];
   return compactPairs([
-    ['query', shortText(input.query, 80)],
-    ['sourceType', input.sourceType],
-    ['bookId', input.bookId],
-    ['limit', input.limit],
-    ['taskType', input.taskType],
+    ['查询', shortText(input.query, 80)],
+    ['来源类型', input.sourceType],
+    ['书籍 ID', input.bookId],
+    ['数量', input.limit],
+    ['任务类型', input.taskType],
   ]);
 }
 
@@ -58,14 +59,14 @@ function outputSummary(row: Record<string, unknown>) {
   const output = objectValue(row.output);
   if (!output) return [];
   return compactPairs([
-    ['retrievalBackend', output.retrievalBackend],
-    ['snapshotTime', output.snapshotTime],
-    ['items', arrayCount(output.items)],
-    ['ranks', arrayCount(output.ranks)],
-    ['books', arrayCount(output.books)],
-    ['skills', arrayCount(output.skills)],
-    ['selectedSkills', arrayCount(output.selectedSkills)],
-    ['message', shortText(output.message, 80)],
+    ['检索后端', output.retrievalBackend],
+    ['快照时间', output.snapshotTime],
+    ['结果项', arrayCount(output.items)],
+    ['榜单条目', arrayCount(output.ranks)],
+    ['书籍', arrayCount(output.books)],
+    ['技能', arrayCount(output.skills)],
+    ['已选技能', arrayCount(output.selectedSkills)],
+    ['消息', shortText(output.message, 80)],
   ]);
 }
 
@@ -93,7 +94,7 @@ function shortText(value: unknown, maxLength: number) {
 <template>
   <div class="tool-runs-table">
     <template v-if="!toolRuns.length">
-      <p class="tool-runs-table__empty">No tool runs recorded</p>
+      <p class="tool-runs-table__empty">暂无工具调用记录</p>
     </template>
     <template v-else>
       <div class="tool-runs-table__list" role="list">
@@ -111,7 +112,7 @@ function shortText(value: unknown, maxLength: number) {
             </div>
             <div class="tool-run-card__status">
               <el-tag :type="getStatusType(row.status)" size="small">
-                {{ fieldText(row, 'status', 'unknown') }}
+                {{ knowledgeStatusLabel(row.status, '未知') }}
               </el-tag>
               <span v-if="resultCountText(row)">{{ resultCountText(row) }}</span>
             </div>
@@ -119,25 +120,25 @@ function shortText(value: unknown, maxLength: number) {
 
           <div class="tool-run-card__body">
             <section>
-              <h4>Input</h4>
+              <h4>输入</h4>
               <div class="tool-runs-table__summary">
                 <el-tag v-for="item in inputSummary(row)" :key="item" size="small" type="info">
                   {{ item }}
                 </el-tag>
-                <span v-if="!inputSummary(row).length" class="tool-run-card__muted">empty</span>
+                <span v-if="!inputSummary(row).length" class="tool-run-card__muted">无输入</span>
               </div>
             </section>
             <section>
-              <h4>Output</h4>
+              <h4>输出</h4>
               <div class="tool-runs-table__summary">
                 <el-tag v-for="item in outputSummary(row)" :key="item" size="small" type="success">
                   {{ item }}
                 </el-tag>
-                <span v-if="!outputSummary(row).length" class="tool-run-card__muted">empty</span>
+                <span v-if="!outputSummary(row).length" class="tool-run-card__muted">无输出</span>
               </div>
             </section>
             <section v-if="row.errorType || row.reason">
-              <h4>Error</h4>
+              <h4>错误</h4>
               <el-text type="danger" size="small">{{ row.errorType || row.reason }}</el-text>
             </section>
           </div>

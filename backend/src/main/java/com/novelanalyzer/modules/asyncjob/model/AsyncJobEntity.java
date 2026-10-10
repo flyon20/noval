@@ -38,6 +38,10 @@ public class AsyncJobEntity {
     private LocalDateTime startedAt;
     @TableField("finished_at")
     private LocalDateTime finishedAt;
+    @TableField("queue_published_at")
+    private LocalDateTime queuePublishedAt;
+    @TableField("queue_published_attempt")
+    private Integer queuePublishedAttempt;
     @TableField("create_time")
     private LocalDateTime createTime;
     @TableField("update_time")
@@ -155,6 +159,22 @@ public class AsyncJobEntity {
 
     public void setFinishedAt(LocalDateTime finishedAt) {
         this.finishedAt = finishedAt;
+    }
+
+    public LocalDateTime getQueuePublishedAt() {
+        return queuePublishedAt;
+    }
+
+    public void setQueuePublishedAt(LocalDateTime queuePublishedAt) {
+        this.queuePublishedAt = queuePublishedAt;
+    }
+
+    public Integer getQueuePublishedAttempt() {
+        return queuePublishedAttempt;
+    }
+
+    public void setQueuePublishedAttempt(Integer queuePublishedAttempt) {
+        this.queuePublishedAttempt = queuePublishedAttempt;
     }
 
     public LocalDateTime getCreateTime() {

@@ -25,8 +25,10 @@ describe('AdminSkillGovernanceView', () => {
             {
               skillId: 'webnovel-market-scan',
               version: '1.0.0',
+              description: '读取当前榜单证据后再综合判断',
               intents: ['market_scan'],
               triggers: ['榜单', '趋势'],
+              requestedCapabilities: ['market.read'],
             },
           ],
           candidates: {
@@ -55,13 +57,17 @@ describe('AdminSkillGovernanceView', () => {
     expect(wrapper.text()).toContain('上传技能');
     expect(wrapper.text()).toContain('技能候选');
     expect(wrapper.text()).toContain('webnovel-market-scan');
-    expect(wrapper.text()).toContain('market_scan');
+    expect(wrapper.text()).toContain('读取当前榜单证据后再综合判断');
+    expect(wrapper.text()).toContain('请求能力（非授权）');
+    expect(wrapper.text()).toContain('market.read');
+    expect(wrapper.text()).toContain('榜单市场分析');
     expect(wrapper.text()).toContain('webnovel-market');
     await wrapper.find('[data-test="approve-skill"]').trigger('click');
     await flushPromises();
 
     expect(knowledgeApi.reviewSkillCandidate).toHaveBeenCalledWith(1, { decision: 'APPROVED' });
-    expect(wrapper.text()).toContain('APPROVED');
+    expect(wrapper.text()).toContain('已通过');
+    expect(wrapper.text()).not.toContain('APPROVED');
   });
 
   test('shows runtime skills even when there are no candidates', async () => {
@@ -236,7 +242,9 @@ describe('AdminSkillGovernanceView', () => {
     await flushPromises();
 
     const fileInput = wrapper.get<HTMLInputElement>('[data-test="skill-md-file"]');
-    const file = new File(['# Webnovel Opening Hook\n\nTrigger: opening_strategy'], 'webnovel-opening-hook.md', {
+    const file = new File([
+      '---\nname: webnovel-opening-hook\ndescription: 强化前三章开篇钩子\n---\n# Instructions\n\nTrigger: opening_strategy',
+    ], 'ignored-filename.md', {
       type: 'text/markdown',
     });
     Object.defineProperty(fileInput.element, 'files', {
@@ -251,7 +259,7 @@ describe('AdminSkillGovernanceView', () => {
     expect((wrapper.get<HTMLInputElement>('[data-test="skill-upload-id"]').element).value)
       .toBe('webnovel-opening-hook');
     expect((wrapper.get<HTMLInputElement>('[data-test="skill-upload-title"]').element).value)
-      .toBe('Webnovel Opening Hook');
+      .toBe('webnovel-opening-hook');
     expect((wrapper.get<HTMLTextAreaElement>('[data-test="skill-upload-content"]').element).value)
       .toContain('Trigger: opening_strategy');
 
@@ -260,8 +268,8 @@ describe('AdminSkillGovernanceView', () => {
 
     expect(knowledgeApi.createSkillCandidate).toHaveBeenCalledWith(expect.objectContaining({
       skillId: 'webnovel-opening-hook',
-      title: 'Webnovel Opening Hook',
-      content: '# Webnovel Opening Hook\n\nTrigger: opening_strategy',
+      title: 'webnovel-opening-hook',
+      content: expect.stringContaining('description: 强化前三章开篇钩子'),
     }));
   });
 
@@ -316,6 +324,7 @@ describe('AdminSkillGovernanceView', () => {
     await flushPromises();
 
     expect(knowledgeApi.publishSkillCandidate).toHaveBeenCalledWith(9);
-    expect(wrapper.text()).toContain('PUBLISHED');
+    expect(wrapper.text()).toContain('已发布');
+    expect(wrapper.text()).not.toContain('PUBLISHED');
   });
 });

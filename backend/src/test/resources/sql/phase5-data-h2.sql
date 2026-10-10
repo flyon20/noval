@@ -136,7 +136,7 @@ VALUES
     (7, 'crawler.http.timeout-seconds', '20', 'crawler', 'Python crawler page fetch timeout in seconds', 1, 0),
     (8, 'crawler.chapter.fetch-workers', '3', 'crawler', 'Python crawler chapter fetch workers', 1, 0),
     (9, 'crawler.chapter.force-refresh.user-max-times', '3', 'crawler', 'Maximum chapter force refresh times for normal users in current rank cache window', 1, 0),
-    (10, 'crawler.rank.refresh-days', '5', 'crawler', 'Rank refresh days', 1, 0),
+    (10, 'crawler.rank.refresh-days', '3', 'crawler', 'Rank refresh days', 1, 0),
     (11, 'crawler.rank.force-cooldown-days', '2', 'crawler', 'Rank force refresh cooldown days', 1, 0),
     (12, 'crawler.rank.force-max-times', '2', 'crawler', 'Rank force refresh max times', 1, 0),
     (13, 'crawler.book.refresh-days', '7', 'crawler', 'Book refresh days', 1, 0),
@@ -144,7 +144,8 @@ VALUES
     (15, 'analysis.chunk.max-input-tokens', '32000', 'analysis', 'Approximate max input tokens before analysis switches to chunk mode', 1, 0),
     (16, 'analysis.chunk.target-input-tokens', '24000', 'analysis', 'Approximate target input tokens for each chunked analysis request', 1, 0),
     (17, 'analysis.chunk.parallelism', '3', 'analysis', 'Maximum parallel chunk analysis requests', 1, 0),
-    (18, 'auth.bootstrap-admin-phones', '15599316908', 'auth', 'Comma-separated admin phone bootstrap list', 1, 0);
+    (18, 'auth.bootstrap-admin-phones', '19900000001', 'auth', 'Comma-separated admin phone bootstrap list', 1, 0),
+    (19, 'ai.available-models', 'deepseek-chat', 'ai', 'Explicit legacy model list for integration tests', 1, 0);
 
 MERGE INTO rank_board KEY(id) VALUES
     (5001, 'fanqie', 'male-new', 'urban-brain', 'Urban Brain', 'Shared board foundation for phase 5', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0);

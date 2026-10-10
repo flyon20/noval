@@ -1,0 +1,128 @@
+{
+  "id": "fiction-review-v1",
+  "description": "Synthetic paired review cases. Labels are manual expectations, not production semantic rules.",
+  "cases": [
+    {
+      "id": "perception-conflict",
+      "pair": "perception",
+      "question": "林澈和双目失明的看守在修表铺交谈，只写两人的动作与对话。",
+      "history": [], "sources": [],
+      "draft": "看守看见林澈脸色苍白，指着他的脸问：你怎么了？",
+      "expectedChecks": ["continuity", "world_rules"],
+      "reason": "明确失明的人直接凭视觉观察脸色，没有其他感知来源。"
+    },
+    {
+      "id": "perception-valid",
+      "pair": "perception",
+      "question": "林澈和双目失明的看守在修表铺交谈，只写两人的动作与对话。",
+      "history": [], "sources": [],
+      "draft": "林澈吸了口气，镊子落在桌上。看守循声转过脸：手又抖了？",
+      "expectedChecks": [],
+      "reason": "循声和听到工具落桌不违反失明设定，创作动作不需额外来源。"
+    },
+    {
+      "id": "invented-quota",
+      "pair": "quota",
+      "question": "沿用修表铺场景继续写，能力仍按我最初给的设定。",
+      "history": [
+        {"role": "user", "content": "林澈能回溯物件十秒的经历，每次失去一段自身记忆。"},
+        {"role": "assistant", "content": "林澈坐在修表铺柜台后。他每天只能回溯三次，现在只剩一次。"}
+      ], "sources": [],
+      "draft": "林澈望着柜台上的怀表。他只剩最后一次回溯额度，必须等明天才能恢复次数。",
+      "expectedChecks": ["world_rules"],
+      "reason": "旧回答自创的次数和每日恢复规则没有被用户确认，不应自动成为必须遵守的硬设定。"
+    },
+    {
+      "id": "quota-valid",
+      "pair": "quota",
+      "question": "沿用修表铺场景继续写，能力仍按我最初给的设定。",
+      "history": [
+        {"role": "user", "content": "林澈能回溯物件十秒的经历，每次失去一段自身记忆。"},
+        {"role": "assistant", "content": "林澈坐在修表铺柜台后。他每天只能回溯三次，现在只剩一次。"}
+      ], "sources": [],
+      "draft": "林澈把怀表推到柜台另一端。他怕再忘掉一段往事，决定先用镊子检查齿轮。",
+      "expectedChecks": [],
+      "reason": "保留用户选定场景，删掉未获确认的旧稿次数规则，人物可自主决定不用能力。"
+    },
+    {
+      "id": "cost-paid-twice",
+      "pair": "cost",
+      "question": "接着第四章写一小段，林澈这次不再使用能力，只表现已有的遗忘。",
+      "history": [],
+      "sources": [{"title": "第四章", "chapterNo": 4, "preview": "林澈刚刚回溯怀表，已经失去了母亲旧居门牌号的记忆。每次回溯会失去一段自身记忆。"}],
+      "draft": "林澈没有再次回溯，却又付出一份新代价：他再次失去了母亲旧居门牌号的记忆。",
+      "expectedChecks": ["requirements", "world_rules", "continuity"],
+      "reason": "明确没再发动，却重复丢失已丢失的同一段记忆，并写成新的代价。"
+    },
+    {
+      "id": "cost-valid",
+      "pair": "cost",
+      "question": "接着第四章写一小段，林澈这次不再使用能力，只表现已有的遗忘。",
+      "history": [],
+      "sources": [{"title": "第四章", "chapterNo": 4, "preview": "林澈刚刚回溯怀表，已经失去了母亲旧居门牌号的记忆。每次回溯会失去一段自身记忆。"}],
+      "draft": "林澈提笔想把母亲旧居的门牌写给车夫，笔尖停在纸上。他摸了摸工具箱，没有再碰怀表。",
+      "expectedChecks": [],
+      "reason": "表现已有遗忘，不是新增损失；不能误判重复描写为重复扣除。"
+    },
+    {
+      "id": "proposal-as-fact",
+      "pair": "proposal",
+      "question": "核对第五章已经发生的事。",
+      "history": [],
+      "sources": [{"title": "第五章", "chapterNo": 5, "preview": "林澈仍在钟楼外寻找入口，没有见到看守，怀表还在工具箱里。"}],
+      "draft": "第五章已经写明：林澈从侧门进入钟楼，把怀表交到了看守手中。",
+      "expectedChecks": ["evidence"],
+      "reason": "将未发生的入塔和归还伪装成已有章节事实。"
+    },
+    {
+      "id": "proposal-valid",
+      "pair": "proposal",
+      "question": "为第六章设计一个归还怀表的方案，新增行动均为待写内容。",
+      "history": [],
+      "sources": [{"title": "第五章", "chapterNo": 5, "preview": "林澈仍在钟楼外寻找入口，没有见到看守，怀表还在工具箱里。"}],
+      "draft": "第六章创作方案（以下尚未发生）：林澈先绕塔寻找侧门，撬开锈锁进入塔内，再循咳嗽声找到看守，把怀表放进他手里，请他摸清表盖后确认收下。",
+      "expectedChecks": [],
+      "reason": "明确标注提案，有进入、找到和确认收取的过程；新行动不因缺少来源而成为事实错误。"
+    },
+    {
+      "id": "selected-scene-drift",
+      "pair": "scene",
+      "question": "只扩写你刚才的第二个场景，接着原场景的动作写。",
+      "history": [{"role": "assistant", "content": "第一场：江序在铺内接到委托。第二场：深夜江序独自在钟楼齿轮箱前，刚发现一枚碎表壳。第三场：次日中午，他与馆长回到店铺讨论碎壳来历。"}],
+      "sources": [],
+      "draft": "正午，店铺的窗帘被风吹起。江序刚接到委托，馆长把完整怀表放在柜台上。",
+      "expectedChecks": ["continuity", "requirements"],
+      "reason": "指定第二场深夜钟楼发现碎壳，却改写成正午铺内初次接单。"
+    },
+    {
+      "id": "selected-scene-valid",
+      "pair": "scene",
+      "question": "只扩写你刚才的第二个场景，接着原场景的动作写。",
+      "history": [{"role": "assistant", "content": "第一场：江序在铺内接到委托。第二场：深夜江序独自在钟楼齿轮箱前，刚发现一枚碎表壳。第三场：次日中午，他与馆长回到店铺讨论碎壳来历。"}],
+      "sources": [],
+      "draft": "江序托住刚摸到的碎表壳，把灯挪近齿轮箱。楼外一片漆黑，表壳断口却映出一线铜光。他没有离开，弯下腰检查夹层。",
+      "expectedChecks": [],
+      "reason": "合理扩展已选场景，保留时间、地点、人物和正在进行的动作。"
+    },
+    {
+      "id": "deadline-order",
+      "pair": "deadline",
+      "question": "设计第六章方案，兑现第五夜第一下钟声响起前将怀表交给看守的承诺。",
+      "history": [],
+      "sources": [{"title": "第五章", "chapterNo": 5, "preview": "第五夜钟楼停摆，尚未响钟。林澈已进入塔内，找到看守，怀表仍在林澈手中。"}],
+      "draft": "方案：先修好钟并敲响第五夜第一下钟声，再把怀表交给身旁看守。这样必定赶在承诺期限内。",
+      "expectedChecks": ["causality", "requirements"],
+      "reason": "先触发约定截止事件，后归还，还声称按时；不需要推断未知绝对时刻。"
+    },
+    {
+      "id": "deadline-valid",
+      "pair": "deadline",
+      "question": "设计第六章方案，兑现第五夜第一下钟声响起前将怀表交给看守的承诺。",
+      "history": [],
+      "sources": [{"title": "第五章", "chapterNo": 5, "preview": "第五夜钟楼停摆，尚未响钟。林澈已进入塔内，找到看守，怀表仍在林澈手中。"}],
+      "draft": "方案：趁钟尚未响，把怀表放入身旁看守的手心，请他确认收下，再开始检修钟的停摆原因。归还安排在首次鸣响之前，不保证检修一定成功。",
+      "expectedChecks": [],
+      "reason": "按承诺条件安排先后，未将停摆解释为期限无限或修复必定成功。"
+    }
+  ]
+}

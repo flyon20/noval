@@ -3,7 +3,7 @@ skillId: editor-market-review
 version: 1.0.0
 intents: [market_scan, mixed_creation_research, revision_advice]
 appliesTo: [editor_market_review, editor_risk]
-allowedTools: [rank.lookup, rank.research_pack, knowledge.vector_search]
+requestedCapabilities: [market.read, book.read]
 requiredEvidence: [current_structured_rank_topn]
 triggers: [editor, market-review, commercialization]
 ---

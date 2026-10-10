@@ -87,7 +87,7 @@ const stats = computed(() => [
 .trend-summary__card--wide {
   grid-column: 1 / -1;
   background:
-    radial-gradient(circle at top right, rgba(92, 124, 250, 0.14), transparent 26%),
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary-soft) 68%, transparent), transparent 48%),
     linear-gradient(135deg, color-mix(in srgb, var(--color-surface) 94%, transparent), color-mix(in srgb, var(--color-bg-secondary) 88%, transparent));
 }
 

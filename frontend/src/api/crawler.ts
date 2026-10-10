@@ -17,6 +17,24 @@ import type {
   UserRankPreference,
 } from '@/types/crawler';
 
+export type RankRefreshRequest = Omit<CrawlerRankRequest, 'idempotencyKey'> & {
+  idempotencyKey: string;
+};
+
+const RANK_REFRESH_TIMEOUT_MS = 120000;
+const CHAPTER_FETCH_TIMEOUT_MS = 180000;
+
+export function createRankRefreshIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    try {
+      return `rank-refresh-${crypto.randomUUID()}`;
+    } catch {
+      // Fall through for non-secure test/webview contexts.
+    }
+  }
+  return `rank-refresh-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export const crawlerApi = {
   getRank(payload: CrawlerRankRequest) {
     return httpClient.post<ApiResponse<RankBookItem[]>>('/api/crawler/rank', payload);
@@ -34,8 +52,13 @@ export const crawlerApi = {
   savePreference(payload: { platform: Platform; channelCode: string; boardCode: string; rankFetchCount: RankFetchCount }) {
     return httpClient.post<ApiResponse<UserRankPreference>>('/api/crawler/preference', payload);
   },
-  refreshRankBoard(payload: CrawlerRankRequest) {
-    return httpClient.post<ApiResponse<RankRefreshResult>>('/api/crawler/rank/refresh', payload);
+  refreshRankBoard(payload: RankRefreshRequest) {
+    if (typeof payload.idempotencyKey !== 'string' || !payload.idempotencyKey.trim()) {
+      throw new TypeError('rank refresh idempotencyKey is required');
+    }
+    return httpClient.post<ApiResponse<RankRefreshResult>>('/api/crawler/rank/refresh', payload, {
+      timeout: RANK_REFRESH_TIMEOUT_MS,
+    });
   },
   getRankPage(params: RankPageRequest) {
     return httpClient.get<ApiResponse<RankPageResult>>('/api/crawler/rank/page', {
@@ -55,9 +78,16 @@ export const crawlerApi = {
     });
   },
   getChapters(payload: CrawlerChapterRequest) {
-    return httpClient.post<ApiResponse<ChapterItem[]>>('/api/crawler/chapters', payload);
+    return httpClient.post<ApiResponse<ChapterItem[]>>('/api/crawler/chapters', payload, {
+      timeout: CHAPTER_FETCH_TIMEOUT_MS,
+    });
+  },
+  getChapterStatus(payload: CrawlerChapterRequest) {
+    return httpClient.post<ApiResponse<ChapterItem[]>>('/api/crawler/chapters/status', payload);
   },
   refreshChapters(payload: CrawlerChapterRequest) {
-    return httpClient.post<ApiResponse<ChapterRefreshResult>>('/api/crawler/chapters/refresh', payload);
+    return httpClient.post<ApiResponse<ChapterRefreshResult>>('/api/crawler/chapters/refresh', payload, {
+      timeout: CHAPTER_FETCH_TIMEOUT_MS,
+    });
   },
 };

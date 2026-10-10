@@ -6,7 +6,7 @@ $DockerRoot = 'D:\ProTools\docker'
 $InstallRoot = 'C:\Program Files\Docker\Docker'
 $LogDir = Join-Path $DockerRoot 'logs'
 $VerifyLog = Join-Path $LogDir 'verify.log'
-$RepoRoot = 'D:\Git\agent\noval'
+$RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $DockerDesktopExe = Join-Path $InstallRoot 'Docker Desktop.exe'
 $DockerCli = Join-Path $InstallRoot 'resources\bin\docker.exe'
 

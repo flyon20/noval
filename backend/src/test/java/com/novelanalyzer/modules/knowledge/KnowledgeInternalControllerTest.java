@@ -1,10 +1,22 @@
 package com.novelanalyzer.modules.knowledge;
 
+import com.novelanalyzer.modules.config.dto.AiModelRegistryModelRequest;
+import com.novelanalyzer.modules.config.dto.AiModelRegistrySaveRequest;
+import com.novelanalyzer.modules.config.model.AiProviderCapabilities;
+import com.novelanalyzer.modules.config.model.AiProviderRoutingPolicy;
+import com.novelanalyzer.modules.config.service.SystemConfigService;
 import com.novelanalyzer.modules.crawler.client.PythonCrawlerClient;
+import com.novelanalyzer.modules.asyncjob.service.AsyncJobLockService;
+import com.novelanalyzer.modules.crawler.model.RankRefreshIdempotencyEntry;
+import com.novelanalyzer.modules.crawler.service.CrawlerCacheService;
+import com.novelanalyzer.modules.security.service.FastMcpSupervisorAttestationService;
 import com.novelanalyzer.modules.crawler.client.model.ExternalBookSearchItem;
 import com.novelanalyzer.modules.crawler.client.model.ExternalRankItem;
 import com.novelanalyzer.modules.knowledge.client.EmbeddingClient;
 import com.novelanalyzer.modules.knowledge.client.QdrantClient;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeAgentGovernanceService;
+import com.novelanalyzer.modules.knowledge.service.KnowledgeAgentProviderCircuitShadowService;
+import com.novelanalyzer.modules.knowledge.vo.AgentProviderCircuitStateVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,20 +30,30 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(
@@ -44,7 +66,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.data.redis.port=16379",
         "spring.data.redis.password=CHANGE_ME_WITH_A_STRONG_REDIS_PASSWORD",
         "spring.data.redis.database=15",
-        "spring.sql.init.mode=never",
+        "spring.sql.init.mode=always",
+        "spring.sql.init.schema-locations=classpath:sql/phase12-webnovel-agent-project-trace-h2.sql,classpath:sql/phase13-agent-memory-mcp-h2.sql,classpath:sql/phase23-skill-memory-lifecycle-h2.sql,classpath:sql/phase27-agent-skill-contract-h2.sql",
         "app.security.rate-limit-per-minute=100",
         "app.crawler.internal-api-key=crawler-internal-api-key-with-enough-length-1234567890",
         "app.ai.langgraph-worker.internal-api-key=langgraph-internal-key-with-enough-length-1234567890",
@@ -66,7 +89,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "classpath:sql/phase7-knowledge-schema-h2.sql",
         "classpath:sql/phase12-webnovel-agent-project-trace-h2.sql",
         "classpath:sql/phase13-agent-memory-mcp-h2.sql",
-        "classpath:sql/phase16-project-knowledge-rag-h2.sql"
+        "classpath:sql/phase18-agent-harness-conversation-rag-h2.sql",
+        "classpath:sql/phase27-agent-skill-contract-h2.sql",
+        "classpath:sql/phase16-project-knowledge-rag-h2.sql",
+        "classpath:sql/phase24-project-ingest-generation-h2.sql",
+        "classpath:sql/phase25-project-hybrid-retrieval-story-graph-h2.sql",
+        "classpath:sql/phase29-project-document-batch-h2.sql",
+        "classpath:sql/phase30-long-form-memory-foundation-h2.sql"
     },
     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD
 )
@@ -83,8 +112,17 @@ class KnowledgeInternalControllerTest {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private SystemConfigService systemConfigService;
+
+    @Autowired
+    private KnowledgeAgentGovernanceService knowledgeAgentGovernanceService;
+
     @MockBean
     private PythonCrawlerClient pythonCrawlerClient;
+
+    @MockBean
+    private KnowledgeAgentProviderCircuitShadowService providerCircuitShadowService;
 
     @MockBean
     private EmbeddingClient embeddingClient;
@@ -92,8 +130,43 @@ class KnowledgeInternalControllerTest {
     @MockBean
     private QdrantClient qdrantClient;
 
+    @MockBean
+    private FastMcpSupervisorAttestationService fastMcpSupervisorAttestationService;
+
+    @MockBean
+    private AsyncJobLockService asyncJobLockService;
+
+    @MockBean
+    private CrawlerCacheService crawlerCacheService;
+
+    private final Map<String, RankRefreshIdempotencyEntry> rankRefreshEntries = new ConcurrentHashMap<>();
+
     @BeforeEach
     void prepareState() {
+        rankRefreshEntries.clear();
+        when(asyncJobLockService.tryAcquireStrict(anyString(), anyString(), anyLong())).thenReturn(true);
+        when(asyncJobLockService.renewStrict(anyString(), anyString(), anyLong())).thenReturn(true);
+        when(crawlerCacheService.getStrict(anyString(), eq(RankRefreshIdempotencyEntry.class)))
+            .thenAnswer(invocation -> rankRefreshEntries.get(invocation.getArgument(0, String.class)));
+        when(crawlerCacheService.putIfAbsent(anyString(), any(), anyLong())).thenAnswer(invocation ->
+            rankRefreshEntries.putIfAbsent(
+                invocation.getArgument(0, String.class),
+                invocation.getArgument(1, RankRefreshIdempotencyEntry.class)
+            ) == null
+        );
+        when(crawlerCacheService.compareAndSet(anyString(), any(), any(), anyLong())).thenAnswer(invocation ->
+            rankRefreshEntries.replace(
+                invocation.getArgument(0, String.class),
+                invocation.getArgument(1, RankRefreshIdempotencyEntry.class),
+                invocation.getArgument(2, RankRefreshIdempotencyEntry.class)
+            )
+        );
+        when(crawlerCacheService.evictIfValue(anyString(), any())).thenAnswer(invocation ->
+            rankRefreshEntries.remove(
+                invocation.getArgument(0, String.class),
+                invocation.getArgument(1, RankRefreshIdempotencyEntry.class)
+            )
+        );
         try {
             RedisConnection connection = stringRedisTemplate.getConnectionFactory().getConnection();
             try {
@@ -112,33 +185,235 @@ class KnowledgeInternalControllerTest {
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.reasoningModeDefault").value("fast"))
-            .andExpect(jsonPath("$.maxParallelSpecialists").value(3))
-            .andExpect(jsonPath("$.maxEvidenceItems").value(30));
+            .andExpect(jsonPath("$.maxParallelSpecialists").value(1))
+            .andExpect(jsonPath("$.maxEvidenceItems").value(30))
+            .andExpect(jsonPath("$.maxTotalInputTokens").value(300000))
+            .andExpect(jsonPath("$.contextCompactionThresholdPercent").value(85))
+            .andExpect(jsonPath("$.runTokenBudgetPercent").value(150))
+            .andExpect(jsonPath("$.controlPlaneMode").doesNotExist());
 
         mockMvc.perform(get("/internal/knowledge/agent/experts")
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].expertName").value("market_scan"))
             .andExpect(jsonPath("$[0].enabled").value(true))
-            .andExpect(jsonPath("$[0].allowedTools[0]").value("rank.lookup"));
+            .andExpect(jsonPath("$[0].requestedToolCapabilities[0]").value("market.read"))
+            .andExpect(jsonPath("$[0].allowedTools").doesNotExist());
+    }
+
+    @Test
+    void shouldResolveProviderRuntimeForInternalWorkerWithoutCachingIt() throws Exception {
+        AiModelRegistryModelRequest model = new AiModelRegistryModelRequest();
+        model.setModelKey("internal-provider");
+        model.setProviderType("openai-compatible");
+        model.setProtocol("responses");
+        model.setProviderCapabilities(providerCapabilities());
+        model.setModelName("internal-model");
+        model.setBaseUrl("https://internal-provider.example/v1");
+        model.setApiKey("internal-runtime-key-never-persist");
+        model.setEnabled(true);
+        model.setIsDefault(true);
+        AiModelRegistrySaveRequest saveRequest = new AiModelRegistrySaveRequest();
+        saveRequest.setDefaultModelKey("internal-provider");
+        saveRequest.setModels(List.of(model));
+        systemConfigService.saveModelRegistry(saveRequest);
+        String profileVersion = knowledgeAgentGovernanceService.runtimeConfig()
+            .getProviderProfiles().get(0).getProfileVersion();
+
+        mockMvc.perform(post("/internal/knowledge/agent/provider-dispatch/resolve")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"profileKey":"internal-provider","profileVersion":"%s"}
+                    """.formatted(profileVersion)))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Cache-Control", "no-store"))
+            .andExpect(jsonPath("$.profileKey").value("internal-provider"))
+            .andExpect(jsonPath("$.profileVersion").value(profileVersion))
+            .andExpect(jsonPath("$.endpoint").value("https://internal-provider.example/v1"))
+            .andExpect(jsonPath("$.model").value("internal-model"))
+            .andExpect(jsonPath("$.protocol").value("responses"))
+            .andExpect(jsonPath("$.providerCapabilities.schemaVersion").value(1))
+            .andExpect(jsonPath("$.providerCapabilities.supportsStreaming").value(true))
+            .andExpect(jsonPath("$.providerCapabilities.supportsTools").value(true))
+            .andExpect(jsonPath("$.providerCapabilities.supportsJsonObject").value(true))
+            .andExpect(jsonPath("$.providerCapabilities.supportsReasoning").value(true))
+            .andExpect(jsonPath("$.providerCapabilities.reportsUsage").value(true))
+            .andExpect(jsonPath("$.providerCapabilities.reportsCacheUsage").value(true))
+            .andExpect(jsonPath("$.apiKey").value("internal-runtime-key-never-persist"));
+
+        mockMvc.perform(get("/internal/knowledge/agent/runtime-config")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.providerProfiles[0].providerCapabilities.schemaVersion").value(1))
+            .andExpect(jsonPath("$.providerProfiles[0].providerCapabilities.supportsStreaming").value(true))
+            .andExpect(jsonPath("$.providerProfiles[0].providerCapabilities.supportsTools").value(true))
+            .andExpect(jsonPath("$.providerProfiles[0].providerCapabilities.supportsJsonObject").value(true))
+            .andExpect(jsonPath("$.providerProfiles[0].providerCapabilities.supportsReasoning").value(true))
+            .andExpect(jsonPath("$.providerProfiles[0].providerCapabilities.reportsUsage").value(true))
+            .andExpect(jsonPath("$.providerProfiles[0].providerCapabilities.reportsCacheUsage").value(true))
+            .andExpect(jsonPath("$.providerProfiles[0].apiKey").doesNotExist())
+            .andExpect(jsonPath("$.providerProfiles[0].apiKeyMasked").doesNotExist());
+    }
+
+    @Test
+    void shouldRejectStaleProviderRuntimeVersionWithoutReturningCredential() throws Exception {
+        AiModelRegistryModelRequest model = new AiModelRegistryModelRequest();
+        model.setModelKey("stale-provider");
+        model.setProviderType("openai-compatible");
+        model.setProtocol("responses");
+        model.setModelName("stale-model");
+        model.setBaseUrl("https://stale-provider.example/v1");
+        model.setApiKey("stale-provider-key-never-return");
+        model.setEnabled(true);
+        model.setIsDefault(true);
+        AiModelRegistrySaveRequest saveRequest = new AiModelRegistrySaveRequest();
+        saveRequest.setDefaultModelKey("stale-provider");
+        saveRequest.setModels(List.of(model));
+        systemConfigService.saveModelRegistry(saveRequest);
+
+        mockMvc.perform(post("/internal/knowledge/agent/provider-dispatch/resolve")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"profileKey":"stale-provider","profileVersion":"0000000000000000000000000000000000000000000000000000000000000000"}
+                    """))
+            .andExpect(status().isConflict())
+            .andExpect(header().string("Cache-Control", "no-store"))
+            .andExpect(jsonPath("$.data.apiKey").doesNotExist())
+            .andExpect(jsonPath("$.apiKey").doesNotExist())
+            .andExpect(content().string(not(containsString("stale-provider-key-never-return"))));
+    }
+
+    @Test
+    void shouldRecordSanitizedProviderRoutingOutcomeForInternalWorker() throws Exception {
+        AiModelRegistryModelRequest primary = new AiModelRegistryModelRequest();
+        primary.setModelKey("routing-primary");
+        primary.setProviderType("openai-compatible");
+        primary.setProtocol("responses");
+        primary.setProviderCapabilities(providerCapabilities());
+        primary.setModelName("routing-model");
+        primary.setBaseUrl("https://routing-primary.example/v1");
+        primary.setApiKey("routing-primary-key-never-return");
+        primary.setEnabled(true);
+        primary.setIsDefault(true);
+        AiModelRegistryModelRequest standby = new AiModelRegistryModelRequest();
+        standby.setModelKey("routing-standby");
+        standby.setProviderType("openai-compatible");
+        standby.setProtocol("responses");
+        standby.setProviderCapabilities(providerCapabilities());
+        standby.setModelName("routing-standby-model");
+        standby.setBaseUrl("https://routing-standby.example/v1");
+        standby.setApiKey("routing-standby-key-never-return");
+        standby.setEnabled(true);
+        standby.setIsDefault(false);
+        AiProviderRoutingPolicy policy = new AiProviderRoutingPolicy();
+        policy.setSchemaVersion(1);
+        policy.setEnabled(true);
+        policy.setOrderedProfileKeys(List.of("routing-primary", "routing-standby"));
+        policy.setMaxFailovers(1);
+        policy.setCooldownSeconds(90);
+        AiModelRegistrySaveRequest saveRequest = new AiModelRegistrySaveRequest();
+        saveRequest.setDefaultModelKey("routing-primary");
+        saveRequest.setProviderRoutingPolicy(policy);
+        saveRequest.setModels(List.of(primary, standby));
+        systemConfigService.saveModelRegistry(saveRequest);
+        String profileVersion = knowledgeAgentGovernanceService.runtimeConfig()
+            .getProviderProfiles().stream()
+            .filter(profile -> "routing-primary".equals(profile.getProfileKey()))
+            .findFirst()
+            .orElseThrow()
+            .getProfileVersion();
+        AgentProviderCircuitStateVO open = new AgentProviderCircuitStateVO();
+        open.setProfileKey("routing-primary");
+        open.setProfileVersion(profileVersion);
+        open.setState("OPEN");
+        open.setFailureCount(1L);
+        when(providerCircuitShadowService.recordTransientFailure(
+            "routing-primary",
+            profileVersion,
+            90
+        )).thenReturn(open);
+
+        mockMvc.perform(post("/internal/knowledge/agent/provider-routing/outcome")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"profileKey":"routing-primary","profileVersion":"%s","outcome":"TRANSIENT_FAILURE","failureClass":"HTTP_503","switched":false}
+                    """.formatted(profileVersion)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.profileKey").value("routing-primary"))
+            .andExpect(jsonPath("$.profileVersion").value(profileVersion))
+            .andExpect(jsonPath("$.state").value("OPEN"))
+            .andExpect(jsonPath("$.failureCount").value(1))
+            .andExpect(content().string(not(containsString("key-never-return"))));
+        verify(providerCircuitShadowService).recordTransientFailure(
+            "routing-primary",
+            profileVersion,
+            90
+        );
+
+        mockMvc.perform(post("/internal/knowledge/agent/provider-routing/outcome")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"profileKey":"routing-primary","profileVersion":"%s","outcome":"TRANSIENT_FAILURE","failureClass":"HTTP_502","switched":false}
+                    """.formatted(profileVersion)))
+            .andExpect(status().isBadRequest());
+    }
+
+    private static AiProviderCapabilities providerCapabilities() {
+        AiProviderCapabilities capabilities = new AiProviderCapabilities();
+        capabilities.setSchemaVersion(1);
+        capabilities.setSupportsStreaming(true);
+        capabilities.setSupportsTools(true);
+        capabilities.setSupportsJsonObject(true);
+        capabilities.setSupportsReasoning(true);
+        capabilities.setReportsUsage(true);
+        capabilities.setReportsCacheUsage(true);
+        return capabilities;
     }
 
     @Test
     void shouldExposePublishedRuntimeSkillsFromBackendDbForInternalWorkerCaller() throws Exception {
         jdbcTemplate.update("""
-                insert into ai_runtime_skill(candidate_id, skill_id, version, title, content, status,
-                    intents_json, triggers_json, allowed_tools_json, required_evidence_json)
-                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                insert into ai_skill_candidate(id, skill_id, title, description, content, status, eval_status,
+                    eval_result_json, lifecycle_status, version, content_hash,
+                    requested_capabilities_json, skill_metadata_json)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            11L,
+            "webnovel-market-scan",
+            "Market Scan",
+            "Use current market evidence before synthesis.",
+            "Use rank.lookup before synthesis.",
+            "ACTIVE",
+            "PASSED",
+            "{\"intents\":[\"market_scan\"],\"triggers\":[\"rank\",\"trend\"],\"requiredEvidence\":[\"fresh_rank\"]}",
+            "ACTIVE",
+            "2026.07.02",
+            "31429b440507ce487f45223b2cd53c34f88bd888d98086c6ac6eb23f60638bb8",
+            "[\"market.read\"]",
+            "{\"legacyFormat\":false}"
+        );
+        jdbcTemplate.update("""
+                insert into ai_runtime_skill(candidate_id, skill_id, version, title, description, content,
+                    content_hash, status, intents_json, triggers_json, requested_capabilities_json,
+                    skill_metadata_json, required_evidence_json)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             11L,
             "webnovel-market-scan",
             "2026.07.02",
             "Market Scan",
+            "Use current market evidence before synthesis.",
             "Use rank.lookup before synthesis.",
+            "31429b440507ce487f45223b2cd53c34f88bd888d98086c6ac6eb23f60638bb8",
             "ACTIVE",
             "[\"market_scan\"]",
             "[\"rank\",\"trend\"]",
-            "[\"rank.lookup\",\"rank.research_pack\"]",
+            "[\"market.read\"]",
+            "{\"legacyFormat\":false}",
             "[\"fresh_rank\"]"
         );
         jdbcTemplate.update("""
@@ -160,8 +435,10 @@ class KnowledgeInternalControllerTest {
             .andExpect(jsonPath("$[0].skillId").value("webnovel-market-scan"))
             .andExpect(jsonPath("$[0].version").value("2026.07.02"))
             .andExpect(jsonPath("$[0].content").value(org.hamcrest.Matchers.containsString("rank.lookup")))
+            .andExpect(jsonPath("$[0].description").value("Use current market evidence before synthesis."))
             .andExpect(jsonPath("$[0].intents[0]").value("market_scan"))
-            .andExpect(jsonPath("$[0].allowedTools[0]").value("rank.lookup"))
+            .andExpect(jsonPath("$[0].requestedCapabilities[0]").value("market.read"))
+            .andExpect(jsonPath("$[0].skillMetadata.legacyFormat").value(false))
             .andExpect(jsonPath("$[0].requiredEvidence[0]").value("fresh_rank"))
             .andExpect(jsonPath("$[0].source").value("backend"));
     }
@@ -259,7 +536,7 @@ class KnowledgeInternalControllerTest {
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"query":"hero goal","bookId":1,"platform":"fanqie","limit":3}
+                    {"userId":1,"query":"hero goal","bookId":1,"platform":"fanqie","limit":3}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.length()").value(1))
@@ -316,12 +593,13 @@ class KnowledgeInternalControllerTest {
         insertChapter(301L, 1, "Opening", "Opening scene content with long protagonist setup and market hook.");
         insertChapter(301L, 2, "Conflict", "Second chapter content should be available when chapter limit allows it.");
         insertAnalysisResult(301L, "deconstruct", "Latest analysis content with sell point and pacing notes.");
+        insertAnalysisResult(2L, 301L, "deconstruct", "Other tenant private analysis content.");
 
         mockMvc.perform(post("/internal/knowledge/research-pack/book")
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"platform":"fanqie","bookId":301,"bookName":"Research Book","chapterLimit":2,"analysisLimit":1}
+                    {"userId":1,"platform":"fanqie","bookId":301,"bookName":"Research Book","chapterLimit":2,"analysisLimit":5}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.book.bookId").value(301))
@@ -352,7 +630,7 @@ class KnowledgeInternalControllerTest {
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","category":"Urban Brain","limit":2,"chapterLimitPerBook":1}
+                    {"userId":1,"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","category":"Urban Brain","limit":2,"chapterLimitPerBook":1}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.ranks.length()").value(2))
@@ -380,7 +658,7 @@ class KnowledgeInternalControllerTest {
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","rankNo":1,"freshness":"time_window","allowHistorical":true,"timeWindowDays":30,"limit":10,"chapterLimitPerBook":1}
+                    {"userId":1,"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","rankNo":1,"freshness":"time_window","allowHistorical":true,"timeWindowDays":30,"limit":10,"chapterLimitPerBook":1}
                     """))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.ranks.length()").value(2))
@@ -395,30 +673,38 @@ class KnowledgeInternalControllerTest {
         when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 10, 20))
             .thenReturn(List.of(rankItem(1, "Fresh Agent Rank", "Agent Author", "https://fanqienovel.com/page/agent-rank")));
 
-        mockMvc.perform(post("/internal/knowledge/rank/refresh")
+        MvcResult refresh = mockMvc.perform(post("/internal/knowledge/rank/refresh")
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {"platform":"fanqie","channelCode":"male-new","category":"都市脑洞","rankFetchCount":10,"refreshMode":"FORCE"}
                     """))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+        mockMvc.perform(asyncDispatch(refresh))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.channelCode").value("male-new"))
             .andExpect(jsonPath("$.boardCode").value("urban-brain"))
             .andExpect(jsonPath("$.total").value(1))
             .andExpect(jsonPath("$.reused").value(false))
             .andExpect(jsonPath("$.refreshLimited").value(false));
+
+        verify(fastMcpSupervisorAttestationService).assertAuthorizedForceRefresh(any());
     }
 
     @Test
     void shouldDefaultInternalRankRefreshToAutoAndReuseFreshSnapshot() throws Exception {
         insertRankBoardWithSnapshot("fanqie", "male-new", "urban-brain", "都市脑洞", "男频新书榜", 31L);
 
-        mockMvc.perform(post("/internal/knowledge/rank/refresh")
+        MvcResult refresh = mockMvc.perform(post("/internal/knowledge/rank/refresh")
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {"platform":"fanqie","channelCode":"male-new","category":"都市脑洞","rankFetchCount":10}
                     """))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+        mockMvc.perform(asyncDispatch(refresh))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.channelCode").value("male-new"))
             .andExpect(jsonPath("$.boardCode").value("urban-brain"))
@@ -427,6 +713,61 @@ class KnowledgeInternalControllerTest {
             .andExpect(jsonPath("$.refreshLimited").value(false));
 
         verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-new", "urban-brain", 10, 20);
+    }
+
+    @Test
+    void shouldReportInternalRankRefreshInProgressAsConflict() throws Exception {
+        insertRankBoardWithSnapshot("fanqie", "male-new", "urban-brain", "都市脑洞", "男频新书榜", 33L);
+        when(asyncJobLockService.tryAcquireStrict(anyString(), anyString(), anyLong())).thenReturn(false);
+
+        MvcResult refresh = mockMvc.perform(post("/internal/knowledge/rank/refresh")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":900,"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","rankFetchCount":10,"refreshMode":"FORCE","idempotencyKey":"rank-refresh-conflict"}
+                    """))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+
+        mockMvc.perform(asyncDispatch(refresh))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value(409))
+            .andExpect(jsonPath("$.message").value("RANK_REFRESH_IN_PROGRESS"));
+
+        verify(fastMcpSupervisorAttestationService).assertAuthorizedForceRefresh(any());
+        verify(pythonCrawlerClient, times(0)).fetchRank("fanqie", "male-new", "urban-brain", 10, 20);
+    }
+
+    @Test
+    void shouldReuseInternalRankRefreshByPersistentIdempotencyKey() throws Exception {
+        insertRankBoardWithSnapshot("fanqie", "male-new", "urban-brain", "urban-brain", "male-new-books", 32L);
+        when(pythonCrawlerClient.fetchRank("fanqie", "male-new", "urban-brain", 10, 20))
+            .thenReturn(List.of(rankItem(1, "Idempotent Rank", "Agent Author", "https://fanqienovel.com/page/idempotent-rank")));
+
+        String payload = """
+            {"userId":7,"projectId":900,"platform":"fanqie","channelCode":"male-new","boardCode":"urban-brain","rankFetchCount":10,"refreshMode":"FORCE","idempotencyKey":"rank-refresh-once"}
+            """;
+        MvcResult firstRefresh = mockMvc.perform(post("/internal/knowledge/rank/refresh")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(payload))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+        mockMvc.perform(asyncDispatch(firstRefresh))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(1));
+
+        MvcResult secondRefresh = mockMvc.perform(post("/internal/knowledge/rank/refresh")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(payload))
+            .andExpect(request().asyncStarted())
+            .andReturn();
+        mockMvc.perform(asyncDispatch(secondRefresh))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(1));
+
+        verify(pythonCrawlerClient, times(1)).fetchRank("fanqie", "male-new", "urban-brain", 10, 20);
     }
 
     @Test
@@ -457,28 +798,53 @@ class KnowledgeInternalControllerTest {
     }
 
     @Test
-    void shouldSearchProjectChaptersForInternalWorkerCaller() throws Exception {
-        insertProject(910L, 7L, "Project Knowledge Novel", "ACTIVE");
-        insertProjectWork(920L, 910L, 7L, "诸天外包特效师");
-        insertProjectChapter(930L, 910L, 920L, 7L, 12, "御剑交付", "洛风用真正的御剑轨迹完成仙侠特效。", "hash-a");
-        insertProjectChapter(931L, 910L, 920L, 7L, 13, "魔法交付", "魔法导师完成火球术粒子效果。", "hash-b");
-        insertProject(911L, 8L, "Other Novel", "ACTIVE");
-        insertProjectWork(921L, 911L, 8L, "Other Work");
-        insertProjectChapter(932L, 911L, 921L, 8L, 1, "Wrong User", "御剑线索不该被查到。", "hash-c");
-
+    void shouldRemoveLegacyProjectSearchRoutes() throws Exception {
+        String request = """
+            {"userId":7,"projectId":910,"workId":920,"query":"signal","limit":5}
+            """;
         mockMvc.perform(post("/internal/knowledge/projects/chapters/search")
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
+                .content(request))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(post("/internal/knowledge/projects/chunks/search")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(request))
+            .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldAcceptCompleteTypedProjectRetrievalPlan() throws Exception {
+        insertProject(910L, 7L, "Project Knowledge Novel", "ACTIVE");
+        insertProjectWork(920L, 910L, 7L, "Project Retrieval Work");
+
+        mockMvc.perform(post("/internal/knowledge/projects/retrieval")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                    {"userId":7,"projectId":910,"workId":920,"query":"御剑","limit":5}
+                    {
+                      "userId":7,"projectId":910,"workId":920,"query":"signal",
+                      "intent":"continuity_check","entities":["Lin Zhou"],
+                      "channels":["structured"],"filters":{"chapterFrom":2,"chapterTo":7},
+                      "weights":{"structured":0.75},"limit":5,"deep":true,
+                      "graphBudgetMillis":123,"timeoutMillis":2000,"rerankPolicy":"intent_aware"
+                    }
                     """))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(1))
-            .andExpect(jsonPath("$[0].projectId").value(910))
-            .andExpect(jsonPath("$[0].workId").value(920))
-            .andExpect(jsonPath("$[0].chapterNo").value(12))
-            .andExpect(jsonPath("$[0].title").value("御剑交付"))
-            .andExpect(jsonPath("$[0].content").value("洛风用真正的御剑轨迹完成仙侠特效。"));
+            .andExpect(jsonPath("$.partial").value(true))
+            .andExpect(jsonPath("$.gaps[0]").value("chapter_coverage_incomplete"))
+            .andExpect(jsonPath("$.diagnostics.coveragePolicy").value("chapter_balanced"))
+            .andExpect(jsonPath("$.diagnostics.requestedChapterCount").value(6))
+            .andExpect(jsonPath("$.diagnostics.coveredChapters").isEmpty())
+            .andExpect(jsonPath("$.diagnostics.missingChapters.length()").value(6))
+            .andExpect(jsonPath("$.diagnostics.missingChapters[0]").value(2))
+            .andExpect(jsonPath("$.diagnostics.missingChapters[5]").value(7))
+            .andExpect(jsonPath("$.diagnostics.requestedChannels[0]").value("structured"))
+            .andExpect(jsonPath("$.diagnostics.weights.structured").value(0.75))
+            .andExpect(jsonPath("$.diagnostics.graphBudgetMillis").value(123))
+            .andExpect(jsonPath("$.diagnostics.timeoutMillis").value(2000))
+            .andExpect(jsonPath("$.diagnostics.rerankPolicy").value("intent_aware"));
     }
 
     @Test
@@ -516,29 +882,52 @@ class KnowledgeInternalControllerTest {
         insertProject(912L, 7L, "Structured Project", "ACTIVE");
         insertProjectWork(922L, 912L, 7L, "诸天外包特效师");
         jdbcTemplate.update("""
-                insert into ai_project_foreshadowing(foreshadowing_id, user_id, project_id, work_id, title, content,
-                    status, planted_chapter_no, importance, confidence)
+                insert into ai_project_chapter(chapter_id, user_id, project_id, work_id, chapter_no, title,
+                    content, content_hash, word_count, source_type, version, status)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            944L, 7L, 912L, 922L, 30, "后台信号", "结构化知识测试章节", "structured-chapter-hash",
+            10, "upload", 1, "ACTIVE");
+        jdbcTemplate.update("""
+                insert into ai_project_ingest_generation(generation_id, user_id, project_id, work_id, chapter_id,
+                    chapter_no, chapter_version, content_hash, parser_version, status)
                 values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-            940L, 7L, 912L, 922L, "月球背面管理员信号", "第30章出现一次异常后台提示。", "OPEN", 30, "HIGH", 0.92);
+            945L, 7L, 912L, 922L, 944L, 30, 1, "structured-chapter-hash", "test", "ACTIVE");
         jdbcTemplate.update("""
-                insert into ai_project_timeline_event(event_id, user_id, project_id, work_id, chapter_no,
-                    event_order, title, summary, confidence)
-                values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                insert into ai_project_chapter_head(user_id, project_id, work_id, chapter_no,
+                    active_chapter_id, active_generation_id)
+                values(?, ?, ?, ?, ?, ?)
                 """,
-            941L, 7L, 912L, 922L, 30, 1, "后台信号出现", "系统提示有新管理员接入。", 0.91);
+            7L, 912L, 922L, 30, 944L, 945L);
+        jdbcTemplate.update("""
+                insert into ai_project_foreshadowing(foreshadowing_id, user_id, project_id, work_id,
+                    generation_id, chapter_version, title, content, status, planted_chapter_no, importance, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            940L, 7L, 912L, 922L, 945L, 1, "月球背面管理员信号", "第30章出现一次异常后台提示。",
+            "OPEN", 30, "HIGH", 0.92);
+        jdbcTemplate.update("""
+                insert into ai_project_timeline_event(event_id, user_id, project_id, work_id, chapter_id,
+                    generation_id, chapter_version, status, chapter_no, event_order, title, summary, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            941L, 7L, 912L, 922L, 944L, 945L, 1, "ACTIVE", 30, 1,
+            "后台信号出现", "系统提示有新管理员接入。", 0.91);
         jdbcTemplate.update("""
                 insert into ai_project_character_state(state_id, user_id, project_id, work_id, character_name,
-                    chapter_no, state_summary, motivation, confidence)
-                values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    chapter_id, generation_id, chapter_version, status, chapter_no, state_summary, motivation, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-            942L, 7L, 912L, 922L, "林舟", 30, "开始怀疑平台不是单机系统。", "保护工作室", 0.9);
+            942L, 7L, 912L, 922L, "林舟", 944L, 945L, 1, "ACTIVE", 30,
+            "开始怀疑平台不是单机系统。", "保护工作室", 0.9);
         jdbcTemplate.update("""
-                insert into ai_project_world_rule(rule_id, user_id, project_id, work_id, rule_type, title,
-                    content, first_chapter_no, confidence)
-                values(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                insert into ai_project_world_rule(rule_id, user_id, project_id, work_id, generation_id,
+                    chapter_version, status_proj, rule_type, title, content, first_chapter_no, confidence)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-            943L, 7L, 912L, 922L, "system", "三端一体结算规则", "接收端、执行端、结算端必须闭环。", 1, 0.95);
+            943L, 7L, 912L, 922L, 945L, 1, "ACTIVE", "system", "三端一体结算规则",
+            "接收端、执行端、结算端必须闭环。", 1, 0.95);
 
         mockMvc.perform(post("/internal/knowledge/projects/foreshadowings/list")
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
@@ -549,6 +938,22 @@ class KnowledgeInternalControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].title").value("月球背面管理员信号"))
             .andExpect(jsonPath("$[0].status").value("OPEN"));
+
+        mockMvc.perform(post("/internal/knowledge/projects/foreshadowings/aggregate")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"userId":7,"projectId":912,"workId":922}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.metric").value("foreshadowing_count"))
+            .andExpect(jsonPath("$.count").value(1))
+            .andExpect(jsonPath("$.breakdown.OPEN").value(1))
+            .andExpect(jsonPath("$.complete").value(true))
+            .andExpect(jsonPath("$.recognizedRecordsOnly").value(true))
+            .andExpect(jsonPath("$.generationFingerprint").isString())
+            .andExpect(jsonPath("$.activeChapterGenerationCount").value(1))
+            .andExpect(jsonPath("$.activeDocumentGenerationCount").value(0));
 
         mockMvc.perform(post("/internal/knowledge/projects/timeline/lookup")
                 .header("X-Internal-Service-Token", INTERNAL_TOKEN)
@@ -650,6 +1055,39 @@ class KnowledgeInternalControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.projectId").value(900))
             .andExpect(jsonPath("$.summary").value("User is building an urban brain-hole project."));
+    }
+
+    @Test
+    void shouldAppendAndQuerySemanticCheckpointsForInternalWorkerCaller() throws Exception {
+        jdbcTemplate.update(
+            "insert into ai_chat_run(run_id, user_id, status, conversation_id, deleted, next_sequence_no) " +
+                "values(?, ?, 'RUNNING', ?, 0, 0)",
+            "run-semantic-http",
+            7L,
+            "conv-semantic-http"
+        );
+
+        mockMvc.perform(post("/internal/knowledge/chat-runs/semantic-checkpoints")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"runId":"run-semantic-http","userId":7,"eventType":"TOOL_PREPARED","eventIdempotencyKey":"harness:tool_prepared:call-1","payload":{"semanticKey":"call-1","toolName":"rank.refresh"}}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.runId").value("run-semantic-http"))
+            .andExpect(jsonPath("$.sequenceNo").value(1))
+            .andExpect(jsonPath("$.eventType").value("TOOL_PREPARED"));
+
+        mockMvc.perform(post("/internal/knowledge/chat-runs/semantic-checkpoints/query")
+                .header("X-Internal-Service-Token", INTERNAL_TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"runId":"run-semantic-http","userId":7,"afterSequence":0,"limit":10}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].eventType").value("TOOL_PREPARED"))
+            .andExpect(jsonPath("$[0].payload").value(org.hamcrest.Matchers.containsString("\"semanticKey\":\"call-1\"")));
     }
 
     private void insertBook(String platform,
@@ -798,13 +1236,17 @@ class KnowledgeInternalControllerTest {
     }
 
     private void insertAnalysisResult(long bookId, String analysisType, String content) {
+        insertAnalysisResult(1L, bookId, analysisType, content);
+    }
+
+    private void insertAnalysisResult(long userId, long bookId, String analysisType, String content) {
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update(
             """
                 INSERT INTO analysis_result(user_id, platform, book_id, analysis_type, chapter_count, model_name, result_content, result_json, token_used, cost_time, create_time, update_time, deleted)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-            1L,
+            userId,
             "fanqie",
             bookId,
             analysisType,

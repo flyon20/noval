@@ -19,6 +19,7 @@ import com.novelanalyzer.modules.crawler.dto.UserRankPreferenceRequest;
 import com.novelanalyzer.modules.crawler.model.CrawlBookEntity;
 import com.novelanalyzer.modules.crawler.model.CrawlRankEntity;
 import com.novelanalyzer.modules.crawler.model.RankBoardEntity;
+import com.novelanalyzer.modules.crawler.model.RankRefreshIdempotencyEntry;
 import com.novelanalyzer.modules.crawler.model.RankSnapshotEntity;
 import com.novelanalyzer.modules.crawler.repository.CrawlerRepository;
 import com.novelanalyzer.modules.config.service.SystemConfigService;
@@ -35,14 +36,28 @@ import com.novelanalyzer.modules.crawler.vo.RankRefreshResultVO;
 import com.novelanalyzer.modules.crawler.vo.UserRankPreferenceVO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -51,6 +66,12 @@ public class CrawlerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CrawlerService.class);
     private static final Pattern CHAPTER_TITLE_PATTERN = Pattern.compile("^第\\s*(\\d+)章");
+    private static final Pattern LEGACY_RANK_SLUG_PATTERN = Pattern.compile("^(?:/?rank/)?([01])_([12])_(\\d+)$");
+    private static final Map<String, LegacyRankBoardSelection> LEGACY_RANK_BOARD_ALIASES = Map.of(
+        "male-hot-a", new LegacyRankBoardSelection("male-read", "1141"),
+        "male-hot-b", new LegacyRankBoardSelection("male-read", "1140"),
+        "male-new-a", new LegacyRankBoardSelection("male-new", "1141")
+    );
     private static final long RANK_TTL_SECONDS = 3L * 24 * 3600;
     private static final long BOOK_TTL_SECONDS = 7L * 24 * 3600;
     private static final long CHAPTER_TTL_SECONDS = 30L * 24 * 3600;
@@ -62,51 +83,183 @@ public class CrawlerService {
     private static final int MAX_RANK_FETCH_COUNT = 100;
     private static final int MAX_RANK_PAGE_SIZE = 100;
     private static final long RANK_REFRESH_LOCK_TTL_SECONDS = 120L;
+    private static final long RANK_REFRESH_IDEMPOTENCY_TTL_SECONDS = 24L * 3600;
+    private static final long RANK_REFRESH_IDEMPOTENCY_IN_PROGRESS_TTL_SECONDS = 10L * 60;
+    public static final String RANK_REFRESH_IN_PROGRESS = "RANK_REFRESH_IN_PROGRESS";
     private static final long CHAPTER_FETCH_LOCK_TTL_SECONDS = 120L;
-    private static final int LOCK_RETRY_COUNT = 5;
-    private static final long LOCK_WAIT_MILLIS = 200L;
+    public static final String CHAPTER_FETCH_IN_PROGRESS = "CHAPTER_FETCH_IN_PROGRESS";
+    private static final ScheduledExecutorService CRAWLER_LOCK_RENEWER = Executors.newSingleThreadScheduledExecutor(task -> {
+        Thread thread = new Thread(task, "crawler-lock-renewer");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private final PythonCrawlerClient pythonCrawlerClient;
     private final CrawlerRepository crawlerRepository;
+    private final CrawlerRankPersistenceService crawlerRankPersistenceService;
     private final CrawlerCacheService crawlerCacheService;
     private final CrawlerRefreshPolicyService crawlerRefreshPolicyService;
     private final SystemConfigService systemConfigService;
     private final AsyncJobLockService asyncJobLockService;
+    private final CrawlerChapterPersistenceService crawlerChapterPersistenceService;
+    private final CrawlerFetchGuard crawlerFetchGuard;
+
+    public static final class RankRefreshInProgressException extends BusinessException {
+
+        public RankRefreshInProgressException() {
+            super(ResultCode.CONFLICT, RANK_REFRESH_IN_PROGRESS);
+        }
+    }
+
+    public static final class ChapterFetchInProgressException extends BusinessException {
+
+        public ChapterFetchInProgressException() {
+            super(ResultCode.CONFLICT, CHAPTER_FETCH_IN_PROGRESS);
+        }
+    }
 
     public CrawlerService(PythonCrawlerClient pythonCrawlerClient,
                           CrawlerRepository crawlerRepository,
+                          CrawlerRankPersistenceService crawlerRankPersistenceService,
                           CrawlerCacheService crawlerCacheService,
                           CrawlerRefreshPolicyService crawlerRefreshPolicyService,
                           SystemConfigService systemConfigService,
                           AsyncJobLockService asyncJobLockService) {
+        this(
+            pythonCrawlerClient,
+            crawlerRepository,
+            crawlerRankPersistenceService,
+            crawlerCacheService,
+            crawlerRefreshPolicyService,
+            systemConfigService,
+            asyncJobLockService,
+            new CrawlerChapterPersistenceService(crawlerRepository),
+            new CrawlerFetchGuard(1)
+        );
+    }
+
+    public CrawlerService(PythonCrawlerClient pythonCrawlerClient,
+                          CrawlerRepository crawlerRepository,
+                          CrawlerRankPersistenceService crawlerRankPersistenceService,
+                          CrawlerCacheService crawlerCacheService,
+                          CrawlerRefreshPolicyService crawlerRefreshPolicyService,
+                          SystemConfigService systemConfigService,
+                          AsyncJobLockService asyncJobLockService,
+                          CrawlerChapterPersistenceService crawlerChapterPersistenceService) {
+        this(
+            pythonCrawlerClient,
+            crawlerRepository,
+            crawlerRankPersistenceService,
+            crawlerCacheService,
+            crawlerRefreshPolicyService,
+            systemConfigService,
+            asyncJobLockService,
+            crawlerChapterPersistenceService,
+            new CrawlerFetchGuard(1)
+        );
+    }
+
+    @Autowired
+    public CrawlerService(PythonCrawlerClient pythonCrawlerClient,
+                          CrawlerRepository crawlerRepository,
+                          CrawlerRankPersistenceService crawlerRankPersistenceService,
+                          CrawlerCacheService crawlerCacheService,
+                          CrawlerRefreshPolicyService crawlerRefreshPolicyService,
+                          SystemConfigService systemConfigService,
+                          AsyncJobLockService asyncJobLockService,
+                          CrawlerChapterPersistenceService crawlerChapterPersistenceService,
+                          CrawlerFetchGuard crawlerFetchGuard) {
         this.pythonCrawlerClient = pythonCrawlerClient;
         this.crawlerRepository = crawlerRepository;
+        this.crawlerRankPersistenceService = crawlerRankPersistenceService;
         this.crawlerCacheService = crawlerCacheService;
         this.crawlerRefreshPolicyService = crawlerRefreshPolicyService;
         this.systemConfigService = systemConfigService;
         this.asyncJobLockService = asyncJobLockService;
+        this.crawlerChapterPersistenceService = crawlerChapterPersistenceService;
+        this.crawlerFetchGuard = crawlerFetchGuard;
     }
 
     public List<RankBookItemVO> getRank(CrawlerRankRequest request) {
-        if (!request.hasLegacyCategory()) {
+        if (request == null || (!request.hasLegacyCategory() && !request.hasBoardSelection())) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "legacy rank endpoint requires category");
         }
         String refreshMode = crawlerRefreshPolicyService.normalizeRankRefreshMode(request.getRefreshMode());
-        String cacheKey = "rank:" + request.getPlatform() + ":" + request.getCategory();
-        List<RankBookItemVO> cached = crawlerCacheService.get(cacheKey, new TypeReference<List<RankBookItemVO>>() {
-        });
-        if (CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode) && cached != null) {
-            return cached;
+        if (CrawlerRankRequest.REFRESH_MODE_FORCE.equals(refreshMode)) {
+            throw new BusinessException(
+                ResultCode.BAD_REQUEST,
+                "FORCE rank read is not supported; use /api/crawler/rank/refresh"
+            );
         }
+        String category = resolveCategory(request);
+        String cacheKey = "rank:" + request.getPlatform() + ":" + category;
+        List<CrawlRankEntity> latestSnapshot = crawlerRepository.findLatestRankSnapshot(request.getPlatform(), category);
+        CrawlerRefreshPolicyService.RankSnapshotEvaluation evaluation = resolveRankEvaluation(
+            latestSnapshot.isEmpty() ? null : latestSnapshot.get(0).getCrawlTime()
+        );
 
-        List<CrawlRankEntity> latestSnapshot = crawlerRepository.findLatestRankSnapshot(request.getPlatform(), request.getCategory());
-        if (shouldReuseHistoricalSnapshot(refreshMode, request, latestSnapshot)) {
+        if (!latestSnapshot.isEmpty() && evaluation.isFresh()) {
             List<RankBookItemVO> response = toRankVos(latestSnapshot);
             crawlerCacheService.put(cacheKey, response, RANK_TTL_SECONDS);
             return response;
         }
 
-        return fetchAndPersistLegacyRank(request, refreshMode, cacheKey, latestSnapshot);
+        if (!latestSnapshot.isEmpty() && evaluation.isStale()) {
+            boolean scheduled = scheduleBackgroundRankRefresh(request, latestSnapshot, refreshMode);
+            LOGGER.info(
+                "rank.stale_reuse platform={} category={} ageHours={} refreshScheduled={}",
+                request.getPlatform(),
+                category,
+                evaluation.ageHours(),
+                scheduled
+            );
+            List<RankBookItemVO> response = toRankVos(latestSnapshot);
+            crawlerCacheService.put(cacheKey, response, RANK_TTL_SECONDS);
+            return response;
+        }
+
+        // EXPIRED or MISSING: never treat as current evidence without a refresh attempt.
+        try {
+            LegacyRankBoardSelection boardSelection = resolveLegacyRankBoardSelection(request, latestSnapshot);
+            CrawlerRankRequest refreshRequest = copyRankRequest(request);
+            refreshRequest.setChannelCode(boardSelection.channelCode());
+            refreshRequest.setBoardCode(boardSelection.boardCode());
+            refreshRequest.setRefreshMode(refreshMode);
+            if (refreshRequest.getIdempotencyKey() == null || refreshRequest.getIdempotencyKey().isBlank()) {
+                refreshRequest.setIdempotencyKey(CrawlerRankIdempotencyKeyFactory.generate(
+                    "legacy-rank",
+                    refreshRequest,
+                    LocalDate.now(ZoneOffset.UTC).toString()
+                ));
+            }
+            RankRefreshResultVO refreshResult = refreshRankBoard(refreshRequest);
+            if (refreshResult.getSnapshotId() == null) {
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "rank refresh completed without snapshot");
+            }
+            List<CrawlRankEntity> refreshedSnapshot = crawlerRepository.findRankPageBySnapshot(
+                refreshResult.getSnapshotId(),
+                0,
+                MAX_RANK_FETCH_COUNT
+            );
+            if (refreshedSnapshot.isEmpty() && !Integer.valueOf(0).equals(refreshResult.getTotal())) {
+                throw new BusinessException(ResultCode.INTERNAL_ERROR, "rank refresh completed without legacy rank rows");
+            }
+            List<RankBookItemVO> response = toRankVos(refreshedSnapshot);
+            crawlerCacheService.put(cacheKey, response, RANK_TTL_SECONDS);
+            return response;
+        } catch (RuntimeException ex) {
+            if (!latestSnapshot.isEmpty() && evaluation.isExpired()) {
+                LOGGER.warn(
+                    "rank.expired_historical_fallback platform={} category={} ageHours={} reason={}",
+                    request.getPlatform(),
+                    category,
+                    evaluation.ageHours(),
+                    ex.getMessage()
+                );
+                return toRankVos(latestSnapshot);
+            }
+            throw ex;
+        }
     }
 
     public List<RankBoardCatalogVO> getBoardCatalog(String platform) {
@@ -124,6 +277,10 @@ public class CrawlerService {
             LOGGER.warn("rank.boardCatalog fallback-db platform={} reason={}", platform, ex.getMessage());
         }
         return toBoardCatalogVosFromEntities(persistedBoards);
+    }
+
+    public List<RankBoardCatalogVO> getPersistedBoardCatalog(String platform) {
+        return toBoardCatalogVosFromEntities(crawlerRepository.findRankBoards(platform));
     }
 
     public List<RankBoardCatalogVO> syncRankBoardCatalog(String platform) {
@@ -216,37 +373,404 @@ public class CrawlerService {
     }
 
     public RankRefreshResultVO refreshRankBoard(CrawlerRankRequest request) {
+        if (request == null) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "rank refresh request is required");
+        }
+        String idempotencyKey = request.getIdempotencyKey() == null || request.getIdempotencyKey().isBlank()
+            ? null
+            : request.getIdempotencyKey().trim();
+        if (idempotencyKey == null) {
+            throw new BusinessException(ResultCode.BAD_REQUEST, "idempotencyKey is required for rank refresh");
+        }
+        String fingerprint = rankRefreshFingerprint(request);
+        String idempotencyHash = sha256(rankRefreshIdempotencyScope(request) + "|" + idempotencyKey);
+        String cacheKey = "rank-refresh-idempotency:" + idempotencyHash;
+        CrawlerRankPersistenceService.IdempotencyContext idempotencyContext =
+            new CrawlerRankPersistenceService.IdempotencyContext(idempotencyHash, fingerprint);
+        RankRefreshResultVO committedResult = crawlerRankPersistenceService.findCommittedResult(idempotencyContext);
+        if (committedResult != null) {
+            return committedResult;
+        }
+        RankRefreshIdempotencyEntry cached = readRankRefreshIdempotencyEntry(cacheKey);
+        if (cached == null) {
+            RankRefreshIdempotencyEntry candidate = newRankRefreshClaim(fingerprint);
+            if (putRankRefreshClaim(cacheKey, candidate)) {
+                return executeClaimedRankRefresh(request, cacheKey, candidate, idempotencyContext);
+            }
+            cached = readRankRefreshIdempotencyEntry(cacheKey);
+        }
+        if (cached != null) {
+            validateRankRefreshFingerprint(fingerprint, cached);
+            if (RankRefreshIdempotencyEntry.STATUS_SUCCEEDED.equals(cached.getStatus())
+                && cached.getResult() != null) {
+                RankRefreshResultVO committed = crawlerRankPersistenceService.findCommittedResult(idempotencyContext);
+                return committed == null ? cached.getResult() : committed;
+            }
+        }
+        RankRefreshResultVO committed = crawlerRankPersistenceService.findCommittedResult(idempotencyContext);
+        if (committed != null) {
+            return committed;
+        }
+        throw new RankRefreshInProgressException();
+    }
+
+    private RankRefreshResultVO executeClaimedRankRefresh(CrawlerRankRequest request,
+                                                          String cacheKey,
+                                                          RankRefreshIdempotencyEntry claim,
+                                                          CrawlerRankPersistenceService.IdempotencyContext idempotencyContext) {
+        AtomicBoolean claimHealthy = new AtomicBoolean(true);
+        ScheduledFuture<?> renewal = scheduleRankIdempotencyRenewal(cacheKey, claim, claimHealthy);
+        try {
+            RankRefreshResultVO result = refreshRankBoardOnce(
+                request,
+                claimHealthy::get,
+                idempotencyContext
+            );
+            result = crawlerRankPersistenceService.commitReusedResult(idempotencyContext, result);
+            requireRankRefreshOwnership(claimHealthy::get);
+            renewal.cancel(false);
+            RankRefreshIdempotencyEntry completed = RankRefreshIdempotencyEntry.succeeded(
+                claim.getFingerprint(),
+                result
+            );
+            try {
+                if (!compareAndSetRankRefreshEntry(
+                    cacheKey,
+                    claim,
+                    completed,
+                    RANK_REFRESH_IDEMPOTENCY_TTL_SECONDS
+                )) {
+                    return requireCommittedRankRefreshResult(idempotencyContext);
+                }
+            } catch (BusinessException ex) {
+                RankRefreshResultVO committed = crawlerRankPersistenceService.findCommittedResult(idempotencyContext);
+                if (committed != null) {
+                    LOGGER.warn("rank.refresh Redis completion unavailable; returning database commit key={}", cacheKey);
+                    return committed;
+                }
+                throw ex;
+            }
+            return result;
+        } catch (RuntimeException ex) {
+            evictRankRefreshClaim(cacheKey, claim);
+            throw ex;
+        } finally {
+            renewal.cancel(false);
+        }
+    }
+
+    private ScheduledFuture<?> scheduleRankIdempotencyRenewal(String cacheKey,
+                                                              RankRefreshIdempotencyEntry claim,
+                                                              AtomicBoolean claimHealthy) {
+        long intervalSeconds = Math.max(1L, RANK_REFRESH_IDEMPOTENCY_IN_PROGRESS_TTL_SECONDS / 4L);
+        return CRAWLER_LOCK_RENEWER.scheduleAtFixedRate(
+            () -> renewRankRefreshClaim(cacheKey, claim, claimHealthy),
+            intervalSeconds,
+            intervalSeconds,
+            TimeUnit.SECONDS
+        );
+    }
+
+    void renewRankRefreshClaim(String cacheKey,
+                               RankRefreshIdempotencyEntry claim,
+                               AtomicBoolean claimHealthy) {
+        try {
+            if (!compareAndSetRankRefreshEntry(
+                cacheKey,
+                claim,
+                claim,
+                RANK_REFRESH_IDEMPOTENCY_IN_PROGRESS_TTL_SECONDS
+            )) {
+                claimHealthy.set(false);
+                LOGGER.error("rank.refresh idempotency ownership lost key={}", cacheKey);
+            }
+        } catch (RuntimeException ex) {
+            claimHealthy.set(false);
+            LOGGER.error("rank.refresh idempotency renewal failed key={} reason={}", cacheKey, ex.getMessage());
+        }
+    }
+
+    private RankRefreshIdempotencyEntry newRankRefreshClaim(String fingerprint) {
+        return RankRefreshIdempotencyEntry.inProgress(
+            fingerprint,
+            java.util.UUID.randomUUID().toString(),
+            System.currentTimeMillis()
+        );
+    }
+
+    private void validateRankRefreshFingerprint(String fingerprint, RankRefreshIdempotencyEntry cached) {
+        if (!Objects.equals(fingerprint, cached.getFingerprint())) {
+            throw new BusinessException(
+                ResultCode.BAD_REQUEST,
+                "idempotency key reused with different rank refresh arguments"
+            );
+        }
+    }
+
+    private String rankRefreshIdempotencyScope(CrawlerRankRequest request) {
+        AuthUser authUser = AuthUserHolder.get();
+        Long userId = authUser == null ? request.getUserId() : authUser.getUserId();
+        String callerScope = userId == null ? "internal-service" : "user:" + userId;
+        String projectScope = request.getProjectId() == null ? "project:none" : "project:" + request.getProjectId();
+        return callerScope + "|" + projectScope;
+    }
+
+    private RankRefreshIdempotencyEntry readRankRefreshIdempotencyEntry(String cacheKey) {
+        try {
+            return crawlerCacheService.getStrict(cacheKey, RankRefreshIdempotencyEntry.class);
+        } catch (IllegalStateException ex) {
+            throw rankRefreshRedisUnavailable(ex);
+        }
+    }
+
+    private boolean putRankRefreshClaim(String cacheKey, RankRefreshIdempotencyEntry claim) {
+        try {
+            return crawlerCacheService.putIfAbsent(
+                cacheKey,
+                claim,
+                RANK_REFRESH_IDEMPOTENCY_IN_PROGRESS_TTL_SECONDS
+            );
+        } catch (IllegalStateException ex) {
+            throw rankRefreshRedisUnavailable(ex);
+        }
+    }
+
+    private boolean compareAndSetRankRefreshEntry(String cacheKey,
+                                                  RankRefreshIdempotencyEntry expected,
+                                                  RankRefreshIdempotencyEntry updated,
+                                                  long ttlSeconds) {
+        try {
+            return crawlerCacheService.compareAndSet(cacheKey, expected, updated, ttlSeconds);
+        } catch (IllegalStateException ex) {
+            throw rankRefreshRedisUnavailable(ex);
+        }
+    }
+
+    private void evictRankRefreshClaim(String cacheKey, RankRefreshIdempotencyEntry claim) {
+        try {
+            crawlerCacheService.evictIfValue(cacheKey, claim);
+        } catch (IllegalStateException ex) {
+            LOGGER.warn("rank.refresh idempotency release failed key={} reason={}", cacheKey, ex.getMessage());
+        }
+    }
+
+    private BusinessException rankRefreshRedisUnavailable(IllegalStateException cause) {
+        LOGGER.warn("rank.refresh strict Redis unavailable reason={}", cause.getMessage());
+        return new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "rank refresh idempotency service unavailable");
+    }
+
+    private RankRefreshResultVO requireCommittedRankRefreshResult(
+        CrawlerRankPersistenceService.IdempotencyContext idempotencyContext
+    ) {
+        RankRefreshResultVO committed = crawlerRankPersistenceService.findCommittedResult(idempotencyContext);
+        if (committed != null) {
+            return committed;
+        }
+        throw new BusinessException(
+            ResultCode.SERVICE_UNAVAILABLE,
+            "rank refresh idempotency ownership changed before completion"
+        );
+    }
+
+    private LegacyRankBoardSelection resolveLegacyRankBoardSelection(CrawlerRankRequest request,
+                                                                     List<CrawlRankEntity> latestSnapshot) {
+        if (request.hasBoardSelection()) {
+            return new LegacyRankBoardSelection(request.getChannelCode().trim(), request.getBoardCode().trim());
+        }
+        for (CrawlRankEntity item : latestSnapshot) {
+            if (item.getChannelCode() != null && !item.getChannelCode().isBlank()
+                && item.getBoardCode() != null && !item.getBoardCode().isBlank()) {
+                return new LegacyRankBoardSelection(item.getChannelCode().trim(), item.getBoardCode().trim());
+            }
+        }
+        String category = request.getCategory() == null ? "" : request.getCategory().trim();
+        LegacyRankBoardSelection alias = LEGACY_RANK_BOARD_ALIASES.get(category);
+        if (alias != null) {
+            return alias;
+        }
+        int separator = category.indexOf(':');
+        if (separator > 0 && separator < category.length() - 1) {
+            return new LegacyRankBoardSelection(
+                category.substring(0, separator).trim(),
+                category.substring(separator + 1).trim()
+            );
+        }
+        Matcher slugMatcher = LEGACY_RANK_SLUG_PATTERN.matcher(category);
+        if (slugMatcher.matches()) {
+            String channelCode = switch (slugMatcher.group(1) + slugMatcher.group(2)) {
+                case "01" -> "female-new";
+                case "02" -> "female-read";
+                case "11" -> "male-new";
+                case "12" -> "male-read";
+                default -> null;
+            };
+            if (channelCode != null) {
+                return new LegacyRankBoardSelection(channelCode, slugMatcher.group(3));
+            }
+        }
+        throw new BusinessException(
+            ResultCode.BAD_REQUEST,
+            "legacy rank refresh requires channelCode and boardCode"
+        );
+    }
+
+    private CrawlerRankRequest copyRankRequest(CrawlerRankRequest source) {
+        CrawlerRankRequest target = new CrawlerRankRequest();
+        target.setPlatform(source.getPlatform());
+        target.setCategory(source.getCategory());
+        target.setChannelCode(source.getChannelCode());
+        target.setBoardCode(source.getBoardCode());
+        target.setRefreshMode(source.getRefreshMode());
+        target.setForceReason(source.getForceReason());
+        target.setRankFetchCount(source.getRankFetchCount());
+        target.setIdempotencyKey(source.getIdempotencyKey());
+        target.setUserId(source.getUserId());
+        target.setProjectId(source.getProjectId());
+        target.setSupervisorAttestation(source.getSupervisorAttestation());
+        return target;
+    }
+
+    private RankRefreshResultVO refreshRankBoardOnce(CrawlerRankRequest request,
+                                                     BooleanSupplier requestOwnershipHealthy,
+                                                     CrawlerRankPersistenceService.IdempotencyContext idempotencyContext) {
         requireBoardSelection(request);
         String refreshMode = crawlerRefreshPolicyService.normalizeRankRefreshMode(request.getRefreshMode());
+        int requestedRankFetchCount = resolveRankFetchCount(
+            request.getPlatform(),
+            request.getRankFetchCount(),
+            true
+        );
         RankBoardEntity board = ensureRankBoard(request.getPlatform(), request.getChannelCode(), request.getBoardCode());
-        RankSnapshotEntity latestSnapshot = crawlerRepository.findLatestBoardSnapshot(board.getId()).orElse(null);
-        if (latestSnapshot != null && CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)
-            && crawlerRefreshPolicyService.shouldReuseRankSnapshot(latestSnapshot.getSnapshotTime())) {
-            return toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, false);
-        }
-        if (latestSnapshot != null && CrawlerRankRequest.REFRESH_MODE_FORCE.equals(refreshMode)) {
-            int recentForceCount = crawlerRepository.countRecentSuccessfulForceRefreshes(
-                request.getPlatform(),
-                request.getChannelCode(),
-                request.getBoardCode(),
-                crawlerRefreshPolicyService.forceRefreshWindowStart()
-            );
-            if (!crawlerRefreshPolicyService.allowForceRefresh(recentForceCount)) {
-                return toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, true);
-            }
-        }
         String lockKey = buildRankRefreshLockKey(request.getPlatform(), request.getChannelCode(), request.getBoardCode());
         String lockValue = java.util.UUID.randomUUID().toString();
-        boolean acquired = asyncJobLockService.tryAcquire(lockKey, lockValue, RANK_REFRESH_LOCK_TTL_SECONDS);
-        if (!acquired && latestSnapshot != null) {
-            return waitForReusedRankSnapshot(request.getChannelCode(), request.getBoardCode(), board.getId(), latestSnapshot);
-        }
+        boolean acquired;
         try {
-            return fetchAndPersistBoardRank(request, board, refreshMode, latestSnapshot);
-        } finally {
-            if (acquired) {
-                asyncJobLockService.release(lockKey, lockValue);
+            acquired = asyncJobLockService.tryAcquireStrict(lockKey, lockValue, RANK_REFRESH_LOCK_TTL_SECONDS);
+        } catch (IllegalStateException ex) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "rank refresh lock service unavailable");
+        }
+        if (!acquired) {
+            RankSnapshotEntity latestSnapshot = crawlerRepository.findLatestBoardSnapshot(board.getId()).orElse(null);
+            if (latestSnapshot != null
+                && CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)
+                && crawlerRefreshPolicyService.shouldReuseRankSnapshot(latestSnapshot.getSnapshotTime())
+                && resolveSnapshotTotal(latestSnapshot) >= requestedRankFetchCount) {
+                return crawlerRankPersistenceService.commitReusedResult(
+                    idempotencyContext,
+                    toRefreshResult(
+                        request.getChannelCode(),
+                        request.getBoardCode(),
+                        latestSnapshot,
+                        true,
+                        false
+                    )
+                );
             }
+            throw new RankRefreshInProgressException();
+        }
+        AtomicBoolean lockHealthy = new AtomicBoolean(true);
+        ScheduledFuture<?> renewal = scheduleRankLockRenewal(lockKey, lockValue, lockHealthy);
+        try {
+            // The lock closes the read/refresh race; all reuse and quota decisions must use its latest state.
+            RankSnapshotEntity latestSnapshot = crawlerRepository.findLatestBoardSnapshot(board.getId()).orElse(null);
+            if (latestSnapshot != null && CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)
+                && crawlerRefreshPolicyService.shouldReuseRankSnapshot(latestSnapshot.getSnapshotTime())
+                && resolveSnapshotTotal(latestSnapshot) >= requestedRankFetchCount) {
+                return crawlerRankPersistenceService.commitReusedResult(
+                    idempotencyContext,
+                    toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, false)
+                );
+            }
+            if (CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)
+                && crawlerRefreshPolicyService.shouldSuppressAutomaticRefresh()) {
+                throw new BusinessException(
+                    ResultCode.SERVICE_UNAVAILABLE,
+                    "\u7cfb\u7edf\u8d44\u6e90\u7d27\u5f20\uff0c\u5df2\u6682\u505c\u81ea\u52a8\u699c\u5355\u5237\u65b0\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5"
+                );
+            }
+            if (latestSnapshot != null && CrawlerRankRequest.REFRESH_MODE_FORCE.equals(refreshMode)) {
+                int recentForceCount = crawlerRepository.countRecentSuccessfulForceRefreshes(
+                    request.getPlatform(),
+                    request.getChannelCode(),
+                    request.getBoardCode(),
+                    crawlerRefreshPolicyService.forceRefreshWindowStart()
+                );
+                if (!crawlerRefreshPolicyService.allowForceRefresh(recentForceCount)) {
+                    return crawlerRankPersistenceService.commitReusedResult(
+                        idempotencyContext,
+                        toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, true)
+                    );
+                }
+            }
+            long fencingToken = crawlerRankPersistenceService.claimFencingToken(board.getId());
+            BooleanSupplier combinedOwnershipHealthy = () -> requestOwnershipHealthy.getAsBoolean()
+                && lockHealthy.get();
+            return fetchAndPersistBoardRank(
+                request,
+                board,
+                refreshMode,
+                latestSnapshot,
+                combinedOwnershipHealthy,
+                fencingToken,
+                idempotencyContext
+            );
+        } finally {
+            renewal.cancel(false);
+            asyncJobLockService.release(lockKey, lockValue);
+        }
+    }
+
+    private ScheduledFuture<?> scheduleRankLockRenewal(String lockKey,
+                                                       String lockValue,
+                                                       AtomicBoolean lockHealthy) {
+        long intervalSeconds = Math.max(1L, RANK_REFRESH_LOCK_TTL_SECONDS / 4L);
+        return CRAWLER_LOCK_RENEWER.scheduleAtFixedRate(() -> {
+            try {
+                if (!asyncJobLockService.renewStrict(lockKey, lockValue, RANK_REFRESH_LOCK_TTL_SECONDS)) {
+                    lockHealthy.set(false);
+                    LOGGER.error("rank.refresh lock ownership lost key={}", lockKey);
+                }
+            } catch (RuntimeException ex) {
+                lockHealthy.set(false);
+                LOGGER.error("rank.refresh lock renewal failed key={} reason={}", lockKey, ex.getMessage());
+            }
+        }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+    }
+
+    private String rankRefreshFingerprint(CrawlerRankRequest request) {
+        StringBuilder canonical = new StringBuilder(192);
+        appendFingerprintField(canonical, "platform", request.getPlatform());
+        appendFingerprintField(canonical, "channelCode", request.getChannelCode());
+        appendFingerprintField(canonical, "boardCode", request.getBoardCode());
+        appendFingerprintField(canonical, "category", request.getCategory());
+        appendFingerprintField(canonical, "refreshMode", request.getRefreshMode());
+        appendFingerprintField(canonical, "forceReason", request.getForceReason());
+        appendFingerprintField(canonical, "rankFetchCount", request.getRankFetchCount());
+        return sha256(canonical.toString());
+    }
+
+    private void appendFingerprintField(StringBuilder target, String name, Object value) {
+        target.append(name.length()).append(':').append(name).append('=');
+        if (value == null) {
+            target.append("-1:");
+        } else {
+            String text = String.valueOf(value);
+            target.append(text.length()).append(':').append(text);
+        }
+        target.append(';');
+    }
+
+    private String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder(digest.length * 2);
+            for (byte item : digest) {
+                builder.append(String.format("%02x", item));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
         }
     }
 
@@ -266,6 +790,12 @@ public class CrawlerService {
             .map(this::toRankVo)
             .toList();
 
+        CrawlerRefreshPolicyService.RankSnapshotEvaluation evaluation =
+            resolveRankEvaluation(snapshot.getSnapshotTime());
+        boolean refreshScheduled = false;
+        if (evaluation.isStale() && !crawlerRefreshPolicyService.shouldSuppressAutomaticRefresh()) {
+            refreshScheduled = scheduleBackgroundBoardRefresh(platform, channelCode, boardCode);
+        }
         RankPageVO vo = new RankPageVO();
         vo.setSnapshotId(snapshot.getId());
         vo.setSnapshotTime(snapshot.getSnapshotTime());
@@ -273,6 +803,10 @@ public class CrawlerService {
         vo.setPage(safePage);
         vo.setPageSize(safePageSize);
         vo.setItems(items);
+        vo.setFreshness(evaluation.freshness());
+        vo.setAgeHours(evaluation.ageHours());
+        vo.setHistoricalReference(evaluation.historicalReference());
+        vo.setRefreshScheduled(refreshScheduled);
         return vo;
     }
 
@@ -283,12 +817,106 @@ public class CrawlerService {
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank board not found"));
         RankSnapshotEntity snapshot = crawlerRepository.findLatestBoardSnapshot(board.getId())
             .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "rank snapshot not found"));
+        CrawlerRefreshPolicyService.RankSnapshotEvaluation evaluation =
+            resolveRankEvaluation(snapshot.getSnapshotTime());
+        boolean refreshScheduled = false;
+        if (evaluation.isStale() && !crawlerRefreshPolicyService.shouldSuppressAutomaticRefresh()) {
+            refreshScheduled = scheduleBackgroundBoardRefresh(platform, channelCode, boardCode);
+        }
 
         RankBoardStatusVO vo = new RankBoardStatusVO();
         vo.setSnapshotId(snapshot.getId());
         vo.setSnapshotTime(snapshot.getSnapshotTime());
         vo.setTotal(resolveSnapshotTotal(snapshot));
+        vo.setFreshness(evaluation.freshness());
+        vo.setAgeHours(evaluation.ageHours());
+        vo.setHistoricalReference(evaluation.historicalReference());
+        vo.setRefreshScheduled(refreshScheduled);
         return vo;
+    }
+
+
+
+    private CrawlerRefreshPolicyService.RankSnapshotEvaluation resolveRankEvaluation(java.time.LocalDateTime snapshotTime) {
+        CrawlerRefreshPolicyService.RankSnapshotEvaluation evaluation =
+            crawlerRefreshPolicyService.evaluateRankSnapshot(snapshotTime);
+        if (evaluation != null) {
+            return evaluation;
+        }
+        // Compatibility path for older mocks/tests that only stub shouldReuseRankSnapshot.
+        if (snapshotTime != null && crawlerRefreshPolicyService.shouldReuseRankSnapshot(snapshotTime)) {
+            return new CrawlerRefreshPolicyService.RankSnapshotEvaluation(
+                CrawlerRefreshPolicyService.FRESHNESS_FRESH,
+                0L,
+                false,
+                false,
+                java.time.Instant.now(),
+                snapshotTime.atZone(java.time.ZoneOffset.UTC).toInstant()
+            );
+        }
+        if (snapshotTime == null) {
+            return CrawlerRefreshPolicyService.RankSnapshotEvaluation.missing(java.time.Instant.now());
+        }
+        return new CrawlerRefreshPolicyService.RankSnapshotEvaluation(
+            CrawlerRefreshPolicyService.FRESHNESS_EXPIRED,
+            0L,
+            true,
+            true,
+            java.time.Instant.now(),
+            snapshotTime.atZone(java.time.ZoneOffset.UTC).toInstant()
+        );
+    }
+
+    private boolean scheduleBackgroundRankRefresh(CrawlerRankRequest request,
+                                                  List<CrawlRankEntity> latestSnapshot,
+                                                  String refreshMode) {
+        if (crawlerRefreshPolicyService.shouldSuppressAutomaticRefresh()) {
+            return false;
+        }
+        LegacyRankBoardSelection boardSelection = resolveLegacyRankBoardSelection(request, latestSnapshot);
+        return scheduleBackgroundBoardRefresh(
+            request.getPlatform(),
+            boardSelection.channelCode(),
+            boardSelection.boardCode()
+        );
+    }
+
+    private boolean scheduleBackgroundBoardRefresh(String platform, String channelCode, String boardCode) {
+        if (crawlerRefreshPolicyService.shouldSuppressAutomaticRefresh()) {
+            return false;
+        }
+        String lockKey = "rank-stale-refresh:" + platform + ":" + channelCode + ":" + boardCode;
+        String lockValue = UUID.randomUUID().toString();
+        boolean acquired = asyncJobLockService.tryAcquireStrict(lockKey, lockValue, RANK_REFRESH_LOCK_TTL_SECONDS);
+        if (!acquired) {
+            return false;
+        }
+        CrawlerRankRequest refreshRequest = new CrawlerRankRequest();
+        refreshRequest.setPlatform(platform);
+        refreshRequest.setChannelCode(channelCode);
+        refreshRequest.setBoardCode(boardCode);
+        refreshRequest.setRefreshMode(CrawlerRankRequest.REFRESH_MODE_AUTO);
+        refreshRequest.setIdempotencyKey(CrawlerRankIdempotencyKeyFactory.generate(
+            "stale-bg",
+            refreshRequest,
+            LocalDate.now(ZoneOffset.UTC).toString()
+        ));
+        CompletableFuture.runAsync(() -> {
+            try {
+                refreshRankBoard(refreshRequest);
+            } catch (Exception ex) {
+                LOGGER.warn(
+                    "rank.stale_background_refresh_failed platform={} channel={} board={} reason={}",
+                    platform,
+                    channelCode,
+                    boardCode,
+                    ex.getMessage()
+                );
+            } finally {
+                asyncJobLockService.release(lockKey, lockValue);
+            }
+        });
+        return true;
     }
 
     public BookDetailVO getBookDetail(String platform, Long bookId) {
@@ -309,6 +937,12 @@ public class CrawlerService {
         return vo;
     }
 
+    public List<ChapterVO> getChapterStatus(CrawlerChapterRequest request) {
+        crawlerRepository.findBookById(request.getBookId())
+            .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
+        return crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
+    }
+
     public List<ChapterVO> getChapters(CrawlerChapterRequest request) {
         String cacheKey = "chapter:" + request.getBookId() + ":" + request.getChapterCount();
         List<ChapterVO> cached = crawlerCacheService.get(cacheKey, new TypeReference<List<ChapterVO>>() {
@@ -326,42 +960,63 @@ public class CrawlerService {
             return persistedChapters;
         }
 
-        String lockKey = buildChapterFetchLockKey(request.getPlatform(), request.getBookId(), request.getChapterCount());
+        String lockKey = buildChapterFetchLockKey(request.getPlatform(), request.getBookId());
         String lockValue = java.util.UUID.randomUUID().toString();
-        boolean acquired = asyncJobLockService.tryAcquire(lockKey, lockValue, CHAPTER_FETCH_LOCK_TTL_SECONDS);
+        boolean acquired = tryAcquireChapterLock(lockKey, lockValue);
         if (!acquired) {
-            List<ChapterVO> waited = waitForChapterReuse(request.getBookId(), request.getChapterCount(), cacheKey);
-            if (waited != null) {
-                return waited;
+            List<ChapterVO> completedByOwner = crawlerRepository.findChapters(
+                request.getBookId(),
+                request.getChapterCount()
+            );
+            if (resolveReusablePrefixCount(completedByOwner) >= request.getChapterCount()) {
+                crawlerCacheService.put(cacheKey, completedByOwner, CHAPTER_TTL_SECONDS);
+                return completedByOwner;
             }
+            throw new ChapterFetchInProgressException();
         }
 
-        int fetchStartChapterNo = reusablePrefixCount + 1;
-        int missingChapterCount = request.getChapterCount() - reusablePrefixCount;
+        AtomicBoolean lockHealthy = new AtomicBoolean(true);
+        ScheduledFuture<?> renewal = scheduleChapterLockRenewal(lockKey, lockValue, lockHealthy);
+        BooleanSupplier ownership = () -> renewChapterLock(lockKey, lockValue, lockHealthy);
         try {
-            List<ExternalChapterItem> chapters = fetchChaptersWithRepair(
-                request.getPlatform(),
-                book,
-                fetchStartChapterNo,
-                missingChapterCount
+            // A previous owner may have completed the missing prefix between our first read and lock acquisition.
+            List<ChapterVO> lockedPersistedChapters = crawlerRepository.findChapters(
+                request.getBookId(),
+                request.getChapterCount()
             );
-            for (ExternalChapterItem chapter : chapters) {
-                crawlerRepository.saveOrUpdateChapter(
+            int lockedReusablePrefixCount = resolveReusablePrefixCount(lockedPersistedChapters);
+            if (lockedReusablePrefixCount >= request.getChapterCount()) {
+                crawlerCacheService.put(cacheKey, lockedPersistedChapters, CHAPTER_TTL_SECONDS);
+                return lockedPersistedChapters;
+            }
+
+            int fetchStartChapterNo = lockedReusablePrefixCount + 1;
+            int missingChapterCount = request.getChapterCount() - lockedReusablePrefixCount;
+            requireChapterLockOwnership(ownership);
+            List<ExternalChapterItem> chapters;
+            try (CrawlerFetchGuard.Lease ignored = crawlerFetchGuard.acquireChapter(AuthUserHolder.get())) {
+                chapters = fetchChaptersWithRepair(
                     request.getPlatform(),
-                    request.getBookId(),
-                    chapter.getChapterNo(),
-                    chapter.getChapterTitle(),
-                    chapter.getContent(),
-                    chapter.getSourceWordCount()
+                    book,
+                    fetchStartChapterNo,
+                    missingChapterCount,
+                    ownership
                 );
             }
+            crawlerChapterPersistenceService.persistFetchedChapters(
+                request.getPlatform(),
+                request.getBookId(),
+                chapters,
+                ownership
+            );
+            requireChapterLockOwnership(ownership);
             List<ChapterVO> result = crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
+            requireChapterLockOwnership(ownership);
             crawlerCacheService.put(cacheKey, result, CHAPTER_TTL_SECONDS);
             return result;
         } finally {
-            if (acquired) {
-                asyncJobLockService.release(lockKey, lockValue);
-            }
+            renewal.cancel(false);
+            asyncJobLockService.release(lockKey, lockValue);
         }
     }
 
@@ -381,119 +1036,121 @@ public class CrawlerService {
             throw new BusinessException(ResultCode.TOO_MANY_REQUESTS, "chapter refresh limit exceeded");
         }
 
-        String lockKey = buildChapterFetchLockKey(request.getPlatform(), request.getBookId(), request.getChapterCount());
+        String lockKey = buildChapterFetchLockKey(request.getPlatform(), request.getBookId());
         String lockValue = java.util.UUID.randomUUID().toString();
-        boolean acquired = asyncJobLockService.tryAcquire(lockKey, lockValue, CHAPTER_FETCH_LOCK_TTL_SECONDS);
+        boolean acquired = tryAcquireChapterLock(lockKey, lockValue);
         if (!acquired) {
-            List<ChapterVO> waited = waitForChapterReuse(
-                request.getBookId(),
-                request.getChapterCount(),
-                buildChapterCacheKey(request.getBookId(), request.getChapterCount())
-            );
-            if (waited != null) {
-                return buildChapterRefreshResult(waited, maxAllowedRefreshTimes, usedRefreshTimes);
-            }
+            throw new ChapterFetchInProgressException();
         }
 
+        AtomicBoolean lockHealthy = new AtomicBoolean(true);
+        ScheduledFuture<?> renewal = scheduleChapterLockRenewal(lockKey, lockValue, lockHealthy);
+        BooleanSupplier ownership = () -> renewChapterLock(lockKey, lockValue, lockHealthy);
         try {
             CrawlBookEntity book = crawlerRepository.findBookById(request.getBookId())
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "book not found"));
-            List<ExternalChapterItem> chapters = fetchChaptersWithRepair(
-                request.getPlatform(),
-                book,
-                1,
-                request.getChapterCount()
-            );
-            for (ExternalChapterItem chapter : chapters) {
-                crawlerRepository.saveOrUpdateChapter(
+            requireChapterLockOwnership(ownership);
+            List<ExternalChapterItem> chapters;
+            try (CrawlerFetchGuard.Lease ignored = crawlerFetchGuard.acquireChapter(authUser)) {
+                chapters = fetchChaptersWithRepair(
                     request.getPlatform(),
-                    request.getBookId(),
-                    chapter.getChapterNo(),
-                    chapter.getChapterTitle(),
-                    chapter.getContent(),
-                    chapter.getSourceWordCount()
+                    book,
+                    1,
+                    request.getChapterCount(),
+                    ownership
                 );
             }
-            evictChapterCaches(request.getBookId());
-            List<ChapterVO> refreshedChapters = crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
-            crawlerCacheService.put(buildChapterCacheKey(request.getBookId(), request.getChapterCount()), refreshedChapters, CHAPTER_TTL_SECONDS);
-            crawlerRepository.saveChapterRefreshTask(
+            crawlerChapterPersistenceService.persistForcedChapters(
                 authUser.getUserId(),
                 authUser.getUsername(),
                 request.getPlatform(),
                 request.getBookId(),
                 request.getChapterCount(),
-                2,
-                null,
+                chapters,
                 startTime,
-                LocalDateTime.now()
+                ownership
             );
+            requireChapterLockOwnership(ownership);
+            evictChapterCaches(request.getBookId());
+            List<ChapterVO> refreshedChapters = crawlerRepository.findChapters(request.getBookId(), request.getChapterCount());
+            requireChapterLockOwnership(ownership);
+            crawlerCacheService.put(buildChapterCacheKey(request.getBookId(), request.getChapterCount()), refreshedChapters, CHAPTER_TTL_SECONDS);
             int latestUsedRefreshTimes = usedRefreshTimes + 1;
             return buildChapterRefreshResult(refreshedChapters, maxAllowedRefreshTimes, latestUsedRefreshTimes);
         } catch (RuntimeException ex) {
-            crawlerRepository.saveChapterRefreshTask(
-                authUser.getUserId(),
-                authUser.getUsername(),
-                request.getPlatform(),
-                request.getBookId(),
-                request.getChapterCount(),
-                3,
-                ex.getMessage(),
-                startTime,
-                LocalDateTime.now()
-            );
+            if (lockHealthy.get() && renewChapterLock(lockKey, lockValue, lockHealthy)) {
+                crawlerRepository.saveChapterRefreshTask(
+                    authUser.getUserId(),
+                    authUser.getUsername(),
+                    request.getPlatform(),
+                    request.getBookId(),
+                    request.getChapterCount(),
+                    3,
+                    ex.getMessage(),
+                    startTime,
+                    LocalDateTime.now()
+                );
+            }
             throw ex;
         } finally {
-            if (acquired) {
-                asyncJobLockService.release(lockKey, lockValue);
-            }
+            renewal.cancel(false);
+            asyncJobLockService.release(lockKey, lockValue);
         }
-    }
-
-    private RankRefreshResultVO waitForReusedRankSnapshot(String channelCode,
-                                                          String boardCode,
-                                                          Long boardId,
-                                                          RankSnapshotEntity fallbackSnapshot) {
-        for (int i = 0; i < LOCK_RETRY_COUNT; i++) {
-            RankSnapshotEntity latest = crawlerRepository.findLatestBoardSnapshot(boardId).orElse(null);
-            if (latest != null && !Objects.equals(latest.getId(), fallbackSnapshot.getId())) {
-                return toRefreshResult(channelCode, boardCode, latest, true, false);
-            }
-            sleepForLockWait();
-        }
-        return toRefreshResult(channelCode, boardCode, fallbackSnapshot, true, false);
-    }
-
-    private List<ChapterVO> waitForChapterReuse(Long bookId, Integer chapterCount, String cacheKey) {
-        for (int i = 0; i < LOCK_RETRY_COUNT; i++) {
-            List<ChapterVO> cached = crawlerCacheService.get(cacheKey, new TypeReference<List<ChapterVO>>() {
-            });
-            if (resolveReusablePrefixCount(cached) >= chapterCount) {
-                return cached;
-            }
-            List<ChapterVO> persisted = crawlerRepository.findChapters(bookId, chapterCount);
-            if (resolveReusablePrefixCount(persisted) >= chapterCount) {
-                crawlerCacheService.put(cacheKey, persisted, CHAPTER_TTL_SECONDS);
-                return persisted;
-            }
-            sleepForLockWait();
-        }
-        return null;
     }
 
     private String buildRankRefreshLockKey(String platform, String channelCode, String boardCode) {
         return "lock:rank-refresh:" + platform + ":" + channelCode + ":" + boardCode;
     }
 
-    private String buildChapterFetchLockKey(String platform, Long bookId, Integer chapterCount) {
-        return "lock:chapter-fetch:" + platform + ":" + bookId + ":" + chapterCount;
+    private String buildChapterFetchLockKey(String platform, Long bookId) {
+        return "lock:chapter-fetch:" + platform + ":" + bookId;
     }
 
-    private void sleepForLockWait() {
+    private boolean tryAcquireChapterLock(String lockKey, String lockValue) {
         try {
-            Thread.sleep(LOCK_WAIT_MILLIS);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
+            return asyncJobLockService.tryAcquireStrict(lockKey, lockValue, CHAPTER_FETCH_LOCK_TTL_SECONDS);
+        } catch (IllegalStateException ex) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "chapter fetch lock service unavailable");
+        }
+    }
+
+    private ScheduledFuture<?> scheduleChapterLockRenewal(String lockKey,
+                                                           String lockValue,
+                                                           AtomicBoolean lockHealthy) {
+        long intervalSeconds = Math.max(1L, CHAPTER_FETCH_LOCK_TTL_SECONDS / 4L);
+        return CRAWLER_LOCK_RENEWER.scheduleAtFixedRate(
+            () -> renewChapterLock(lockKey, lockValue, lockHealthy),
+            intervalSeconds,
+            intervalSeconds,
+            TimeUnit.SECONDS
+        );
+    }
+
+    boolean renewChapterLock(String lockKey, String lockValue, AtomicBoolean lockHealthy) {
+        if (!lockHealthy.get()) {
+            return false;
+        }
+        try {
+            boolean renewed = asyncJobLockService.renewStrict(
+                lockKey,
+                lockValue,
+                CHAPTER_FETCH_LOCK_TTL_SECONDS
+            );
+            if (!renewed) {
+                lockHealthy.set(false);
+                LOGGER.error("chapter.fetch lock ownership lost key={}", lockKey);
+            }
+            return renewed;
+        } catch (RuntimeException ex) {
+            lockHealthy.set(false);
+            LOGGER.error("chapter.fetch lock renewal failed key={} reason={}", lockKey, ex.getMessage());
+            return false;
+        }
+    }
+
+    private void requireChapterLockOwnership(BooleanSupplier ownershipHealthy) {
+        if (ownershipHealthy == null || !ownershipHealthy.getAsBoolean()) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "chapter fetch lock ownership lost");
         }
     }
 
@@ -554,127 +1211,46 @@ public class CrawlerService {
         }
     }
 
-    private List<RankBookItemVO> fetchAndPersistLegacyRank(CrawlerRankRequest request,
-                                                           String refreshMode,
-                                                           String cacheKey,
-                                                           List<CrawlRankEntity> latestSnapshot) {
-        LocalDateTime startTime = LocalDateTime.now();
-        try {
-            List<ExternalRankItem> rankItems = pythonCrawlerClient.fetchRank(
-                request.getPlatform(),
-                request.getCategory(),
-                resolveCrawlerHttpTimeoutSeconds()
-            );
-            LocalDateTime snapshotTime = LocalDateTime.now();
-            List<RankBookItemVO> response = new ArrayList<>();
-            for (ExternalRankItem item : rankItems) {
-                Long bookId = crawlerRepository.saveOrUpdateBook(
-                    request.getPlatform(),
-                    item.getPlatformBookId(),
-                    item.getBookName(),
-                    item.getAuthor(),
-                    item.getIntro(),
-                    item.getBookUrl()
-                );
-                crawlerRepository.saveRankItem(
-                    request.getPlatform(),
-                    request.getCategory(),
-                    item.getRankNo(),
-                    bookId,
-                    item.getBookName(),
-                    item.getBookUrl(),
-                    item.getAuthor(),
-                    item.getIntro(),
-                    snapshotTime
-                );
-                response.add(toRankVo(item, bookId, request));
-            }
-            crawlerRepository.saveRankRefreshTask(
-                request.getPlatform(),
-                request.getCategory(),
-                refreshMode,
-                request.getForceReason(),
-                2,
-                null,
-                startTime,
-                LocalDateTime.now()
-            );
-            crawlerCacheService.put(cacheKey, response, RANK_TTL_SECONDS);
-            return response;
-        } catch (RuntimeException ex) {
-            crawlerRepository.saveRankRefreshTask(
-                request.getPlatform(),
-                request.getCategory(),
-                refreshMode,
-                request.getForceReason(),
-                3,
-                ex.getMessage(),
-                startTime,
-                LocalDateTime.now()
-            );
-            if (!latestSnapshot.isEmpty()) {
-                List<RankBookItemVO> response = toRankVos(latestSnapshot);
-                crawlerCacheService.put(cacheKey, response, RANK_TTL_SECONDS);
-                return response;
-            }
-            throw ex;
-        }
-    }
-
     private RankRefreshResultVO fetchAndPersistBoardRank(CrawlerRankRequest request,
                                                          RankBoardEntity board,
                                                          String refreshMode,
-                                                         RankSnapshotEntity latestSnapshot) {
+                                                         RankSnapshotEntity latestSnapshot,
+                                                         BooleanSupplier ownershipHealthy,
+                                                         long fencingToken,
+                                                         CrawlerRankPersistenceService.IdempotencyContext idempotencyContext) {
         LocalDateTime startTime = LocalDateTime.now();
+        boolean persistenceStarted = false;
         try {
             int requestedRankFetchCount = resolveRankFetchCount(request.getPlatform(), request.getRankFetchCount(), true);
-            List<ExternalRankItem> rankItems = limitRankItems(pythonCrawlerClient.fetchRank(
-                request.getPlatform(),
-                request.getChannelCode(),
-                request.getBoardCode(),
-                requestedRankFetchCount,
-                resolveCrawlerHttpTimeoutSeconds()
-            ), requestedRankFetchCount);
-            LocalDateTime snapshotTime = LocalDateTime.now();
-            RankSnapshotEntity snapshot = crawlerRepository.saveRankSnapshot(board.getId(), snapshotTime, rankItems.size());
-            for (ExternalRankItem item : rankItems) {
-                Long bookId = crawlerRepository.saveOrUpdateBook(
+            List<ExternalRankItem> fetchedRankItems;
+            try (CrawlerFetchGuard.Lease ignored = crawlerFetchGuard.acquireRank()) {
+                fetchedRankItems = pythonCrawlerClient.fetchRank(
                     request.getPlatform(),
-                    item.getPlatformBookId(),
-                    item.getBookName(),
-                    item.getAuthor(),
-                    item.getIntro(),
-                    item.getBookUrl()
-                );
-                crawlerRepository.saveRankItem(
-                    request.getPlatform(),
-                    resolveCategory(request),
                     request.getChannelCode(),
                     request.getBoardCode(),
-                    snapshot.getId(),
-                    item.getRankNo(),
-                    bookId,
-                    item.getBookName(),
-                    item.getBookUrl(),
-                    item.getAuthor(),
-                    item.getIntro(),
-                    snapshotTime
+                    requestedRankFetchCount,
+                    resolveCrawlerHttpTimeoutSeconds()
                 );
             }
-            crawlerRepository.saveRankRefreshTask(
-                request.getPlatform(),
-                request.getChannelCode(),
-                request.getBoardCode(),
+            List<ExternalRankItem> rankItems = limitRankItems(fetchedRankItems, requestedRankFetchCount);
+            requireRankRefreshOwnership(ownershipHealthy);
+            persistenceStarted = true;
+            RankSnapshotEntity snapshot = crawlerRankPersistenceService.persistBoardSnapshot(
+                request,
+                board,
                 refreshMode,
-                request.getForceReason(),
-                2,
-                null,
+                resolveCategory(request),
+                rankItems,
                 startTime,
-                LocalDateTime.now()
+                ownershipHealthy,
+                fencingToken,
+                idempotencyContext
             );
             LOGGER.info("rank.refresh platform={} channelCode={} boardCode={} reused=false limited=false requestedCount={} total={}",
                 request.getPlatform(), request.getChannelCode(), request.getBoardCode(), requestedRankFetchCount, rankItems.size());
             return toRefreshResult(request.getChannelCode(), request.getBoardCode(), snapshot, false, false);
+        } catch (CrawlerRankPersistenceService.RankRefreshAlreadyCommittedException ex) {
+            return ex.getResult();
         } catch (RuntimeException ex) {
             crawlerRepository.saveRankRefreshTask(
                 request.getPlatform(),
@@ -683,11 +1259,14 @@ public class CrawlerService {
                 refreshMode,
                 request.getForceReason(),
                 3,
-                ex.getMessage(),
+                truncateForStorage(ex.getMessage(), 500),
                 startTime,
                 LocalDateTime.now()
             );
-            if (latestSnapshot != null) {
+            if (persistenceStarted || ownershipHealthy == null || !ownershipHealthy.getAsBoolean()) {
+                throw ex;
+            }
+            if (latestSnapshot != null && CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)) {
                 LOGGER.warn("rank.refresh fallback platform={} channelCode={} boardCode={} reason={}",
                     request.getPlatform(), request.getChannelCode(), request.getBoardCode(), ex.getMessage());
                 return toRefreshResult(request.getChannelCode(), request.getBoardCode(), latestSnapshot, true, false);
@@ -696,8 +1275,24 @@ public class CrawlerService {
         }
     }
 
+    private void requireRankRefreshOwnership(BooleanSupplier ownershipHealthy) {
+        if (ownershipHealthy == null || !ownershipHealthy.getAsBoolean()) {
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "rank refresh lock ownership lost");
+        }
+    }
+
+    private String truncateForStorage(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
+    }
+
     private List<ExternalRankBoard> syncBoardCatalog(String platform) {
-        List<ExternalRankBoard> boards = pythonCrawlerClient.fetchBoardCatalog(platform, resolveCrawlerHttpTimeoutSeconds());
+        List<ExternalRankBoard> boards;
+        try (CrawlerFetchGuard.Lease ignored = crawlerFetchGuard.acquireRank()) {
+            boards = pythonCrawlerClient.fetchBoardCatalog(platform, resolveCrawlerHttpTimeoutSeconds());
+        }
         if (boards == null || boards.isEmpty()) {
             return List.of();
         }
@@ -727,23 +1322,6 @@ public class CrawlerService {
         if (!request.hasBoardSelection()) {
             throw new BusinessException(ResultCode.BAD_REQUEST, "channelCode and boardCode are required");
         }
-    }
-
-    private boolean shouldReuseHistoricalSnapshot(String refreshMode,
-                                                  CrawlerRankRequest request,
-                                                  List<CrawlRankEntity> latestSnapshot) {
-        if (latestSnapshot.isEmpty()) {
-            return false;
-        }
-        if (CrawlerRankRequest.REFRESH_MODE_AUTO.equals(refreshMode)) {
-            return crawlerRefreshPolicyService.shouldReuseRankSnapshot(latestSnapshot.get(0).getCrawlTime());
-        }
-        int recentForceCount = crawlerRepository.countRecentSuccessfulForceRefreshes(
-            request.getPlatform(),
-            request.getCategory(),
-            crawlerRefreshPolicyService.forceRefreshWindowStart()
-        );
-        return !crawlerRefreshPolicyService.allowForceRefresh(recentForceCount);
     }
 
     private RankRefreshResultVO toRefreshResult(String channelCode,
@@ -862,19 +1440,6 @@ public class CrawlerService {
         return vo;
     }
 
-    private RankBookItemVO toRankVo(ExternalRankItem item, Long bookId, CrawlerRankRequest request) {
-        RankBookItemVO vo = new RankBookItemVO();
-        vo.setBookId(bookId);
-        vo.setRankNo(item.getRankNo());
-        vo.setBookName(item.getBookName());
-        vo.setAuthor(item.getAuthor());
-        vo.setIntro(item.getIntro());
-        vo.setBookUrl(item.getBookUrl());
-        vo.setPlatform(request.getPlatform());
-        vo.setCategory(request.getCategory());
-        return vo;
-    }
-
     private RankBookItemVO toRankVo(CrawlRankEntity item) {
         RankBookItemVO vo = new RankBookItemVO();
         vo.setBookId(item.getBookId());
@@ -927,10 +1492,36 @@ public class CrawlerService {
             : lastException;
     }
 
+    private String resolveRepairedChapterBookUrl(String platform,
+                                                 CrawlBookEntity book,
+                                                 BooleanSupplier ownershipHealthy) {
+        RuntimeException lastException = null;
+        for (String candidateUrl : buildCandidateBookUrls(platform, book)) {
+            try {
+                requireChapterLockOwnership(ownershipHealthy);
+                ExternalBookDetail detail = pythonCrawlerClient.fetchBook(
+                    platform,
+                    candidateUrl,
+                    resolveCrawlerHttpTimeoutSeconds()
+                );
+                requireChapterLockOwnership(ownershipHealthy);
+                return detail.getBookUrl() == null || detail.getBookUrl().isBlank()
+                    ? candidateUrl
+                    : detail.getBookUrl();
+            } catch (RuntimeException ex) {
+                lastException = ex;
+            }
+        }
+        throw lastException == null
+            ? new BusinessException(ResultCode.BAD_REQUEST, "book detail fetch failed")
+            : lastException;
+    }
+
     private List<ExternalChapterItem> fetchChaptersWithRepair(String platform,
                                                               CrawlBookEntity book,
                                                               Integer startChapterNo,
-                                                              Integer chapterCount) {
+                                                              Integer chapterCount,
+                                                              BooleanSupplier ownershipHealthy) {
         try {
             return pythonCrawlerClient.fetchChapters(
                 platform,
@@ -941,10 +1532,12 @@ public class CrawlerService {
                 resolveChapterFetchWorkers()
             );
         } catch (RuntimeException ex) {
-            CrawlBookEntity repairedBook = refreshBookDetailWithRepair(platform, book);
+            requireChapterLockOwnership(ownershipHealthy);
+            String repairedBookUrl = resolveRepairedChapterBookUrl(platform, book, ownershipHealthy);
+            requireChapterLockOwnership(ownershipHealthy);
             return pythonCrawlerClient.fetchChapters(
                 platform,
-                repairedBook.getBookUrl(),
+                repairedBookUrl,
                 chapterCount,
                 startChapterNo,
                 resolveCrawlerHttpTimeoutSeconds(),
@@ -1069,5 +1662,8 @@ public class CrawlerService {
 
     private String firstNonBlank(String preferred, String fallback) {
         return preferred == null || preferred.isBlank() ? fallback : preferred;
+    }
+
+    private record LegacyRankBoardSelection(String channelCode, String boardCode) {
     }
 }

@@ -60,4 +60,21 @@ describe('AppHeader styles', () => {
     const rankHeader = await mountHeader('/rank');
     expect(rankHeader.find('[data-test="knowledge-mobile-project-open"]').exists()).toBe(false);
   });
+
+  test('keeps mobile account controls square instead of allowing flex compression', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppHeader.vue'), 'utf-8');
+
+    expect(source).toContain('aria-label="切换主题"');
+    expect(source).toMatch(/\.app-header__avatar-button\s*\{[\s\S]*?flex:\s*0 0 44px;[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/);
+    expect(source).toMatch(/\.app-header__mobile-project\s*\{[\s\S]*?width:\s*44px;[\s\S]*?min-width:\s*44px;[\s\S]*?height:\s*44px;/);
+    expect(source).toMatch(/\.app-header__mobile-theme\s*\{[\s\S]*?width:\s*44px;[\s\S]*?min-width:\s*44px;[\s\S]*?height:\s*44px;/);
+  });
+
+  test('gives account controls bounded lift and press feedback', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../AppHeader.vue'), 'utf-8');
+
+    expect(source).toContain('var(--motion-spring)');
+    expect(source).toContain('var(--motion-press-scale)');
+    expect(source).toContain('@media (hover: hover) and (pointer: fine)');
+  });
 });

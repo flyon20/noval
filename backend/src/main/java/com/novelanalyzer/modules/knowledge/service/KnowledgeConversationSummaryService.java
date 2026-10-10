@@ -9,7 +9,7 @@ import java.util.Optional;
 @Service
 public class KnowledgeConversationSummaryService {
 
-    private static final int MAX_SUMMARY_CHARS = 12000;
+    private static final int MAX_SUMMARY_CHARS = 128_000;
 
     private final JdbcTemplate jdbcTemplate;
 

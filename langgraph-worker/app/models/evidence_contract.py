@@ -45,6 +45,8 @@ class SnapshotGroup(BaseModel):
     channelMatch: bool = True
     boardMatch: bool = True
     snapshotAgeDays: float | None = None
+    freshness: str | None = None
+    historicalReference: bool | None = None
     score: float = 0.0
 
 

@@ -2,6 +2,7 @@
 skillId: webnovel-inspiration-engine
 version: 1.0.0
 intents: [inspiration_expand]
+requestedCapabilities: []
 triggers: [idea, brainstorm, inspiration, twist]
 ---
 

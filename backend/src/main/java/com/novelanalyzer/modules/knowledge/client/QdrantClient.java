@@ -15,7 +15,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -62,24 +64,59 @@ public class QdrantClient {
     }
 
     public void upsertPoint(String pointId, List<Double> vector, Map<String, Object> payload) {
-        LOGGER.info("qdrant upsert request: pointId={}, vectorSize={}, payloadKeys={}, payloadSize={}",
-            pointId,
-            vector == null ? 0 : vector.size(),
-            payload == null ? List.of() : payload.keySet(),
-            payload == null ? 0 : payload.size());
-        Map<String, Object> point = Map.of(
-            "id", normalizePointId(pointId),
-            "vector", vector,
-            "payload", payload == null ? Map.of() : payload
+        upsertPoints(List.of(new UpsertPoint(pointId, vector, payload)));
+    }
+
+    public void upsertPoints(List<UpsertPoint> points) {
+        if (points == null || points.isEmpty()) {
+            throw new IllegalArgumentException("qdrant upsert points are required");
+        }
+        LOGGER.info("qdrant upsert request: pointCount={}, vectorSizes={}, payloadKeys={}",
+            points.size(),
+            points.stream().map(point -> point.vector() == null ? 0 : point.vector().size()).toList(),
+            points.stream().flatMap(point -> point.payload() == null
+                ? java.util.stream.Stream.<String>empty()
+                : point.payload().keySet().stream()).distinct().toList());
+        List<Map<String, Object>> requestPoints = points.stream().map(point -> Map.of(
+            "id", normalizePointId(point.pointId()),
+            "vector", point.vector(),
+            "payload", point.payload() == null ? Map.of() : point.payload()
+        )).toList();
+        send("PUT", collectionPath() + "/points?wait=true", Map.of("points", requestPoints), "qdrant point upsert failed");
+    }
+
+    public void deletePoints(Map<String, Object> filters) {
+        if (filters == null || filters.isEmpty()) {
+            throw new IllegalArgumentException("qdrant delete filters are required");
+        }
+        send(
+            "POST",
+            collectionPath() + "/points/delete?wait=true",
+            Map.of("filter", buildFilter(filters)),
+            "qdrant point delete failed"
         );
-        send("PUT", collectionPath() + "/points", Map.of("points", List.of(point)), "qdrant point upsert failed");
     }
 
     public List<SearchResult> search(List<Double> vector, Map<String, Object> filters, int limit) {
+        return searchWithFilter(vector, buildFilter(filters), limit);
+    }
+
+    public List<SearchResult> searchWithAnyMatch(List<Double> vector,
+                                                  Map<String, Object> filters,
+                                                  String anyMatchKey,
+                                                  List<?> anyMatchValues,
+                                                  int limit) {
+        if (anyMatchKey == null || anyMatchKey.isBlank() || anyMatchValues == null || anyMatchValues.isEmpty()) {
+            return List.of();
+        }
+        return searchWithFilter(vector, buildFilter(filters, anyMatchKey, anyMatchValues), limit);
+    }
+
+    private List<SearchResult> searchWithFilter(List<Double> vector, Map<String, Object> filter, int limit) {
         try {
             Map<String, Object> request = Map.of(
                 "vector", vector,
-                "filter", buildFilter(filters),
+                "filter", filter,
                 "limit", Math.max(1, limit),
                 "with_payload", true
             );
@@ -151,6 +188,30 @@ public class QdrantClient {
         return Map.of("must", must);
     }
 
+    private Map<String, Object> buildFilter(Map<String, Object> filters,
+                                            String anyMatchKey,
+                                            List<?> anyMatchValues) {
+        Map<String, Object> base = buildFilter(filters);
+        List<Map<String, Object>> must = new ArrayList<>();
+        Object existingMust = base.get("must");
+        if (existingMust instanceof List<?> entries) {
+            for (Object entry : entries) {
+                if (entry instanceof Map<?, ?> map) {
+                    Map<String, Object> typed = new LinkedHashMap<>();
+                    for (Map.Entry<?, ?> item : map.entrySet()) {
+                        typed.put(String.valueOf(item.getKey()), item.getValue());
+                    }
+                    must.add(typed);
+                }
+            }
+        }
+        must.add(Map.of(
+            "key", anyMatchKey,
+            "match", Map.of("any", List.copyOf(anyMatchValues))
+        ));
+        return Map.of("must", must);
+    }
+
     private String collectionPath() {
         return collectionPath(knowledgeProperties.getQdrant().getCollection());
     }
@@ -201,5 +262,8 @@ public class QdrantClient {
     }
 
     public record SearchResult(String id, double score, Map<String, Object> payload) {
+    }
+
+    public record UpsertPoint(String pointId, List<Double> vector, Map<String, Object> payload) {
     }
 }

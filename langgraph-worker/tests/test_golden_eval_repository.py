@@ -17,7 +17,21 @@ class GoldenEvalRepositoryTest(unittest.TestCase):
             "case_key": "mixed-001",
             "case_type": "mixed_creation",
             "question": "根据当前男频新书榜都市脑洞第一的书，细纲怎么设计？",
-            "request_json": json.dumps({"mode": "research", "limits": {"evidenceLimit": 8}}, ensure_ascii=False),
+            "request_json": json.dumps({
+                "mode": "research",
+                "limits": {"evidenceLimit": 8},
+                "_projectRetrievalEval": {
+                    "relevanceGrades": {"chapter:12": 3},
+                    "expectedChapterIds": ["chapter:12"],
+                    "expectedForeshadowingIds": ["foreshadowing:moon"],
+                    "expectedStructuredValues": {"character:hero:status": "injured"},
+                    "expectedPathEdges": {"edge:101": ["chapter:12"]},
+                    "requireStaleRejection": True,
+                    "requireCrossUserIsolation": True,
+                    "cohort": {"genre": "urban", "generation": "77"},
+                    "applyProjectReleaseGate": True,
+                },
+            }, ensure_ascii=False),
             "expected_intent": "mixed_creation_research",
             "expected_answer_mode": "mixed_creation",
             "expected_sub_intents": json.dumps(["market_scan", "chapter_outline"], ensure_ascii=False),
@@ -47,6 +61,16 @@ class GoldenEvalRepositoryTest(unittest.TestCase):
         self.assertEqual(1.0, case.retrieval_thresholds.min_hit_rate_at_k)
         self.assertEqual(0.8, case.retrieval_thresholds.min_context_recall_at_k)
         self.assertEqual("research", case.request_payload["mode"])
+        self.assertNotIn("_projectRetrievalEval", case.request_payload)
+        self.assertEqual({"chapter:12": 3.0}, case.relevance_grades)
+        self.assertEqual({"chapter:12"}, case.expected_chapter_ids)
+        self.assertEqual({"foreshadowing:moon"}, case.expected_foreshadowing_ids)
+        self.assertEqual({"character:hero:status": "injured"}, case.expected_structured_values)
+        self.assertEqual({"edge:101": {"chapter:12"}}, case.expected_path_edges)
+        self.assertTrue(case.require_stale_rejection)
+        self.assertTrue(case.require_cross_user_isolation)
+        self.assertEqual({"genre": "urban", "generation": "77"}, case.evaluation_cohort)
+        self.assertTrue(case.apply_project_release_gate)
 
     def test_writes_eval_run_and_case_result_to_mysql(self) -> None:
         connector = FakeEvalMySqlConnector()

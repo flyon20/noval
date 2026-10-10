@@ -26,9 +26,14 @@ describe('ToolRunsTable', () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain('knowledge.vector_search');
-    expect(wrapper.text()).toContain('query: 都市脑洞 趋势');
-    expect(wrapper.text()).toContain('retrievalBackend: qdrant');
-    expect(wrapper.text()).toContain('items: 2');
+    expect(wrapper.text()).toContain('查询: 都市脑洞 趋势');
+    expect(wrapper.text()).toContain('检索后端: qdrant');
+    expect(wrapper.text()).toContain('结果项: 2');
+    expect(wrapper.text()).toContain('成功');
+    expect(wrapper.text()).toContain('2 条结果');
+    expect(wrapper.text()).not.toContain('succeeded');
+    expect(wrapper.text()).not.toContain('Input');
+    expect(wrapper.text()).not.toContain('Output');
   });
 
   test('uses readable run cards instead of a wide horizontal table', async () => {
@@ -61,6 +66,6 @@ describe('ToolRunsTable', () => {
     expect(wrapper.find('.tool-runs-table__list').exists()).toBe(true);
     expect(wrapper.findAll('[data-test="tool-run-card"]')).toHaveLength(2);
     expect(wrapper.text()).toContain('rank.lookup');
-    expect(wrapper.text()).toContain('ranks: 3');
+    expect(wrapper.text()).toContain('榜单条目: 3');
   });
 });

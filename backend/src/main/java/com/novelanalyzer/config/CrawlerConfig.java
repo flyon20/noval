@@ -4,6 +4,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
@@ -18,6 +20,20 @@ public class CrawlerConfig {
             .setConnectTimeout(Duration.ofMillis(properties.getConnectTimeoutMillis()))
             .setReadTimeout(Duration.ofMillis(properties.getReadTimeoutMillis()))
             .build();
+    }
+
+    @Bean(name = "crawlerRankRefreshTaskExecutor")
+    public AsyncTaskExecutor crawlerRankRefreshTaskExecutor(KnowledgeProperties properties) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        int poolSize = Math.max(1, properties.getResourcePolicy().getMaxCrawlerConcurrency());
+        executor.setThreadNamePrefix("crawler-rank-refresh-");
+        executor.setCorePoolSize(poolSize);
+        executor.setMaxPoolSize(poolSize);
+        executor.setQueueCapacity(4);
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.initialize();
+        return executor;
     }
 }
 

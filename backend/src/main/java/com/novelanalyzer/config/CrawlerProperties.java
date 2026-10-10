@@ -65,7 +65,7 @@ public class CrawlerProperties {
         private boolean enabled = true;
         private String cron = "0 15 2 * * ?";
         private String platform = "fanqie";
-        private int refreshDays = 7;
+        private int refreshDays = 3;
         private int batchSize = 20;
         private int rankFetchCount = 50;
 

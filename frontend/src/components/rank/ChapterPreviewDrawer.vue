@@ -9,6 +9,8 @@ const SUMMARY_LENGTH = 160;
 const props = defineProps<{
   modelValue: boolean;
   chapters: ChapterItem[];
+  errorMessage?: string;
+  statusMessage?: string;
   loading?: boolean;
   refreshLoading?: boolean;
   traceId?: string;
@@ -186,6 +188,23 @@ onBeforeUnmount(() => {
           }}，剩余 {{ refreshSummary.remainingRefreshTimes }}
         </p>
       </div>
+
+      <el-alert
+        v-if="statusMessage"
+        :closable="false"
+        :title="statusMessage"
+        data-testid="chapter-status"
+        type="info"
+      />
+
+      <el-alert
+        v-if="errorMessage"
+        :closable="false"
+        :description="traceId ? `traceId: ${traceId}` : undefined"
+        :title="errorMessage"
+        data-testid="chapter-error"
+        type="error"
+      />
 
       <el-skeleton v-if="loading" animated :rows="8" />
 

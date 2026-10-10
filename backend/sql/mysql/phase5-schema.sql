@@ -110,6 +110,21 @@ CALL add_column_if_missing(
     'VARCHAR(50) COMMENT ''board code'''
 );
 
+SET @crawl_rank_snapshot_index_ddl = (
+    SELECT IF(
+        COUNT(*) = 0,
+        'CREATE INDEX idx_crawl_rank_snapshot_lookup ON crawl_rank(snapshot_id, deleted, platform, rank_no, id)',
+        'SELECT 1'
+    )
+    FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'crawl_rank'
+      AND INDEX_NAME = 'idx_crawl_rank_snapshot_lookup'
+);
+PREPARE stmt FROM @crawl_rank_snapshot_index_ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 CALL add_column_if_missing(
     'analysis_result',
     'channel_code',
@@ -258,13 +273,50 @@ CREATE TABLE IF NOT EXISTS async_job (
     retry_count INT DEFAULT 0 COMMENT 'retry count',
     started_at DATETIME COMMENT 'started at',
     finished_at DATETIME COMMENT 'finished at',
+    queue_published_at DATETIME COMMENT 'last confirmed queue publication time',
+    queue_published_attempt INT COMMENT 'attempt confirmed in the queue',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
     deleted TINYINT DEFAULT 0 COMMENT 'logic delete flag',
     INDEX idx_async_job_type_key_time (job_type, job_key, create_time),
+    UNIQUE KEY uk_async_job_type_key_active (job_type, job_key, deleted),
     INDEX idx_async_job_resource_key (resource_key),
     INDEX idx_async_job_status_time (status, create_time),
     INDEX idx_async_job_trigger_user_time (trigger_user_id, create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='async job';
+
+CREATE TABLE IF NOT EXISTS async_job_dedup_archive (
+    archive_id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'archive row id',
+    migration_key VARCHAR(64) NOT NULL COMMENT 'idempotent migration key',
+    source_async_job_id BIGINT NOT NULL COMMENT 'archived async_job.id',
+    survivor_async_job_id BIGINT NOT NULL COMMENT 'selected survivor async_job.id',
+    job_type VARCHAR(50) NOT NULL COMMENT 'source job type',
+    job_key VARCHAR(255) NOT NULL COMMENT 'source logical job key',
+    resource_key VARCHAR(255) COMMENT 'source resource key',
+    request_json LONGTEXT COMMENT 'source request payload',
+    status VARCHAR(20) NOT NULL COMMENT 'source status',
+    trigger_user_id BIGINT COMMENT 'source trigger user id',
+    result_ref_type VARCHAR(50) COMMENT 'source result reference type',
+    result_ref_id BIGINT COMMENT 'source result reference id',
+    result_summary VARCHAR(255) COMMENT 'source result summary',
+    error_message VARCHAR(500) COMMENT 'source error message',
+    retry_count INT COMMENT 'source retry generation',
+    started_at DATETIME COMMENT 'source started time',
+    finished_at DATETIME COMMENT 'source finished time',
+    queue_published_at DATETIME COMMENT 'source queue publication time',
+    queue_published_attempt INT COMMENT 'source queue publication generation',
+    create_time DATETIME COMMENT 'source create time',
+    update_time DATETIME COMMENT 'source update time',
+    deleted TINYINT COMMENT 'source logical delete flag',
+    survivor_status VARCHAR(20) NOT NULL COMMENT 'survivor status at selection time',
+    survivor_create_time DATETIME COMMENT 'survivor create time at selection time',
+    survivor_update_time DATETIME COMMENT 'survivor update time at selection time',
+    selection_policy VARCHAR(100) NOT NULL COMMENT 'deterministic survivor policy',
+    archive_reason VARCHAR(100) NOT NULL COMMENT 'archive reason',
+    archived_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'archive time',
+    UNIQUE KEY uk_async_job_dedup_archive_source (migration_key, source_async_job_id),
+    INDEX idx_async_job_dedup_archive_survivor (survivor_async_job_id),
+    INDEX idx_async_job_dedup_archive_group (job_type, job_key, deleted)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='async job duplicate migration archive';
 
 DROP PROCEDURE IF EXISTS add_column_if_missing;

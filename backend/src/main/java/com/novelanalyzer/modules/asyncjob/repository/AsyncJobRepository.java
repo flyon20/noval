@@ -1,6 +1,7 @@
 package com.novelanalyzer.modules.asyncjob.repository;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.novelanalyzer.modules.asyncjob.mapper.AsyncJobMapper;
 import com.novelanalyzer.modules.asyncjob.model.AsyncJobEntity;
 import org.springframework.stereotype.Repository;
@@ -31,6 +32,230 @@ public class AsyncJobRepository {
     public void updateById(AsyncJobEntity entity) {
         entity.setUpdateTime(LocalDateTime.now());
         asyncJobMapper.updateById(entity);
+    }
+
+    public boolean markRunningIfPending(Long id) {
+        return markRunningIfPending(id, null);
+    }
+
+    public boolean markRunningIfPending(Long id, Integer expectedGeneration) {
+        if (id == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "PENDING")
+                .eq(expectedGeneration != null, AsyncJobEntity::getRetryCount, expectedGeneration)
+                .set(AsyncJobEntity::getStatus, "RUNNING")
+                .set(AsyncJobEntity::getStartedAt, now)
+                .set(AsyncJobEntity::getFinishedAt, null)
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
+    }
+
+    public boolean resetRunningForRecovery(Long id, LocalDateTime cutoff) {
+        if (id == null || cutoff == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "RUNNING")
+                .lt(AsyncJobEntity::getStartedAt, cutoff)
+                .set(AsyncJobEntity::getStatus, "PENDING")
+                .set(AsyncJobEntity::getErrorMessage, "recovered after worker lease timeout")
+                .set(AsyncJobEntity::getFinishedAt, null)
+                .set(AsyncJobEntity::getQueuePublishedAt, null)
+                .set(AsyncJobEntity::getQueuePublishedAttempt, null)
+                .setSql("retry_count = COALESCE(retry_count, 0) + 1")
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
+    }
+
+    public boolean heartbeatRunning(Long id, int expectedGeneration) {
+        if (id == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "RUNNING")
+                .eq(AsyncJobEntity::getRetryCount, expectedGeneration)
+                .set(AsyncJobEntity::getStartedAt, now)
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
+    }
+
+    public boolean isRunningGeneration(Long id, int expectedGeneration) {
+        if (id == null) {
+            return false;
+        }
+        Long count = asyncJobMapper.selectCount(
+            new LambdaQueryWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "RUNNING")
+                .eq(AsyncJobEntity::getRetryCount, expectedGeneration)
+        );
+        return count != null && count == 1L;
+    }
+
+    public boolean lockRunningGeneration(Long id, int expectedGeneration) {
+        if (id == null) {
+            return false;
+        }
+        AsyncJobEntity entity = asyncJobMapper.selectOne(
+            new LambdaQueryWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "RUNNING")
+                .eq(AsyncJobEntity::getRetryCount, expectedGeneration)
+                .last("FOR UPDATE")
+        );
+        return entity != null;
+    }
+
+    public boolean markSuccessIfRunning(Long id,
+                                        int expectedGeneration,
+                                        String resultRefType,
+                                        Long resultRefId,
+                                        String resultSummary) {
+        if (id == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "RUNNING")
+                .eq(AsyncJobEntity::getRetryCount, expectedGeneration)
+                .set(AsyncJobEntity::getStatus, "SUCCESS")
+                .set(AsyncJobEntity::getResultRefType, resultRefType)
+                .set(AsyncJobEntity::getResultRefId, resultRefId)
+                .set(AsyncJobEntity::getResultSummary, resultSummary)
+                .set(AsyncJobEntity::getErrorMessage, null)
+                .set(AsyncJobEntity::getFinishedAt, now)
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
+    }
+
+    public boolean markPendingForRetryIfRunning(Long id,
+                                                int expectedGeneration,
+                                                String errorMessage) {
+        if (id == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "RUNNING")
+                .eq(AsyncJobEntity::getRetryCount, expectedGeneration)
+                .set(AsyncJobEntity::getStatus, "PENDING")
+                .set(AsyncJobEntity::getErrorMessage, errorMessage)
+                .setSql("retry_count = COALESCE(retry_count, 0) + 1")
+                .set(AsyncJobEntity::getFinishedAt, null)
+                .set(AsyncJobEntity::getQueuePublishedAt, null)
+                .set(AsyncJobEntity::getQueuePublishedAttempt, null)
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
+    }
+
+    public boolean markFailedIfRunning(Long id, int expectedGeneration, String errorMessage) {
+        if (id == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "RUNNING")
+                .eq(AsyncJobEntity::getRetryCount, expectedGeneration)
+                .set(AsyncJobEntity::getStatus, "FAILED")
+                .set(AsyncJobEntity::getErrorMessage, errorMessage)
+                .set(AsyncJobEntity::getFinishedAt, now)
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
+    }
+
+    public List<AsyncJobEntity> findRecoverableIndexJobs(String jobType,
+                                                         LocalDateTime pendingCutoff,
+                                                         LocalDateTime runningCutoff,
+                                                         int limit) {
+        return asyncJobMapper.selectList(
+            new LambdaQueryWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getJobType, jobType)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .and(wrapper -> wrapper
+                    .and(pending -> pending
+                        .eq(AsyncJobEntity::getStatus, "PENDING")
+                        .and(published -> published
+                            .isNull(AsyncJobEntity::getQueuePublishedAt)
+                            .or()
+                            .lt(AsyncJobEntity::getQueuePublishedAt, pendingCutoff)))
+                    .or(running -> running
+                        .eq(AsyncJobEntity::getStatus, "RUNNING")
+                        .lt(AsyncJobEntity::getStartedAt, runningCutoff)))
+                .orderByAsc(AsyncJobEntity::getUpdateTime)
+                .last("LIMIT " + Math.max(1, limit))
+        );
+    }
+
+    public boolean markQueuePublished(Long id, int attempt) {
+        if (id == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getRetryCount, attempt)
+                .set(AsyncJobEntity::getQueuePublishedAt, now)
+                .set(AsyncJobEntity::getQueuePublishedAttempt, attempt)
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
+    }
+
+    public boolean markPublishFailureIfPending(Long id, String errorMessage) {
+        return markPublishFailureIfPending(id, null, errorMessage);
+    }
+
+    public boolean markPublishFailureIfPending(Long id, Integer expectedGeneration, String errorMessage) {
+        if (id == null) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        int updated = asyncJobMapper.update(null,
+            new LambdaUpdateWrapper<AsyncJobEntity>()
+                .eq(AsyncJobEntity::getId, id)
+                .eq(AsyncJobEntity::getDeleted, 0)
+                .eq(AsyncJobEntity::getStatus, "PENDING")
+                .eq(expectedGeneration != null, AsyncJobEntity::getRetryCount, expectedGeneration)
+                .set(AsyncJobEntity::getErrorMessage, errorMessage)
+                .set(AsyncJobEntity::getFinishedAt, null)
+                .set(AsyncJobEntity::getQueuePublishedAt, null)
+                .set(AsyncJobEntity::getQueuePublishedAttempt, null)
+                .set(AsyncJobEntity::getUpdateTime, now)
+        );
+        return updated == 1;
     }
 
     public Optional<AsyncJobEntity> findById(Long id) {

@@ -1,37 +1,75 @@
 from __future__ import annotations
 
 from app.models.agent_task import TaskGraph, TaskType, ToolPlan
+from typing import Any
+
+from app.services.harness.contracts import CapabilityPlan, CapabilityScope, IntentEnvelope, RepairProposal
 
 
 class DomainToolPlanner:
+    def propose_read_repair(
+        self, *, graph: TaskGraph, plans: list[ToolPlan], envelope: IntentEnvelope,
+        capability_plan: CapabilityPlan, scope: CapabilityScope, allowed_tools: set[str],
+        runs: list[dict[str, Any]],
+        work_id: int | None = None,
+    ) -> tuple[RepairProposal, list[ToolPlan]] | None:
+        if capability_plan.intentEnvelopeHash != envelope.fingerprint or scope.projectId is None:
+            return None
+        if any(run.get("status") in {"denied", "cancelled", "unknown"} or run.get("errorType") in {
+            "ToolNotAllowed", "ProjectScopeMismatch", "ProjectScopeUnresolved", "McpPermissionDenied",
+            "ToolBudgetExceeded", "BudgetExceededError",
+        } for run in runs):
+            return None
+        task_ids = {task.id for task in graph.tasks}
+        repair_plans: list[ToolPlan] = []
+        for plan in plans:
+            if plan.taskId not in task_ids or "project.retrieve" not in plan.tools or "project.retrieve" not in allowed_tools:
+                continue
+            retrieval = plan.retrievalPlan
+            if retrieval is None or not plan.required:
+                continue
+            attempts = [run for run in runs if run.get("name") == "project.retrieve"
+                        and (run.get("input") or {}).get("taskId") == plan.taskId]
+            if not attempts or any(
+                run.get("status") != "succeeded" or (
+                    bool((run.get("output") or {}).get("evidence"))
+                    if isinstance((run.get("output") or {}).get("evidence"), list)
+                    else int(run.get("resultCount") or 0) > 0
+                ) for run in attempts
+            ):
+                continue
+            query = " ".join(retrieval.entities).strip()
+            if not query or query == retrieval.query or len(query) > 2000:
+                continue
+            repair_plans.append(plan.model_copy(update={
+                "tools": ["project.retrieve"], "retrievalPlan": retrieval.model_copy(update={"query": query}),
+                "reason": "empty_result_query_refinement",
+            }))
+        if not repair_plans:
+            return None
+        repair_plans = repair_plans[:12]
+        return RepairProposal(
+            intentEnvelopeHash=envelope.fingerprint, scope=scope, workId=work_id, planRevision=1,
+            missingRequirementIds=tuple(plan.taskId for plan in repair_plans),
+            action="refine_query", reasonCode="empty_result",
+        ), repair_plans
+
     def plan(self, graph: TaskGraph) -> list[ToolPlan]:
         plans: list[ToolPlan] = []
         for task in graph.tasks:
-            tools = self._tools_for(task.type, admin_operation_requested=graph.adminOperationRequested)
             plans.append(
                 ToolPlan(
                     taskId=task.id,
                     taskType=task.type,
-                    tools=tools,
-                    required=task.type in {TaskType.market_scan, TaskType.book_breakdown},
+                    tools=list(task.tools),
+                    required=task.type in {
+                        TaskType.market_scan,
+                        TaskType.book_breakdown,
+                        TaskType.project_knowledge_qa,
+                        TaskType.foreshadowing_audit,
+                        TaskType.continuity_check,
+                    },
                     reason=f"Mapped from task type {task.type.value}",
                 )
             )
         return plans
-
-    def _tools_for(self, task_type: TaskType, *, admin_operation_requested: bool) -> list[str]:
-        if task_type is TaskType.skill_governance:
-            return [] if admin_operation_requested else ["skill.lookup"]
-        return {
-            TaskType.market_scan: ["rank.lookup", "rank.research_pack"],
-            TaskType.book_breakdown: ["book.research_pack", "knowledge.vector_search"],
-            TaskType.topic_strategy: ["knowledge.vector_search", "skill.lookup"],
-            TaskType.outline_building: ["skill.lookup", "memory.project_context"],
-            TaskType.chapter_outline: ["skill.lookup", "memory.project_context"],
-            TaskType.character_design: ["skill.lookup", "memory.project_context"],
-            TaskType.worldbuilding: ["skill.lookup", "memory.project_context"],
-            TaskType.revision_advice: ["knowledge.vector_search", "editor.risk_check"],
-            TaskType.reader_risk: ["reader.simulate_feedback"],
-            TaskType.editor_risk: ["editor.risk_check"],
-            TaskType.followup_context: ["memory.project_context"],
-        }.get(task_type, [])

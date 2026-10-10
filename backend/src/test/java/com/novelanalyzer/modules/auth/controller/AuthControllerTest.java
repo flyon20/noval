@@ -214,6 +214,10 @@ class AuthControllerTest {
 
     @Test
     void shouldGrantAdminRoleToBootstrapPhoneOnPasswordLogin() throws Exception {
+        jdbcTemplate.update("""
+            INSERT INTO system_config (config_key, config_value, config_type, description, is_editable, deleted)
+            VALUES ('auth.bootstrap-admin-phones', '19900000001', 'auth', 'Explicit test bootstrap admin', 1, 0)
+            """);
         jdbcTemplate.update(
             """
             INSERT INTO sys_user (id, username, password, phone, phone_verified, status, deleted, password_updated_time)
@@ -222,7 +226,7 @@ class AuthControllerTest {
             3L,
             "bootstrap-admin",
             "{noop}Password123",
-            "15599316908",
+            "19900000001",
             1,
             1,
             0
@@ -231,7 +235,7 @@ class AuthControllerTest {
 
         MvcResult loginResult = mockMvc.perform(post("/api/auth/login/password")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"phone\":\"15599316908\",\"password\":\"Password123\"}"))
+                .content("{\"phone\":\"19900000001\",\"password\":\"Password123\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.code").value(200))
             .andReturn();

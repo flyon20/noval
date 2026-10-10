@@ -19,6 +19,7 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -54,6 +55,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleTemporaryDatabaseException(Exception ex) {
         LOGGER.warn("temporary database exception: {}", ex.getMessage());
         return buildResponse(ResultCode.SERVICE_UNAVAILABLE, TEMPORARY_DATABASE_BUSY_MESSAGE);
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Result<Void>> handleNoResourceFoundException(NoResourceFoundException ex) {
+        return buildResponse(ResultCode.NOT_FOUND, ResultCode.NOT_FOUND.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

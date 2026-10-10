@@ -78,6 +78,11 @@ class GoldenEvalMixedCreationTest(unittest.IsolatedAsyncioTestCase):
             forbid_fallback=bool(raw.get("forbid_fallback", False)),
             require_provider_success=bool(raw.get("require_provider_success", False)),
             require_selected_experts=bool(raw.get("require_selected_experts", False)),
+            require_selected_capabilities=bool(raw.get("require_selected_capabilities", False)),
+            required_capability_categories=dict(raw.get("required_capability_categories", {})),
+            expected_delegated_count=raw.get("expected_delegated_count"),
+            expected_max_parallel=raw.get("expected_max_parallel"),
+            expected_quality_gain_threshold=raw.get("expected_quality_gain_threshold"),
         )
 
     async def test_mixed_creation_001_rank_imitation_and_chapter_outline(self) -> None:
@@ -103,13 +108,15 @@ class GoldenEvalMixedCreationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(client.rank_pack_calls))
         self.assertEqual("latest", client.lookup_rank_calls[0]["freshness"])
         self.assertEqual("latest", client.rank_pack_calls[0]["freshness"])
-        self.assertGreaterEqual(len(client.search_evidence_calls), 1)
+        self.assertEqual(2, len(client.search_evidence_calls))
+        self.assertEqual({None, "RANK"}, {call["source_type"] for call in client.search_evidence_calls})
+        self.assertTrue(all(call["limit"] == 5 for call in client.search_evidence_calls))
         specialist_calls = [call for call in provider.invoke_calls if _is_specialist_call(call)]
         answer_calls = [call for call in provider.invoke_calls if not _is_specialist_call(call)]
-        self.assertGreaterEqual(len(specialist_calls), 5)
+        self.assertEqual(0, len(specialist_calls))
         self.assertGreaterEqual(len(answer_calls), 1)
 
-    async def test_production_trace_b41_mixed_snapshot_rank_tools_answers_with_contract(self) -> None:
+    async def test_production_trace_b41_stops_after_current_topn_coverage(self) -> None:
         client = MixedSnapshotGoldenKnowledgeClient()
         provider = MixedCreationGoldenAnswerProvider()
         agent = NovelResearchAgent(knowledge_client=client, provider_client=provider)
@@ -131,11 +138,15 @@ class GoldenEvalMixedCreationTest(unittest.IsolatedAsyncioTestCase):
         source_policy = response.resultJson["sourcePolicy"]
         contract = source_policy["evidenceContract"]
         self.assertFalse(source_policy["trendGateFailed"])
-        self.assertEqual("mixed_structured_rank_snapshot", source_policy["trendGateOriginalReason"])
-        self.assertIn(contract["status"], {"degraded_directional", "verified_latest"})
-        self.assertEqual(9201, contract["selectedSnapshotGroup"]["snapshotId"])
+        self.assertNotIn("trendGateOriginalReason", source_policy)
+        self.assertEqual("verified_latest", contract["status"])
+        self.assertEqual(9101, contract["selectedSnapshotGroup"]["snapshotId"])
         self.assertGreaterEqual(len(client.lookup_rank_calls), 1)
-        self.assertGreaterEqual(len(client.rank_pack_calls), 1)
+        self.assertEqual([], client.rank_pack_calls)
+        self.assertEqual(
+            "task_graph_evidence_coverage_satisfied",
+            response.resultJson["retrievalDiagnostics"]["stopReason"],
+        )
         self.assertGreaterEqual(len(provider.invoke_calls), 1)
 
     async def test_production_trace_206_lookup_only_snapshotless_rows_answer_degraded(self) -> None:
@@ -372,7 +383,10 @@ class MixedSnapshotGoldenKnowledgeClient(MixedCreationGoldenKnowledgeClient):
             "time_window_days": time_window_days,
             "require_snapshot_time": require_snapshot_time,
         })
-        return [self._rank_item(index=index, snapshot_id=9101, prefix="Lookup") for index in range(1, 11)]
+        return [
+            self._rank_item(index=index, snapshot_id=9101, prefix="Lookup")
+            for index in range(1, max(1, int(limit)) + 1)
+        ]
 
     async def get_rank_research_pack(
         self,
@@ -402,7 +416,10 @@ class MixedSnapshotGoldenKnowledgeClient(MixedCreationGoldenKnowledgeClient):
             "time_window_days": time_window_days,
             "require_snapshot_time": require_snapshot_time,
         })
-        ranks = [self._rank_item(index=index, snapshot_id=9201, prefix="Pack") for index in range(1, 11)]
+        ranks = [
+            self._rank_item(index=index, snapshot_id=9201, prefix="Pack")
+            for index in range(1, max(1, int(limit)) + 1)
+        ]
         return RankResearchPack(
             ranks=ranks,
             books=[

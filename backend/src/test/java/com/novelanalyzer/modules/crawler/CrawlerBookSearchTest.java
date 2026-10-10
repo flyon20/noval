@@ -55,7 +55,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 class CrawlerBookSearchTest {
 
-    private static final String ADMIN_PHONE = "15599316908";
+    private static final String ADMIN_PHONE = "19900000001";
 
     @Autowired
     private MockMvc mockMvc;
@@ -103,6 +103,32 @@ class CrawlerBookSearchTest {
             .andExpect(jsonPath("$.data[0].platformBookId").value("101"));
 
         verify(pythonCrawlerClient, never()).searchBooks("fanqie", "Book", 1);
+    }
+
+    @Test
+    void shouldFindLocalBookByDescriptionWithoutCallingCrawlerWhenEnough() throws Exception {
+        insertBook(
+            "fanqie",
+            "201",
+            "神眷纪元",
+            "Author C",
+            "在这个文明里，每个城邦都相信自己有神眷顾。",
+            "https://fanqienovel.com/page/201"
+        );
+
+        String token = loginAndGetToken("admin123");
+        mockMvc.perform(post("/api/crawler/books/search")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"platform":"fanqie","keyword":"这个文明有神眷顾","limit":1}
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.code").value(200))
+            .andExpect(jsonPath("$.data.length()").value(1))
+            .andExpect(jsonPath("$.data[0].bookName").value("神眷纪元"));
+
+        verify(pythonCrawlerClient, never()).searchBooks("fanqie", "这个文明有神眷顾", 1);
     }
 
     @Test

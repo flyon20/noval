@@ -25,12 +25,24 @@ def fuse_and_rerank_sources(
     deduped = _dedupe_sources(sources)
     question_terms = _extract_query_terms(request.question or "")
     intent = str(state.get("intent") or "")
+    project_task_type = _project_task_type(state)
     needs_chapter_evidence = _needs_chapter_level_evidence(request)
     ranked = sorted(
         deduped,
-        key=lambda source: _source_rank_score(source, question_terms, intent, needs_chapter_evidence),
-        reverse=True,
+        key=lambda source: (
+            -_source_rank_score(
+                source,
+                question_terms,
+                intent,
+                needs_chapter_evidence,
+                project_task_type=project_task_type,
+            ),
+            _stable_source_key(source),
+        ),
     )
+    reason_tags = ["static_weight_rerank"]
+    if project_task_type:
+        reason_tags.append("intent_aware_project_rerank")
     if intent == "trend_research":
         selected = _select_trend_sources(ranked, max(1, limit))
         _attach_retrieval_diagnostics(
@@ -39,18 +51,22 @@ def fuse_and_rerank_sources(
             input_sources=sources,
             deduped_sources=deduped,
             selected_sources=selected,
-            reason_tags=["static_weight_rerank", "trend_quota_selection"],
+            reason_tags=[*reason_tags, "trend_quota_selection"],
             needs_chapter_evidence=needs_chapter_evidence,
         )
         return selected
-    selected = ranked[: max(1, limit)]
+    if project_task_type:
+        selected = _select_project_sources(ranked, max(1, limit))
+        reason_tags.append("project_backend_diversity")
+    else:
+        selected = ranked[: max(1, limit)]
     _attach_retrieval_diagnostics(
         state,
         intent=intent,
         input_sources=sources,
         deduped_sources=deduped,
         selected_sources=selected,
-        reason_tags=["static_weight_rerank"],
+        reason_tags=reason_tags,
         needs_chapter_evidence=needs_chapter_evidence,
     )
     return selected
@@ -79,6 +95,10 @@ def _attach_retrieval_diagnostics(
         "inputSourceTypeCounts": _source_type_counts(input_sources),
         "dedupedSourceTypeCounts": _source_type_counts(deduped_sources),
         "selectedSourceTypeCounts": _source_type_counts(selected_sources),
+        "inputBackendCounts": _backend_counts(input_sources),
+        "dedupedBackendCounts": _backend_counts(deduped_sources),
+        "selectedBackendCounts": _backend_counts(selected_sources),
+        "vectorUsed": any(_source_backend(source) in {"qdrant", "vector"} for source in selected_sources),
         "reasonTags": sorted(set(tags)),
     }
 
@@ -91,23 +111,114 @@ def _source_type_counts(sources: list[KnowledgeSource]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _dedupe_sources(sources: list[KnowledgeSource]) -> list[KnowledgeSource]:
-    deduped: list[KnowledgeSource] = []
-    seen: set[tuple[Any, ...]] = set()
+def _backend_counts(sources: list[KnowledgeSource]) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for source in sources:
-        key = (
+        backend = _source_backend(source) or "unknown"
+        counts[backend] = counts.get(backend, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _select_project_sources(ranked: list[KnowledgeSource], limit: int) -> list[KnowledgeSource]:
+    selected: list[KnowledgeSource] = []
+    represented_backends: set[str] = set()
+    for source in ranked:
+        backend = _source_backend(source)
+        if backend and backend not in represented_backends:
+            represented_backends.add(backend)
+            selected.append(source)
+            if len(selected) >= limit:
+                return selected
+    for source in ranked:
+        if source not in selected:
+            selected.append(source)
+            if len(selected) >= limit:
+                break
+    return selected
+
+
+def _dedupe_sources(sources: list[KnowledgeSource]) -> list[KnowledgeSource]:
+    ordered_keys: list[tuple[Any, ...]] = []
+    best_by_key: dict[tuple[Any, ...], KnowledgeSource] = {}
+    for source in sources:
+        key = _source_dedupe_key(source)
+        existing = best_by_key.get(key)
+        if existing is None:
+            ordered_keys.append(key)
+            best_by_key[key] = source
+        elif _duplicate_preference(source) > _duplicate_preference(existing):
+            best_by_key[key] = source
+    return [best_by_key[key] for key in ordered_keys]
+
+
+def _source_dedupe_key(source: KnowledgeSource) -> tuple[Any, ...]:
+    if _is_project_source(source):
+        scope = (source.projectId, source.workId, source.generationId)
+        content_hash = _normalize(source.contentHash)
+        if content_hash and _source_type(source) != "PROJECT_GRAPH" and _source_backend(source) != "graph":
+            return ("project_content", *scope, content_hash)
+        return (
+            "project_source",
+            *scope,
+            _source_type(source),
+            source.documentId,
             source.chunkId,
-            source.bookId,
-            _normalize(source.sourceType),
             source.sourceRefId,
-            source.chapterNo,
+            source.chapterId,
+            source.sceneId,
+            _normalize(source.contentHash),
             _normalize(source.title),
         )
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(source)
-    return deduped
+    return (
+        source.chunkId,
+        source.bookId,
+        _normalize(source.sourceType),
+        source.sourceRefId,
+        source.chapterNo,
+        _normalize(source.title),
+    )
+
+
+def _duplicate_preference(source: KnowledgeSource) -> tuple[float, ...]:
+    score = float(source.score or 0.0)
+    if _is_project_source(source):
+        return float(_project_backend_preference(source)), score
+    return score, float(_project_backend_preference(source))
+
+
+def _project_backend_preference(source: KnowledgeSource) -> int:
+    return {
+        "structured": 5,
+        "graph": 4,
+        "qdrant": 3,
+        "fulltext": 2,
+        "lexical": 1,
+    }.get(_source_backend(source), 0)
+
+
+def _stable_source_key(source: KnowledgeSource) -> tuple[Any, ...]:
+    return (
+        _stable_int(source.projectId),
+        _stable_int(source.workId),
+        _stable_int(source.generationId),
+        _stable_int(source.documentId),
+        _stable_int(source.chunkId),
+        _stable_int(source.sourceRefId),
+        _stable_int(source.chapterId),
+        _stable_int(source.sceneId),
+        _stable_int(source.bookId),
+        _stable_int(source.chapterNo),
+        _normalize(source.sourceType),
+        _normalize(source.contentHash),
+        _normalize(source.title),
+    )
+
+
+def _stable_int(value: Any) -> int:
+    try:
+        return int(value) if value is not None else 2**63 - 1
+    except (TypeError, ValueError):
+        return 2**63 - 1
 
 
 def _select_trend_sources(ranked: list[KnowledgeSource], limit: int) -> list[KnowledgeSource]:
@@ -209,12 +320,16 @@ def _source_rank_score(
     question_terms: set[str],
     intent: str,
     needs_chapter_level_evidence: bool,
+    *,
+    project_task_type: str = "",
 ) -> float:
     score = float(source.score or 0)
     text = f"{source.bookName or ''} {source.title or ''} {source.preview or ''}"
     normalized_text = _normalize(text)
     overlap = sum(1 for term in question_terms if term and term in normalized_text)
     source_type = _source_type(source)
+    if _is_project_source(source):
+        return score + min(overlap, 3) * 0.04 + _project_source_weight(source, project_task_type)
     if intent == "trend_research":
         source_weight = {"RANK": 0.35, "ANALYSIS": 0.18, "INTRO": 0.08, "CHAPTER": 0.04, "CHAPTER_PACK": 0.04}.get(source_type, 0.0)
         rank_bonus = max(0.0, (30 - float(source.rankNo or 30)) * 0.02) if source_type == "RANK" else 0.0
@@ -224,6 +339,65 @@ def _source_rank_score(
     else:
         source_weight = {"CHAPTER": 0.18, "CHAPTER_PACK": 0.18, "INTRO": 0.1, "RANK": 0.1, "ANALYSIS": 0.08}.get(source_type, 0.0)
     return score + overlap * 0.04 + source_weight
+
+
+def _project_task_type(state: dict[str, Any]) -> str:
+    task_types = {
+        str(task.get("type") or "").strip()
+        for task in list((state.get("task_graph") or {}).get("tasks") or [])
+        if isinstance(task, dict)
+    }
+    for task_type in ("continuity_check", "foreshadowing_audit", "project_knowledge_qa"):
+        if task_type in task_types:
+            return task_type
+    return ""
+
+
+def _is_project_source(source: KnowledgeSource) -> bool:
+    return _source_type(source).startswith("PROJECT_")
+
+
+def _source_backend(source: KnowledgeSource) -> str:
+    return str(source.retrievalBackend or "").strip().lower()
+
+
+def _project_source_weight(source: KnowledgeSource, task_type: str) -> float:
+    source_type = _source_type(source)
+    if task_type == "continuity_check":
+        source_weight = {
+            "PROJECT_GRAPH": 0.45,
+            "PROJECT_CHARACTER_STATE": 0.42,
+            "PROJECT_TIMELINE_EVENT": 0.40,
+            "PROJECT_WORLD_RULE": 0.40,
+            "PROJECT_CHAPTER": 0.25,
+            "PROJECT_SCENE": 0.25,
+        }.get(source_type, 0.22)
+    elif task_type == "foreshadowing_audit":
+        source_weight = {
+            "PROJECT_GRAPH": 0.45,
+            "PROJECT_FORESHADOWING": 0.42,
+            "PROJECT_CHAPTER": 0.28,
+            "PROJECT_SCENE": 0.28,
+            "PROJECT_TIMELINE_EVENT": 0.25,
+        }.get(source_type, 0.22)
+    else:
+        source_weight = {
+            "PROJECT_CHAPTER": 0.35,
+            "PROJECT_SCENE": 0.32,
+            "PROJECT_CHARACTER_STATE": 0.30,
+            "PROJECT_WORLD_RULE": 0.30,
+            "PROJECT_TIMELINE_EVENT": 0.30,
+            "PROJECT_FORESHADOWING": 0.30,
+            "PROJECT_GRAPH": 0.28,
+        }.get(source_type, 0.24)
+    backend_weight = {
+        "structured": 0.07,
+        "graph": 0.08,
+        "qdrant": 0.04,
+        "fulltext": 0.02,
+        "lexical": 0.01,
+    }.get(_source_backend(source), 0.0)
+    return source_weight + backend_weight
 
 
 def _extract_query_terms(question: str) -> set[str]:

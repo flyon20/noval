@@ -1,5 +1,8 @@
 package com.novelanalyzer.modules.knowledge.vo;
 
+import java.util.List;
+import java.util.Map;
+
 public class KnowledgeChatRunVO {
 
     private String runId;
@@ -14,6 +17,8 @@ public class KnowledgeChatRunVO {
     private String resultJson;
     private String traceId;
     private Integer sourceCount;
+    private Long snapshotSequenceNo;
+    private List<Map<String, Object>> toolItems = List.of();
     private String errorMessage;
     private Boolean cancelRequested;
     private Integer retryCount;
@@ -118,6 +123,20 @@ public class KnowledgeChatRunVO {
     public void setSourceCount(Integer sourceCount) {
         this.sourceCount = sourceCount;
     }
+
+    public Long getSnapshotSequenceNo() {
+        return snapshotSequenceNo;
+    }
+
+    public void setSnapshotSequenceNo(Long snapshotSequenceNo) {
+        this.snapshotSequenceNo = snapshotSequenceNo;
+    }
+
+    public int getToolItemsSchemaVersion() { return 1; }
+
+    public List<Map<String, Object>> getToolItems() { return toolItems; }
+
+    public void setToolItems(List<Map<String, Object>> toolItems) { this.toolItems = toolItems; }
 
     public String getErrorMessage() {
         return errorMessage;

@@ -22,6 +22,11 @@ class GoldenEvalExpectedTrace:
     forbid_fallback: bool = False
     require_provider_success: bool = False
     require_selected_experts: bool = False
+    require_selected_capabilities: bool = False
+    required_capability_categories: dict[str, str] = field(default_factory=dict)
+    expected_delegated_count: int | None = None
+    expected_max_parallel: int | None = None
+    expected_quality_gain_threshold: float | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,15 @@ class GoldenEvalCase:
     expected_answer_mode: str | None = None
     expected_sub_intents: set[str] = field(default_factory=set)
     relevant_source_ids: set[str] = field(default_factory=set)
+    relevance_grades: dict[str, float] = field(default_factory=dict)
+    expected_chapter_ids: set[str] = field(default_factory=set)
+    expected_foreshadowing_ids: set[str] = field(default_factory=set)
+    expected_structured_values: dict[str, Any] = field(default_factory=dict)
+    expected_path_edges: dict[str, set[str]] = field(default_factory=dict)
+    require_stale_rejection: bool = False
+    require_cross_user_isolation: bool = False
+    evaluation_cohort: dict[str, str] = field(default_factory=dict)
+    apply_project_release_gate: bool = False
     grounded_claims: list[str] = field(default_factory=list)
     forbidden_claims: list[str] = field(default_factory=list)
     retrieval_thresholds: RetrievalEvalThresholds = field(default_factory=RetrievalEvalThresholds)

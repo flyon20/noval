@@ -40,6 +40,33 @@ class EvidencePackBuilderTest(unittest.TestCase):
         self.assertEqual(10, pack.facts[0]["snapshotId"])
         self.assertEqual("2026-06-21T00:00:00", pack.facts[0]["snapshotTime"])
 
+    def test_project_vector_evidence_preserves_retrieval_provenance(self) -> None:
+        pack = EvidencePackBuilder().from_sources([
+            KnowledgeSource(
+                chunkId=201,
+                score=0.83,
+                projectId=91,
+                workId=911,
+                chapterId=301,
+                generationId=701,
+                chapterVersion=3,
+                sourceType="PROJECT_CHAPTER",
+                sourceRefId=201,
+                retrievalBackend="qdrant",
+                title="Semantic scene",
+                preview="vector evidence",
+            )
+        ])
+
+        self.assertEqual(1, len(pack.examples))
+        evidence = pack.examples[0]
+        self.assertEqual("qdrant", evidence["retrievalBackend"])
+        self.assertEqual("vector", evidence["retrievalChannel"])
+        self.assertEqual(0.83, evidence["score"])
+        self.assertEqual(201, evidence["chunkId"])
+        self.assertEqual(701, evidence["generationId"])
+        self.assertEqual(3, evidence["chapterVersion"])
+
 
 class AgentTraceAttachmentTest(unittest.IsolatedAsyncioTestCase):
     async def test_project_memory_appears_in_trace_context_used(self) -> None:
@@ -65,15 +92,30 @@ class AgentTraceAttachmentTest(unittest.IsolatedAsyncioTestCase):
             async def search_books(self, **_kwargs) -> list:
                 return []
 
+            async def search_memory(self, **_kwargs) -> list:
+                return [{
+                    "id": 901,
+                    "scope": "project",
+                    "memoryType": "constraint",
+                    "content": "no harem",
+                    "status": "CONFIRMED",
+                    "sourceTraceId": "trace-memory-901",
+                    "provenance": {"kind": "user_confirmed"},
+                }]
+
+            async def search_semantic_memory(self, **_kwargs) -> list:
+                return []
+
         client = MemoryClient()
         agent = NovelResearchAgent(knowledge_client=client, provider_client=Provider())
 
         response = await agent.run(
             KnowledgeChatRequest(
-                question="这个项目前三章怎么改？",
+                question="项目里的三端一体设定继续扩展一下。",
                 userId=7,
                 projectId=900,
                 conversationId="conv-900",
+                contextSummary="项目设定：主角金手指是三端一体。",
             )
         )
 
@@ -81,6 +123,18 @@ class AgentTraceAttachmentTest(unittest.IsolatedAsyncioTestCase):
         context_used = response.resultJson["trace"]["contextUsed"]
         self.assertTrue(context_used["hasProjectProfile"])
         self.assertIn("projectProfile", context_used["layers"])
+        self.assertEqual(
+            [{
+                "memoryId": "901",
+                "scope": "project",
+                "memoryType": "constraint",
+                "status": "CONFIRMED",
+                "sourceTraceId": "trace-memory-901",
+                "provenance": {"kind": "user_confirmed"},
+            }],
+            response.resultJson["trace"]["memoryEvidence"],
+        )
+        self.assertNotIn("no harem", str(response.resultJson["trace"]["memoryEvidence"]))
 
     async def test_creative_response_includes_task_graph_evidence_and_perspectives(self) -> None:
         class Provider:
@@ -90,7 +144,7 @@ class AgentTraceAttachmentTest(unittest.IsolatedAsyncioTestCase):
                     "token_used": 64,
                 }
 
-        agent = NovelResearchAgent(provider_client=Provider())
+        agent = NovelResearchAgent(knowledge_client=object(), provider_client=Provider())
         response = await agent.run(
             KnowledgeChatRequest(question="我想写一本修仙文，帮我设计主角人设和前三章细纲。")
         )
@@ -110,14 +164,16 @@ class AgentTraceAttachmentTest(unittest.IsolatedAsyncioTestCase):
         runtime_node_names = [node["name"] for node in result["trace"]["nodes"]]
         self.assertEqual(
             [
-                "assemble_context",
                 "classify_intent",
+                "assemble_context",
                 "plan_tasks",
                 "validate_preconditions",
                 "route_experts",
                 "execute_tools",
                 "supervise_evidence",
                 "compose_answer",
+                "review_answer",
+                "revise_answer",
                 "extract_memory_candidates",
                 "finalize_trace",
             ],
@@ -127,7 +183,7 @@ class AgentTraceAttachmentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("author", {item["perspective"] for item in result["perspectiveResults"]})
 
     async def test_skill_governance_request_gets_admin_marker_without_skill_tool_run(self) -> None:
-        agent = NovelResearchAgent()
+        agent = NovelResearchAgent(knowledge_client=object())
         response = await agent.run(KnowledgeChatRequest(question="帮我新增一个 skill 并发布到系统。"))
 
         result = response.resultJson

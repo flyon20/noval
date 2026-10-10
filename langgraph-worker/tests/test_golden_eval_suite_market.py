@@ -92,7 +92,7 @@ class GoldenEvalMarketScanTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], provider.invoke_calls)
         source_policy = response.resultJson["sourcePolicy"]
         self.assertTrue(source_policy["trendGateFailed"])
-        self.assertEqual("mixed_structured_rank_snapshot", source_policy["trendGateReason"])
+        self.assertEqual("stale_structured_rank_snapshot", source_policy["trendGateReason"])
         self.assertNotIn("evidenceContract", source_policy)
 
     def _find_case(self, case_id: str) -> GoldenEvalCase:

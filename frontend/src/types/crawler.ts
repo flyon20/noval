@@ -31,6 +31,7 @@ export interface CrawlerRankRequest {
   boardCode?: string;
   refreshMode?: RefreshMode;
   forceReason?: string;
+  idempotencyKey?: string;
   rankFetchCount?: RankFetchCount;
 }
 
@@ -108,4 +109,6 @@ export interface ChapterItem {
   chapterTitle: string;
   content: string;
   wordCount: number;
+  sourceWordCount?: number;
+  crawlTime?: string;
 }

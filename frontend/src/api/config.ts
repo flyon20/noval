@@ -2,6 +2,8 @@ import { httpClient } from '@/lib/http';
 import type { ApiResponse } from '@/types/api';
 import type {
   AiModelOption,
+  AiModelProviderProbeRequest,
+  AiModelProviderProbeResult,
   AiModelRegistry,
   AiModelRegistryUpdateRequest,
   PromptConfig,
@@ -55,6 +57,12 @@ export const systemConfigApi = {
   },
   updateModelRegistry(payload: AiModelRegistryUpdateRequest) {
     return httpClient.put<ApiResponse<AiModelRegistry>>('/api/config/system/model-registry', payload);
+  },
+  probeModelProvider(payload: AiModelProviderProbeRequest) {
+    return httpClient.post<ApiResponse<AiModelProviderProbeResult>>(
+      '/api/config/system/model-registry/probe',
+      payload,
+    );
   },
   getModelOptions() {
     return httpClient.get<ApiResponse<AiModelOption[]>>('/api/config/system/model-options');

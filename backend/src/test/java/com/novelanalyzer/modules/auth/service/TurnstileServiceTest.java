@@ -32,7 +32,7 @@ class TurnstileServiceTest {
         server.expect(requestTo(properties.getVerifyUrl()))
             .andExpect(content().string(org.hamcrest.Matchers.containsString("response=bad-token")))
             .andRespond(withSuccess(
-                "{\"success\":false,\"hostname\":\"www.panch.fun\",\"error-codes\":[\"timeout-or-duplicate\"]}",
+                "{\"success\":false,\"hostname\":\"www.example.com\",\"error-codes\":[\"timeout-or-duplicate\"]}",
                 MediaType.APPLICATION_JSON
             ));
 
@@ -43,7 +43,7 @@ class TurnstileServiceTest {
         server.verify();
         assertThat(output.getAll())
             .contains("timeout-or-duplicate")
-            .contains("www.panch.fun");
+            .contains("www.example.com");
     }
 
     @Test
@@ -68,7 +68,7 @@ class TurnstileServiceTest {
         properties.setEnabled(true);
         properties.setSiteKey("site-key");
         properties.setSecretKey("secret-key");
-        properties.setExpectedHostname("www.panch.fun");
+        properties.setExpectedHostname("www.example.com");
         return properties;
     }
 

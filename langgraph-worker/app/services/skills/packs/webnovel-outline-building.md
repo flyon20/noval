@@ -1,11 +1,16 @@
 ---
 skillId: webnovel-outline-building
 version: 1.0.0
+title: 大纲构思
+description: 围绕题材、主线、分卷目标与升级节奏构建可持续展开的网文大纲。
 intents: [outline_building]
 appliesTo: [outline_building]
-allowedTools: [skill.lookup, memory.project_context]
+requestedCapabilities: [skill.activate, memory.project.read]
 requiredEvidence: []
 triggers: [outline, volume, arc, structure]
+shortcutEnabled: true
+shortcutLabel: 大纲构思
+shortcutOrder: 20
 ---
 
 ## Prompt Fragment

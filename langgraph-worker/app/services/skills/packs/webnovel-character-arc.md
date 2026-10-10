@@ -2,6 +2,7 @@
 skillId: webnovel-character-arc
 version: 1.0.0
 intents: [character_design]
+requestedCapabilities: []
 triggers: [character, arc, motivation, relationship]
 ---
 

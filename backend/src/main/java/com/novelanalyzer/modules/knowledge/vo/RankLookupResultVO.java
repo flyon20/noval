@@ -19,6 +19,9 @@ public class RankLookupResultVO {
     private String author;
     private String intro;
     private String sourceLabel;
+    private String freshness;
+    private Long ageHours;
+    private Boolean historicalReference;
 
     public Long getRankId() {
         return rankId;
@@ -139,4 +142,10 @@ public class RankLookupResultVO {
     public void setSourceLabel(String sourceLabel) {
         this.sourceLabel = sourceLabel;
     }
+    public String getFreshness() { return freshness; }
+    public void setFreshness(String freshness) { this.freshness = freshness; }
+    public Long getAgeHours() { return ageHours; }
+    public void setAgeHours(Long ageHours) { this.ageHours = ageHours; }
+    public Boolean getHistoricalReference() { return historicalReference; }
+    public void setHistoricalReference(Boolean historicalReference) { this.historicalReference = historicalReference; }
 }

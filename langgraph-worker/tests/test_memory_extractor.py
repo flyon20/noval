@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from app.models.agent_runtime import MemoryCandidate
@@ -22,6 +23,11 @@ class PartiallyFailingMemoryWriter(MemoryWriter):
         if len(self.calls) == 2:
             raise RuntimeError("write failed")
         return {"id": len(self.calls)}
+
+
+class ConflictAwareMemoryWriter(MemoryWriter):
+    async def update_memory(self, **kwargs) -> dict:
+        raise AssertionError("confirmed memory must not be overwritten by candidate persistence")
 
 
 class MemoryExtractorTest(unittest.IsolatedAsyncioTestCase):
@@ -94,6 +100,17 @@ class MemoryExtractorTest(unittest.IsolatedAsyncioTestCase):
             "summary": None,
             "confidence": candidates[0].confidence,
             "source_trace_id": "trace-4",
+            "fact_key": extractor.fact_key(candidates[0]),
+            "candidate_key": extractor.candidate_key(candidates[0], request),
+            "provenance_json": json.dumps({
+                "candidateScope": "project",
+                "candidateType": "fact",
+                "extractorVersion": "memory-extractor-v1",
+                "reason": "explicit project setting marker",
+                "source": "worker_memory_extractor",
+            }, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
+            "evidence_json": '{"sourceKind":"user_turn","sourceTraceId":"trace-4"}',
+            "extractor_version": "memory-extractor-v1",
             "ttl_days": 30,
         }, writer.calls[0])
 
@@ -122,6 +139,63 @@ class MemoryExtractorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, result["saved"])
         self.assertEqual(1, result["failed"])
         self.assertEqual("RuntimeError", result["failures"][0]["reason"])
+        self.assertEqual(extractor.fact_key(candidates[1]), result["failures"][0]["factKey"])
+        self.assertEqual(extractor.candidate_key(candidates[1], request), result["failures"][0]["candidateKey"])
+
+    async def test_backend_fallback_payload_keeps_computed_identity_and_provenance(self) -> None:
+        extractor = MemoryExtractor()
+        request = KnowledgeChatRequest(
+            question="project setting: the protagonist cannot use fire magic",
+            userId=7,
+            projectId=900,
+            conversationId="conv-fallback",
+            traceId="trace-fallback",
+        )
+        candidate = extractor.extract(request)[0]
+
+        payload = extractor.persistence_candidate(candidate, request)
+
+        self.assertEqual(extractor.fact_key(candidate), payload["factKey"])
+        self.assertEqual(extractor.candidate_key(candidate, request), payload["candidateKey"])
+        self.assertEqual("conv-fallback", payload["conversationId"])
+        self.assertEqual("memory-extractor-v1", payload["extractorVersion"])
+        self.assertEqual(30, payload["ttlDays"])
+        self.assertEqual("trace-fallback", payload["sourceTraceId"])
+        self.assertEqual("worker_memory_extractor", json.loads(payload["provenanceJson"])["source"])
+        self.assertEqual("user_turn", json.loads(payload["evidenceJson"])["sourceKind"])
+
+    async def test_persistence_is_candidate_only_when_existing_memory_may_conflict(self) -> None:
+        writer = ConflictAwareMemoryWriter()
+        request = KnowledgeChatRequest(
+            question="project setting: the protagonist cannot use fire magic",
+            userId=7,
+            projectId=900,
+            conversationId="conv-6",
+            traceId="trace-6",
+        )
+
+        result = await MemoryExtractor().persist_candidates(writer, request, MemoryExtractor().extract(request))
+
+        self.assertEqual("CANDIDATE", result["candidateStatus"])
+        self.assertEqual("candidate_only", result["conflictPolicy"])
+        self.assertEqual(1, len(writer.calls))
+        self.assertEqual("trace-6", writer.calls[0]["source_trace_id"])
+
+    async def test_fact_key_normalizes_direct_negation_for_conflict_detection(self) -> None:
+        extractor = MemoryExtractor()
+        positive = MemoryCandidate(
+            scope="project",
+            type="fact",
+            content="the protagonist can use fire magic",
+        )
+        negative = MemoryCandidate(
+            scope="project",
+            type="fact",
+            content="the protagonist cannot use fire magic",
+        )
+
+        self.assertEqual(extractor.fact_key(positive), extractor.fact_key(negative))
+        self.assertNotIn("content", extractor.trace_candidate(positive))
 
 
 if __name__ == "__main__":

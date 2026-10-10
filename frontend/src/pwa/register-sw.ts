@@ -56,6 +56,12 @@ function bindUpdatePrompt(registration: ServiceWorkerRegistration) {
   });
 }
 
+function requestUpdate(registration: ServiceWorkerRegistration) {
+  void registration.update().catch((error) => {
+    console.warn('Service Worker update check failed', error);
+  });
+}
+
 export function registerServiceWorker() {
   if (
     !import.meta.env.PROD ||
@@ -70,6 +76,7 @@ export function registerServiceWorker() {
     .register('/sw.js')
     .then((registration) => {
       bindUpdatePrompt(registration);
+      requestUpdate(registration);
       console.debug('Service Worker 注册成功');
     })
     .catch((error) => {

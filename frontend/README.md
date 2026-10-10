@@ -78,7 +78,4 @@ npm run build
 
 ## 相关文档
 
-- [前端接口设计-v1.md](/D:/Git/agent/noval/docs/前端接口设计-v1.md)
-- [2026-03-21-frontend-phase1-design.md](/D:/Git/agent/noval/docs/superpowers/specs/2026-03-21-frontend-phase1-design.md)
-- [2026-03-21-frontend-phase2-analysis-design.md](/D:/Git/agent/noval/docs/superpowers/specs/2026-03-21-frontend-phase2-analysis-design.md)
-- [2026-03-21-frontend-phase3-trend-history-pwa-design.md](/D:/Git/agent/noval/docs/superpowers/specs/2026-03-21-frontend-phase3-trend-history-pwa-design.md)
+- [项目文档中心](../docs/README.md)
